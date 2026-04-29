@@ -51,35 +51,99 @@ draft → awaiting_signature → funding_in_progress → executing_on_meteora
 
 ```
 octora/
-├── octora-web/          # Frontend (React 18, Vite 5, Tailwind 3)
+├── octora-web/            # Frontend (React 18, Vite 5, Tailwind 3)
 │   ├── src/
-│   │   ├── pages/           # Index (landing), AppPage (dashboard)
+│   │   ├── pages/             # Index (landing), AppPage (dashboard)
 │   │   ├── components/
-│   │   │   ├── octora/      # Platform UI (tables, cards, hero, header)
-│   │   │   ├── landing/     # Animation components (ScrollReveal, LogoMarquee)
-│   │   │   └── ui/          # 49 shadcn/ui components
-│   │   ├── lib/             # API client, Solana client
-│   │   ├── providers/       # SolanaProvider (wallet connect + balance)
-│   │   └── data/            # Static demo data
+│   │   │   ├── octora/        # Platform UI (tables, cards, hero, header)
+│   │   │   ├── landing/       # Animation components (ScrollReveal, LogoMarquee)
+│   │   │   └── ui/            # 49 shadcn/ui components
+│   │   ├── lib/               # API client, Solana client
+│   │   ├── providers/         # SolanaProvider (wallet connect + balance)
+│   │   └── data/              # Static demo data
 │   └── ...
-├── octora-api/           # Backend (Fastify 5, Prisma 7, PostgreSQL)
+├── octora-api/            # Backend (Fastify 5, Prisma 7, PostgreSQL)
 │   ├── src/
+│   │   ├── common/            # Shared kernel — config, errors, Prisma client
+│   │   ├── domain/            # Pure domain — types, state machine, recovery catalog
 │   │   ├── modules/
-│   │   │   ├── pools/       # GET /pools, GET /pools/:address
-│   │   │   └── positions/   # Full position lifecycle CRUD
-│   │   ├── domain/          # Types, state machine, policies, recovery
-│   │   ├── adapters/        # PrivacyAdapter (Mock + MagicBlock seam)
-│   │   ├── clients/         # MeteoraExecutor (Mock + live)
-│   │   ├── indexer/         # On-chain reconciliation
-│   │   ├── runtime/         # PodRuntime abstraction
-│   │   └── test-kit/        # Shared test factories
-│   ├── prisma/              # Schema: Position, ExecutionSession, Activity, Reconciliation
-│   └── infra/               # Docker Compose (PostgreSQL 16)
-├── octora-waitlist/      # Standalone cinematic coming-soon page
-├── plans/                # Implementation plans + demo checklists
-├── specs/                # Product spec + system design
-└── briefs/               # Design briefs
+│   │   │   ├── positions/     # Position lifecycle (routes, service, repos, recovery)
+│   │   │   ├── pools/         # Meteora pool discovery (routes, service)
+│   │   │   ├── execution/     # Chain interaction adapters + clients
+│   │   │   │   ├── adapters/  #   PrivacyAdapter (Mock / MagicBlock)
+│   │   │   │   └── clients/   #   MeteoraExecutor (Mock / live)
+│   │   │   └── indexer/       # On-chain reconciliation (service, repo)
+│   │   ├── infra/
+│   │   │   └── runtime/       # PodRuntime abstraction
+│   │   └── test-kit/          # Shared test factories + in-memory repos
+│   ├── prisma/                # Schema: Position, ExecutionSession, Activity, Reconciliation
+│   └── infra/                 # Docker Compose (PostgreSQL 16)
+├── octora-waitlist/       # Standalone cinematic coming-soon page
+├── plans/                 # Implementation plans + demo checklists
+├── specs/                 # Product spec + system design
+└── briefs/                # Design briefs
 ```
+
+### octora-api module architecture
+
+The backend follows a **modular architecture** where each feature is self-contained with its own routes, service, and repository layer.
+
+**Dependency flow:**
+
+```
+pools (independent — Meteora API only)
+
+positions  →  execution  (adapters + clients for chain interaction)
+    │
+    ├──→  indexer     (reconciliation after chain operations)
+    │
+    └──→  domain     (pure types, state machine, recovery catalog)
+              │
+              └──→  common   (config, errors, db client)
+```
+
+**Hard rules:**
+1. `domain/` imports nothing from `modules/`, `common/`, or `infra/`
+2. `common/` imports nothing from `modules/`
+3. Module-to-module imports are explicit: `positions → execution`, `positions → indexer`
+4. `pools` is fully independent — no cross-module imports
+
+**File naming convention** — every file follows `<entity>.<layer>.ts`:
+
+| Suffix              | Purpose                              |
+| ------------------- | ------------------------------------ |
+| `.routes.ts`        | Fastify route registration           |
+| `.controller.ts`    | Parse request → call service         |
+| `.service.ts`       | Business logic orchestration         |
+| `.repository.ts`    | Database access (Prisma queries)     |
+| `.schema.ts`        | Request validation (JSON Schema)     |
+| `.adapter.ts`       | External service adapter impl        |
+| `.executor.ts`      | External client impl                 |
+
+**Repository pattern** — each module owns its DB interface, decoupling business logic from Prisma:
+
+| Repository                 | Module    | DB Models                  |
+| -------------------------- | --------- | -------------------------- |
+| `PositionRepository`       | positions | Position, ExecutionSession |
+| `ActivityRepository`       | positions | Activity                   |
+| `ReconciliationRepository` | indexer   | PositionReconciliation     |
+
+**Path aliases** (configured in `tsconfig.json` and `vitest.config.ts`):
+
+| Alias          | Maps to              |
+| -------------- | -------------------- |
+| `#app`         | `src/app.ts`         |
+| `#common/*`    | `src/common/*`       |
+| `#domain`      | `src/domain/`        |
+| `#modules/*`   | `src/modules/*`      |
+| `#infra/*`     | `src/infra/*`        |
+| `#test-kit/*`  | `src/test-kit/*`     |
+
+**Adding a new module:**
+1. Create `src/modules/<name>/` with routes, controller, service, repository
+2. Create `index.ts` barrel export
+3. Register in `app.ts`
+4. Add memory repository in `test-kit/memory-db.ts` if needed
 
 ## Tech stack
 
