@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Octora Code Review</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 32px; color: #111827; background: #fff; }
+    .card { max-width: 920px; border: 1px solid #e5e7eb; border-radius: 16px; padding: 24px; }
+    h1 { margin: 0 0 12px; font-size: 28px; }
+    h2 { margin: 24px 0 8px; font-size: 18px; }
+    .meta { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0 20px; }
+    .pill { border: 1px solid #d1d5db; border-radius: 999px; padding: 6px 10px; font-size: 13px; background: #f9fafb; }
+    .finding { border-top: 1px solid #e5e7eb; padding-top: 16px; margin-top: 16px; }
+    .severity { font-weight: 700; }
+    code { background: #f3f4f6; padding: 2px 4px; border-radius: 4px; }
+    ul { margin: 8px 0 0 20px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Octora Code Review</h1>
+    <div class="meta">
+      <span class="pill">Security: B-</span>
+      <span class="pill">Quality: C+</span>
+      <span class="pill">Ready for mainnet: false</span>
+    </div>
+    <p>Functional and promising, but not production-ready yet.</p>
+
+    <h2>Findings</h2>
+
+    <div class="finding">
+      <div class="severity">High - Product correctness</div>
+      <p><code>apps/octora-web/src/lib/api.ts</code> silently fabricates success when requests fail.</p>
+      <p>Fix: remove the fallback or make it explicit DEV/demo-only, and surface real errors.</p>
+    </div>
+
+    <div class="finding">
+      <div class="severity">Medium-high - Reliability</div>
+      <p><code>packages/indexer/src/position-indexer.ts</code> keeps reconciliation state only in memory.</p>
+      <p>Fix: persist reconciliation metadata or signatures in Prisma and reconstruct pending work on boot.</p>
+    </div>
+
+    <div class="finding">
+      <div class="severity">Medium - API contract</div>
+      <p><code>services/orchestrator-api/src/routes/position-routes.ts</code> accepts unsupported draft actions.</p>
+      <p>Fix: reject unsupported actions until implemented, or add explicit flows and tests.</p>
+    </div>
+  </div>
+</body>
+</html>

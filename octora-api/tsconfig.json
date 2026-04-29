@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node", "vitest/globals"],
+    "paths": {
+      "#app": ["src/app.ts"],
+      "#domain": ["src/domain/index.ts"],
+      "#domain/*": ["src/domain/*"],
+      "#indexer": ["src/indexer/index.ts"],
+      "#indexer/*": ["src/indexer/*"],
+      "#adapters": ["src/adapters/index.ts"],
+      "#adapters/*": ["src/adapters/*"],
+      "#clients": ["src/clients/index.ts"],
+      "#clients/*": ["src/clients/*"],
+      "#runtime": ["src/runtime/index.ts"],
+      "#runtime/*": ["src/runtime/*"],
+      "#test-kit": ["src/test-kit/index.ts"],
+      "#test-kit/*": ["src/test-kit/*"],
+      "#modules/*": ["src/modules/*"],
+      "#routes/*": ["src/routes/*"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}
