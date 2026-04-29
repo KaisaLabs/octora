@@ -11,20 +11,13 @@
     "types": ["node", "vitest/globals"],
     "paths": {
       "#app": ["src/app.ts"],
+      "#common/*": ["src/common/*"],
       "#domain": ["src/domain/index.ts"],
       "#domain/*": ["src/domain/*"],
-      "#indexer": ["src/indexer/index.ts"],
-      "#indexer/*": ["src/indexer/*"],
-      "#adapters": ["src/adapters/index.ts"],
-      "#adapters/*": ["src/adapters/*"],
-      "#clients": ["src/clients/index.ts"],
-      "#clients/*": ["src/clients/*"],
-      "#runtime": ["src/runtime/index.ts"],
-      "#runtime/*": ["src/runtime/*"],
-      "#test-kit": ["src/test-kit/index.ts"],
-      "#test-kit/*": ["src/test-kit/*"],
       "#modules/*": ["src/modules/*"],
-      "#routes/*": ["src/routes/*"]
+      "#infra/*": ["src/infra/*"],
+      "#test-kit": ["src/test-kit/index.ts"],
+      "#test-kit/*": ["src/test-kit/*"]
     }
   },
   "include": ["src/**/*.ts"]

@@ -3,17 +3,16 @@ import path from 'node:path'
 
 export default defineConfig({
   resolve: {
-    alias: {
-      '#app': path.resolve(__dirname, './src/app.ts'),
-      '#domain': path.resolve(__dirname, './src/domain/index.ts'),
-      '#indexer': path.resolve(__dirname, './src/indexer/index.ts'),
-      '#adapters': path.resolve(__dirname, './src/adapters/index.ts'),
-      '#clients': path.resolve(__dirname, './src/clients/index.ts'),
-      '#runtime': path.resolve(__dirname, './src/runtime/index.ts'),
-      '#test-kit': path.resolve(__dirname, './src/test-kit/index.ts'),
-      '#modules': path.resolve(__dirname, './src/modules'),
-      '#routes': path.resolve(__dirname, './src/routes'),
-    },
+    alias: [
+      { find: '#app', replacement: path.resolve(__dirname, './src/app.ts') },
+      { find: /^#common\/(.*)/, replacement: path.resolve(__dirname, './src/common/$1') },
+      { find: '#domain', replacement: path.resolve(__dirname, './src/domain/index.ts') },
+      { find: /^#domain\/(.*)/, replacement: path.resolve(__dirname, './src/domain/$1') },
+      { find: /^#modules\/(.*)/, replacement: path.resolve(__dirname, './src/modules/$1') },
+      { find: /^#infra\/(.*)/, replacement: path.resolve(__dirname, './src/infra/$1') },
+      { find: /^#test-kit\/(.*)/, replacement: path.resolve(__dirname, './src/test-kit/$1') },
+      { find: '#test-kit', replacement: path.resolve(__dirname, './src/test-kit/index.ts') },
+    ],
   },
   test: {
     globals: true,

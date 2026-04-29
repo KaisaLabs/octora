@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 
-import { listPoolsHandler, getPoolHandler } from './controller'
-import { listPoolsSchema, getPoolSchema } from './schema'
+import { listPoolsHandler, getPoolHandler } from './pool.controller'
+import { listPoolsSchema, getPoolSchema } from './pool.schema'
 
 export async function registerPoolRoutes(app: FastifyInstance) {
   app.get('/pools', { schema: listPoolsSchema }, listPoolsHandler)

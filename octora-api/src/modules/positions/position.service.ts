@@ -10,11 +10,17 @@ import {
   type PositionAction,
   type PositionIntent,
 } from "#domain";
-import { createPositionIndexer, type PositionIndexer } from "#indexer";
-import { createMockMeteoraExecutor, type MeteoraExecutor } from "#clients";
-import { MockPrivacyAdapter, type PrivacyAdapter } from "#adapters";
 
-import type { ActivityRow, ExecutionSessionRow, OrchestratorDb, PositionRow } from "../db";
+import { MockPrivacyAdapter, type PrivacyAdapter } from "#modules/execution/adapters";
+import { createMockMeteoraExecutor, type MeteoraExecutor } from "#modules/execution/clients";
+import { createIndexerService, type PositionIndexer } from "#modules/indexer";
+import type { ReconciliationRepository } from "#modules/indexer/indexer.repository";
+
+import { PositionNotFoundError, UnsupportedPositionActionError } from "#common/errors";
+
+import type { PositionRepository, PositionRow, ExecutionSessionRow } from "./position.repository";
+import type { ActivityRepository, ActivityRow } from "./activity.repository";
+import { createActivityService, type ActivityService } from "./activity.service";
 import { createRecoveryService, type RecoveryServiceInput } from "./recovery.service";
 
 export interface CreateDraftPositionIntentInput {
@@ -70,58 +76,56 @@ export interface PositionResponse {
   recovery: RecoveryGuidance | null;
 }
 
-export interface OrchestratorServiceDependencies {
+export interface PositionServiceDependencies {
+  positionRepo: PositionRepository;
+  activityRepo: ActivityRepository;
+  reconciliationRepo?: ReconciliationRepository;
   privacyAdapter?: PrivacyAdapter;
   meteoraExecutor?: MeteoraExecutor;
   positionIndexer?: PositionIndexer;
   recoveryService?: ReturnType<typeof createRecoveryService>;
 }
 
-export class PositionNotFoundError extends Error {
-  constructor(positionId: string) {
-    super(`Position ${positionId} not found`);
-    this.name = "PositionNotFoundError";
-  }
-}
+export { PositionNotFoundError, UnsupportedPositionActionError };
 
-export class UnsupportedPositionActionError extends Error {
-  constructor(action: PositionAction) {
-    super(`Task 7 only implements add-liquidity execution, not ${action}`);
-    this.name = "UnsupportedPositionActionError";
-  }
-}
-
-export function createPositionService(db: OrchestratorDb, dependencies: OrchestratorServiceDependencies = {}) {
-  const privacyAdapter = dependencies.privacyAdapter ?? new MockPrivacyAdapter();
-  const meteoraExecutor = dependencies.meteoraExecutor ?? createMockMeteoraExecutor();
-  const positionIndexer = dependencies.positionIndexer ?? createPositionIndexer({ store: db });
-  const recoveryService = dependencies.recoveryService ?? createRecoveryService();
+export function createPositionService(deps: PositionServiceDependencies) {
+  const positionRepo = deps.positionRepo;
+  const activityRepo = deps.activityRepo;
+  const activityService = createActivityService(activityRepo);
+  const privacyAdapter = deps.privacyAdapter ?? new MockPrivacyAdapter();
+  const meteoraExecutor = deps.meteoraExecutor ?? createMockMeteoraExecutor();
+  const positionIndexer = deps.positionIndexer ?? createIndexerService({ store: deps.reconciliationRepo! });
+  const recoveryService = deps.recoveryService ?? createRecoveryService();
 
   return {
     createDraftPositionIntent(input: CreateDraftPositionIntentInput): Promise<PositionResponse> {
-      return createDraftPositionIntent(db, input);
+      return createDraftPositionIntent(positionRepo, activityService, input);
     },
     executeSignedIntent(input: ExecuteSignedIntentInput): Promise<PositionResponse> {
-      return executeSignedIntent(db, privacyAdapter, meteoraExecutor, positionIndexer, recoveryService, input);
+      return executeSignedIntent(positionRepo, activityService, privacyAdapter, meteoraExecutor, positionIndexer, recoveryService, input);
     },
     claimPosition(input: ClaimPositionInput): Promise<PositionResponse> {
-      return claimPosition(db, privacyAdapter, meteoraExecutor, input);
+      return claimPosition(positionRepo, activityService, privacyAdapter, meteoraExecutor, input);
     },
     withdrawClosePosition(input: WithdrawClosePositionInput): Promise<PositionResponse> {
-      return withdrawClosePosition(db, privacyAdapter, meteoraExecutor, input);
+      return withdrawClosePosition(positionRepo, activityService, privacyAdapter, meteoraExecutor, input);
     },
     getPosition(positionId: string): Promise<PositionResponse> {
-      return getPosition(db, positionIndexer, positionId);
+      return getPosition(positionRepo, activityService, positionIndexer, positionId);
     },
   };
 }
 
-export async function createDraftPositionIntent(db: OrchestratorDb, input: CreateDraftPositionIntentInput): Promise<PositionResponse> {
+async function createDraftPositionIntent(
+  positionRepo: PositionRepository,
+  activityService: ActivityService,
+  input: CreateDraftPositionIntentInput,
+): Promise<PositionResponse> {
   const positionId = randomUUID();
   const intentId = randomUUID();
   const sessionId = randomUUID();
 
-  const position = await db.createPosition({
+  const position = await positionRepo.createPosition({
     id: positionId,
     intentId,
     action: input.action,
@@ -131,28 +135,27 @@ export async function createDraftPositionIntent(db: OrchestratorDb, input: Creat
     amount: input.amount,
   });
 
-  const session = await db.createExecutionSession({
+  const session = await positionRepo.createExecutionSession({
     id: sessionId,
     positionId,
     state: "awaiting_signature",
     failureStage: null,
   });
 
-  const activity = await db.createActivity({
-    id: randomUUID(),
-    positionId,
-    action: input.action,
-    state: "awaiting_signature",
-    headline: "Intent received",
-    detail: `Queued a draft ${formatPoolLabel(input.pool)} position for signature review.`,
-    safeNextStep: "wait",
-  });
+  const activity = await activityService.record(
+    position,
+    "awaiting_signature",
+    "Intent received",
+    `Queued a draft ${formatPoolLabel(input.pool)} position for signature review.`,
+    "wait",
+  );
 
   return buildResponse(position, session, [activity]);
 }
 
-export async function executeSignedIntent(
-  db: OrchestratorDb,
+async function executeSignedIntent(
+  positionRepo: PositionRepository,
+  activityService: ActivityService,
   privacyAdapter: PrivacyAdapter,
   meteoraExecutor: MeteoraExecutor,
   positionIndexer: PositionIndexer,
@@ -163,12 +166,12 @@ export async function executeSignedIntent(
     throw new Error("Signed message is required");
   }
 
-  const position = await db.getPositionById(input.positionId);
+  const position = await positionRepo.getPositionById(input.positionId);
   if (!position) {
     throw new PositionNotFoundError(input.positionId);
   }
 
-  const session = await db.getLatestExecutionSession(input.positionId);
+  const session = await positionRepo.getLatestExecutionSession(input.positionId);
   if (!session) {
     throw new PositionNotFoundError(input.positionId);
   }
@@ -183,8 +186,8 @@ export async function executeSignedIntent(
   }).mode;
 
   assertTransition(session.state as ExecutionState, "funding_in_progress");
-  const fundingSession = await db.updateExecutionSession(input.positionId, "funding_in_progress");
-  await recordActivity(db, position, "funding_in_progress", "Funding started", `Routing ${formatAmount(position.amount)} into the execution boundary.`, "wait");
+  const fundingSession = await positionRepo.updateExecutionSession(input.positionId, "funding_in_progress");
+  await activityService.record(position, "funding_in_progress", "Funding started", `Routing ${formatAmount(position.amount)} into the execution boundary.`, "wait");
 
   let fundingReceipt;
   try {
@@ -196,13 +199,12 @@ export async function executeSignedIntent(
       mode: executionMode,
     });
   } catch (error) {
-    return recordFailure(db, recoveryService, position, "pre-funding", error);
+    return recordFailure(positionRepo, activityService, recoveryService, position, "pre-funding", error);
   }
 
   assertTransition(fundingSession.state as ExecutionState, "executing_on_meteora");
-  const executingSession = await db.updateExecutionSession(input.positionId, "executing_on_meteora");
-  await recordActivity(
-    db,
+  const executingSession = await positionRepo.updateExecutionSession(input.positionId, "executing_on_meteora");
+  await activityService.record(
     position,
     "executing_on_meteora",
     "Submitting to Meteora",
@@ -217,15 +219,14 @@ export async function executeSignedIntent(
       amountSol: position.amount,
     });
   } catch (error) {
-    return recordFailure(db, recoveryService, position, "funding-partial", error);
+    return recordFailure(positionRepo, activityService, recoveryService, position, "funding-partial", error);
   }
 
   assertTransition(executingSession.state as ExecutionState, "indexing");
   positionIndexer.beginReconciliation({ positionId: position.id });
-  const indexingPosition = await db.updatePositionState(input.positionId, "indexing");
-  const indexingSession = await db.updateExecutionSession(input.positionId, "indexing");
-  await recordActivity(
-    db,
+  const indexingPosition = await positionRepo.updatePositionState(input.positionId, "indexing");
+  const indexingSession = await positionRepo.updateExecutionSession(input.positionId, "indexing");
+  await activityService.record(
     indexingPosition,
     "indexing",
     "Verifying final position state",
@@ -234,18 +235,19 @@ export async function executeSignedIntent(
   );
   positionIndexer.registerSnapshot({ positionId: position.id, signature: venueReceipt.signature });
 
-  return buildResponse(indexingPosition, indexingSession, await db.listActivities(input.positionId), recoveryService);
+  return buildResponse(indexingPosition, indexingSession, await activityService.list(input.positionId), recoveryService);
 }
 
-export async function claimPosition(
-  db: OrchestratorDb,
+async function claimPosition(
+  positionRepo: PositionRepository,
+  activityService: ActivityService,
   privacyAdapter: PrivacyAdapter,
   meteoraExecutor: MeteoraExecutor,
   input: ClaimPositionInput,
 ): Promise<PositionResponse> {
   const recoveryService = createRecoveryService();
-  const position = await getActivePosition(db, input.positionId);
-  const session = await getLatestActiveSession(db, input.positionId);
+  const position = await getActivePosition(positionRepo, input.positionId);
+  const session = await getLatestActiveSession(positionRepo, input.positionId);
 
   const executionMode = recoveryService.resolveExecutionMode({
     selectedMode: position.mode as ExecutionMode,
@@ -253,10 +255,9 @@ export async function claimPosition(
   }).mode;
 
   assertTransition(session.state as ExecutionState, "claiming");
-  const claimingPosition = await db.updatePositionState(position.id, "claiming");
-  const claimingSession = await db.updateExecutionSession(input.positionId, "claiming");
-  await recordActivity(
-    db,
+  const claimingPosition = await positionRepo.updatePositionState(position.id, "claiming");
+  const claimingSession = await positionRepo.updateExecutionSession(input.positionId, "claiming");
+  await activityService.record(
     claimingPosition,
     "claiming",
     "Claiming fees",
@@ -272,7 +273,7 @@ export async function claimPosition(
       mode: executionMode,
     });
   } catch (error) {
-    return recordFailure(db, recoveryService, position, "venue-submission", error);
+    return recordFailure(positionRepo, activityService, recoveryService, position, "venue-submission", error);
   }
 
   let venueReceipt;
@@ -282,14 +283,13 @@ export async function claimPosition(
       positionId: position.id,
     });
   } catch (error) {
-    return recordFailure(db, recoveryService, position, "venue-confirmation", error);
+    return recordFailure(positionRepo, activityService, recoveryService, position, "venue-confirmation", error);
   }
 
   assertTransition(claimingSession.state as ExecutionState, "indexing");
-  const indexingPosition = await db.updatePositionState(position.id, "indexing");
-  const indexingSession = await db.updateExecutionSession(input.positionId, "indexing");
-  await recordActivity(
-    db,
+  const indexingPosition = await positionRepo.updatePositionState(position.id, "indexing");
+  const indexingSession = await positionRepo.updateExecutionSession(input.positionId, "indexing");
+  await activityService.record(
     indexingPosition,
     "indexing",
     "Reconciling claim",
@@ -298,10 +298,9 @@ export async function claimPosition(
   );
 
   assertTransition(indexingSession.state as ExecutionState, "completed");
-  const completedPosition = await db.updatePositionState(position.id, "completed");
-  const completedSession = await db.updateExecutionSession(input.positionId, "completed");
-  await recordActivity(
-    db,
+  const completedPosition = await positionRepo.updatePositionState(position.id, "completed");
+  const completedSession = await positionRepo.updateExecutionSession(input.positionId, "completed");
+  await activityService.record(
     completedPosition,
     "completed",
     "Claim completed",
@@ -309,18 +308,19 @@ export async function claimPosition(
     "wait",
   );
 
-  return buildResponse(completedPosition, completedSession, await db.listActivities(input.positionId), recoveryService);
+  return buildResponse(completedPosition, completedSession, await activityService.list(input.positionId), recoveryService);
 }
 
-export async function withdrawClosePosition(
-  db: OrchestratorDb,
+async function withdrawClosePosition(
+  positionRepo: PositionRepository,
+  activityService: ActivityService,
   privacyAdapter: PrivacyAdapter,
   meteoraExecutor: MeteoraExecutor,
   input: WithdrawClosePositionInput,
 ): Promise<PositionResponse> {
   const recoveryService = createRecoveryService();
-  const position = await getActivePosition(db, input.positionId);
-  const session = await getLatestActiveSession(db, input.positionId);
+  const position = await getActivePosition(positionRepo, input.positionId);
+  const session = await getLatestActiveSession(positionRepo, input.positionId);
 
   const executionMode = recoveryService.resolveExecutionMode({
     selectedMode: position.mode as ExecutionMode,
@@ -328,10 +328,9 @@ export async function withdrawClosePosition(
   }).mode;
 
   assertTransition(session.state as ExecutionState, "withdrawing");
-  const withdrawingPosition = await db.updatePositionState(position.id, "withdrawing");
-  const withdrawingSession = await db.updateExecutionSession(input.positionId, "withdrawing");
-  await recordActivity(
-    db,
+  const withdrawingPosition = await positionRepo.updatePositionState(position.id, "withdrawing");
+  const withdrawingSession = await positionRepo.updateExecutionSession(input.positionId, "withdrawing");
+  await activityService.record(
     withdrawingPosition,
     "withdrawing",
     "Withdrawing liquidity",
@@ -347,7 +346,7 @@ export async function withdrawClosePosition(
       mode: executionMode,
     });
   } catch (error) {
-    return recordFailure(db, recoveryService, position, "venue-submission", error);
+    return recordFailure(positionRepo, activityService, recoveryService, position, "venue-submission", error);
   }
 
   let venueReceipt;
@@ -357,14 +356,13 @@ export async function withdrawClosePosition(
       positionId: position.id,
     });
   } catch (error) {
-    return recordFailure(db, recoveryService, position, "venue-confirmation", error);
+    return recordFailure(positionRepo, activityService, recoveryService, position, "venue-confirmation", error);
   }
 
   assertTransition(withdrawingSession.state as ExecutionState, "closing");
-  const closingPosition = await db.updatePositionState(position.id, "closing");
-  const closingSession = await db.updateExecutionSession(input.positionId, "closing");
-  await recordActivity(
-    db,
+  const closingPosition = await positionRepo.updatePositionState(position.id, "closing");
+  const closingSession = await positionRepo.updateExecutionSession(input.positionId, "closing");
+  await activityService.record(
     closingPosition,
     "closing",
     "Closing position",
@@ -373,10 +371,9 @@ export async function withdrawClosePosition(
   );
 
   assertTransition(closingSession.state as ExecutionState, "indexing");
-  const indexingPosition = await db.updatePositionState(position.id, "indexing");
-  const indexingSession = await db.updateExecutionSession(input.positionId, "indexing");
-  await recordActivity(
-    db,
+  const indexingPosition = await positionRepo.updatePositionState(position.id, "indexing");
+  const indexingSession = await positionRepo.updateExecutionSession(input.positionId, "indexing");
+  await activityService.record(
     indexingPosition,
     "indexing",
     "Reconciling exit",
@@ -385,10 +382,9 @@ export async function withdrawClosePosition(
   );
 
   assertTransition(indexingSession.state as ExecutionState, "completed");
-  const completedPosition = await db.updatePositionState(position.id, "completed");
-  const completedSession = await db.updateExecutionSession(input.positionId, "completed");
-  await recordActivity(
-    db,
+  const completedPosition = await positionRepo.updatePositionState(position.id, "completed");
+  const completedSession = await positionRepo.updateExecutionSession(input.positionId, "completed");
+  await activityService.record(
     completedPosition,
     "completed",
     "Withdraw-close completed",
@@ -396,31 +392,35 @@ export async function withdrawClosePosition(
     "wait",
   );
 
-  return buildResponse(completedPosition, completedSession, await db.listActivities(input.positionId), recoveryService);
+  return buildResponse(completedPosition, completedSession, await activityService.list(input.positionId), recoveryService);
 }
 
-export async function getPosition(db: OrchestratorDb, positionIndexer: PositionIndexer, positionId: string): Promise<PositionResponse> {
-  const position = await db.getPositionById(positionId);
+async function getPosition(
+  positionRepo: PositionRepository,
+  activityService: ActivityService,
+  positionIndexer: PositionIndexer,
+  positionId: string,
+): Promise<PositionResponse> {
+  const position = await positionRepo.getPositionById(positionId);
   if (!position) {
     throw new PositionNotFoundError(positionId);
   }
 
-  const session = await db.getLatestExecutionSession(positionId);
+  const session = await positionRepo.getLatestExecutionSession(positionId);
   if (!session) {
     throw new PositionNotFoundError(positionId);
   }
 
-  let activities = await db.listActivities(positionId);
+  let activities = await activityService.list(positionId);
   const recoveryService = createRecoveryService();
 
   if ((session.state as ExecutionState) === "indexing") {
     const reconciliation = await positionIndexer.reconcile(positionId);
 
     if (reconciliation.state === "active" && (position.state as ExecutionState) !== "active") {
-      const activePosition = await db.updatePositionState(positionId, "active");
-      const activeSession = await db.updateExecutionSession(positionId, "active");
-      await recordActivity(
-        db,
+      const activePosition = await positionRepo.updatePositionState(positionId, "active");
+      const activeSession = await positionRepo.updateExecutionSession(positionId, "active");
+      await activityService.record(
         activePosition,
         "active",
         "Position active",
@@ -428,20 +428,19 @@ export async function getPosition(db: OrchestratorDb, positionIndexer: PositionI
         "wait",
       );
 
-      return buildResponse(activePosition, activeSession, await db.listActivities(positionId), recoveryService);
+      return buildResponse(activePosition, activeSession, await activityService.list(positionId), recoveryService);
     }
 
     if (activities.at(-1)?.headline !== "Execution delayed") {
       const indexingRecovery = recoveryService.getIndexingRecovery();
-      await recordActivity(
-        db,
+      await activityService.record(
         position,
         "indexing",
         "Execution delayed",
         indexingRecovery.message,
         indexingRecovery.safeNextStep,
       );
-      activities = await db.listActivities(positionId);
+      activities = await activityService.list(positionId);
     }
   }
 
@@ -454,8 +453,8 @@ function assertTransition(from: ExecutionState, to: ExecutionState) {
   }
 }
 
-async function getActivePosition(db: OrchestratorDb, positionId: string) {
-  const position = await db.getPositionById(positionId);
+async function getActivePosition(positionRepo: PositionRepository, positionId: string) {
+  const position = await positionRepo.getPositionById(positionId);
   if (!position) {
     throw new PositionNotFoundError(positionId);
   }
@@ -467,8 +466,8 @@ async function getActivePosition(db: OrchestratorDb, positionId: string) {
   return position;
 }
 
-async function getLatestActiveSession(db: OrchestratorDb, positionId: string) {
-  const session = await db.getLatestExecutionSession(positionId);
+async function getLatestActiveSession(positionRepo: PositionRepository, positionId: string) {
+  const session = await positionRepo.getLatestExecutionSession(positionId);
   if (!session) {
     throw new PositionNotFoundError(positionId);
   }
@@ -478,25 +477,6 @@ async function getLatestActiveSession(db: OrchestratorDb, positionId: string) {
   }
 
   return session;
-}
-
-async function recordActivity(
-  db: OrchestratorDb,
-  position: PositionRow,
-  state: ExecutionState,
-  headline: string,
-  detail: string,
-  safeNextStep: ActivityRecord["safeNextStep"],
-) {
-  await db.createActivity({
-    id: randomUUID(),
-    positionId: position.id,
-    action: position.action as PositionAction,
-    state,
-    headline,
-    detail,
-    safeNextStep,
-  });
 }
 
 function buildResponse(
@@ -551,8 +531,8 @@ function buildResponse(
       headline: item.headline,
       detail: item.detail,
       safeNextStep: item.safeNextStep as ActivityRecord["safeNextStep"],
-      createdAtIso: item.createdAt.toISOString(),
       recovery: resolveActivityRecovery(item, session.failureStage, mode, recoveryService, latestActivity?.id === item.id),
+      createdAtIso: item.createdAt.toISOString(),
     })),
     recovery,
   };
@@ -633,18 +613,18 @@ function resolveActivityRecovery(
 }
 
 async function recordFailure(
-  db: OrchestratorDb,
+  positionRepo: PositionRepository,
+  activityService: ActivityService,
   recoveryService: ReturnType<typeof createRecoveryService>,
   position: PositionRow,
   failureStage: RecoveryServiceInput["failureStage"],
   error: unknown,
 ) {
   const guidance = recoveryService.getRecoveryGuidance({ failureStage, mode: position.mode as ExecutionMode }) ?? recoveryService.getRecoveryGuidance({ failureStage: "recovery-required", mode: position.mode as ExecutionMode });
-  const failedPosition = await db.updatePositionState(position.id, "failed");
-  const failedSession = await db.updateExecutionSession(position.id, "failed", failureStage);
+  const failedPosition = await positionRepo.updatePositionState(position.id, "failed");
+  const failedSession = await positionRepo.updateExecutionSession(position.id, "failed", failureStage);
 
-  await recordActivity(
-    db,
+  await activityService.record(
     failedPosition,
     "failed",
     guidance?.headline ?? "Needs attention",
@@ -652,7 +632,7 @@ async function recordFailure(
     guidance?.safeNextStep ?? "contact-support",
   );
 
-  return buildResponse(failedPosition, failedSession, await db.listActivities(position.id), recoveryService);
+  return buildResponse(failedPosition, failedSession, await activityService.list(position.id), recoveryService);
 }
 
 function formatFailureMessage(error: unknown) {

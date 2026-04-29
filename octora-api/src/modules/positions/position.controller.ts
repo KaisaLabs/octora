@@ -1,8 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 
-import { createPositionService } from './service'
-import { createRecoveryService } from './recovery.service'
-import type { OrchestratorDb } from '../db'
+import { createPositionService, type PositionServiceDependencies } from './position.service'
 
 interface CreateIntentBody {
   action: 'add-liquidity' | 'claim' | 'withdraw-close'
@@ -19,8 +17,8 @@ interface PositionParams {
   positionId: string
 }
 
-export function createPositionController(db: OrchestratorDb) {
-  const service = createPositionService(db)
+export function createPositionController(deps: PositionServiceDependencies) {
+  const service = createPositionService(deps)
 
   return {
     async createIntent(request: FastifyRequest<{ Body: CreateIntentBody }>, reply: FastifyReply) {

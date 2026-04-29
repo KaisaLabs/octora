@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MockPrivacyAdapter } from "../mock-privacy-adapter";
+import { MockPrivacyAdapter } from "../adapters/mock-privacy.adapter";
 
 describe("MockPrivacyAdapter", () => {
   it("exposes MVP-ready capabilities and deterministic receipts", async () => {

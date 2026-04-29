@@ -5,4 +5,4 @@ export type {
   MeteoraExecutor,
   WithdrawCloseInput,
 } from "./meteora-executor";
-export { MockMeteoraExecutor, createMockMeteoraExecutor } from "./mock-meteora-executor";
+export { MockMeteoraExecutor, createMockMeteoraExecutor } from "./mock-meteora.executor";

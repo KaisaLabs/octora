@@ -6,5 +6,5 @@ export type {
   PrepareFundingInput,
 } from "./privacy-adapter";
 export { MOCK_RECEIPT_TIMESTAMP_ISO } from "./privacy-adapter";
-export { MockPrivacyAdapter } from "./mock-privacy-adapter";
-export { MagicBlockAdapter } from "./magicblock-adapter";
+export { MockPrivacyAdapter } from "./mock-privacy.adapter";
+export { MagicBlockAdapter } from "./magicblock.adapter";

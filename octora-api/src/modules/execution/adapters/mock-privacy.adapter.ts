@@ -1,4 +1,4 @@
-import { createMockPodRuntime, type PodRuntime } from "#runtime";
+import { createMockPodRuntime, type PodRuntime } from "#infra/runtime";
 
 import {
   buildMockExitReceipt,

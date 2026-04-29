@@ -12,3 +12,10 @@ export {
   createPositionIntent,
   createSubmitLiquidityResult,
 } from "./factories";
+
+export {
+  createMemoryPositionRepository,
+  createMemoryActivityRepository,
+  createMemoryReconciliationRepository,
+  createMemoryRepositories,
+} from "./memory-db";

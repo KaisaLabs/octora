@@ -1,5 +1,5 @@
 import type { ExecutionMode } from "#domain";
-import type { PodRuntime } from "#runtime";
+import type { PodRuntime } from "#infra/runtime";
 
 export interface PrivacyCapabilities {
   adapter: "mock" | "magicblock";
@@ -73,4 +73,4 @@ export function assertLiveMvpAdapter(adapter: PrivacyCapabilities): void {
   }
 }
 
-export type { PodRuntime } from "#runtime";
+export type { PodRuntime } from "#infra/runtime";

@@ -1,130 +1,22 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createMockMeteoraExecutor } from "#clients";
-import { MockPrivacyAdapter } from "#adapters";
+import { createMockMeteoraExecutor } from "#modules/execution/clients";
+import { MockPrivacyAdapter } from "#modules/execution/adapters";
+import { createMemoryRepositories } from "#test-kit/memory-db";
 
-import type {
-  ActivityRow,
-  CreateActivityInput,
-  CreatePositionInput,
-  CreateSessionInput,
-  ExecutionSessionRow,
-  OrchestratorDb,
-  PositionReconciliationRow,
-  PositionRow,
-} from "../../db";
-import { createPositionService } from "../service";
-
-function createMemoryDb(): OrchestratorDb {
-  const positions = new Map<string, PositionRow>();
-  const sessions = new Map<string, ExecutionSessionRow[]>();
-  const activities = new Map<string, ActivityRow[]>();
-  const reconciliations = new Map<string, PositionReconciliationRow>();
-
-  return {
-    async createPosition(input: CreatePositionInput) {
-      const now = new Date("2026-04-29T09:00:00.000Z");
-      const row: PositionRow = {
-        ...input,
-        createdAt: now,
-        updatedAt: now,
-      };
-      positions.set(row.id, row);
-      return row;
-    },
-    async updatePositionState(positionId: string, state: string) {
-      const current = positions.get(positionId);
-      if (!current) {
-        throw new Error(`Position ${positionId} not found`);
-      }
-
-      const row: PositionRow = {
-        ...current,
-        state,
-        updatedAt: new Date("2026-04-29T09:00:00.000Z"),
-      };
-      positions.set(positionId, row);
-      return row;
-    },
-    async getPositionById(positionId: string) {
-      return positions.get(positionId) ?? null;
-    },
-    async createExecutionSession(input: CreateSessionInput) {
-      const now = new Date("2026-04-29T09:00:00.000Z");
-      const row: ExecutionSessionRow = {
-        id: input.id,
-        positionId: input.positionId,
-        state: input.state,
-        failureStage: input.failureStage ?? null,
-        createdAt: now,
-        updatedAt: now,
-      };
-      sessions.set(input.positionId, [...(sessions.get(input.positionId) ?? []), row]);
-      return row;
-    },
-    async updateExecutionSession(positionId: string, state: string, failureStage: string | null = null) {
-      const items = sessions.get(positionId) ?? [];
-      const current = items.at(-1);
-      if (!current) {
-        throw new Error(`Execution session for ${positionId} not found`);
-      }
-
-      const row: ExecutionSessionRow = {
-        ...current,
-        state,
-        failureStage,
-        updatedAt: new Date("2026-04-29T09:00:00.000Z"),
-      };
-      sessions.set(positionId, [...items.slice(0, -1), row]);
-      return row;
-    },
-    async getLatestExecutionSession(positionId: string) {
-      const items = sessions.get(positionId) ?? [];
-      return items.at(-1) ?? null;
-    },
-    async createActivity(input: CreateActivityInput) {
-      const row: ActivityRow = {
-        ...input,
-        createdAt: new Date("2026-04-29T09:00:00.000Z"),
-      };
-      activities.set(input.positionId, [...(activities.get(input.positionId) ?? []), row]);
-      return row;
-    },
-    async listActivities(positionId: string) {
-      return activities.get(positionId) ?? [];
-    },
-    async load(positionId: string) {
-      return reconciliations.get(positionId) ?? null;
-    },
-    async save(input: { positionId: string; signature: string | null }) {
-      const now = new Date("2026-04-29T09:00:00.000Z");
-      const existing = reconciliations.get(input.positionId);
-      const row: PositionReconciliationRow = {
-        positionId: input.positionId,
-        signature: input.signature,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
-      };
-      reconciliations.set(input.positionId, row);
-      return row;
-    },
-    async clear(positionId: string) {
-      reconciliations.delete(positionId);
-    },
-  };
-}
+import { createPositionService } from "../position.service";
 
 describe("claim and withdraw-close flows", () => {
-  let db = createMemoryDb();
+  let repos = createMemoryRepositories();
 
   beforeEach(() => {
-    db = createMemoryDb();
+    repos = createMemoryRepositories();
   });
 
   it("claims fees from an active position and marks it completed", async () => {
     const positionId = "pos_1";
 
-    await db.createPosition({
+    await repos.positionRepo.createPosition({
       id: positionId,
       intentId: "intent_1",
       action: "add-liquidity",
@@ -133,13 +25,13 @@ describe("claim and withdraw-close flows", () => {
       poolSlug: "sol-usdc",
       amount: "1.25",
     });
-    await db.createExecutionSession({
+    await repos.positionRepo.createExecutionSession({
       id: "session_1",
       positionId,
       state: "active",
       failureStage: null,
     });
-    await db.createActivity({
+    await repos.activityRepo.createActivity({
       id: "activity_1",
       positionId,
       action: "add-liquidity",
@@ -149,7 +41,8 @@ describe("claim and withdraw-close flows", () => {
       safeNextStep: "wait",
     });
 
-    const service = createPositionService(db, {
+    const service = createPositionService({
+      ...repos,
       privacyAdapter: new MockPrivacyAdapter(),
       meteoraExecutor: createMockMeteoraExecutor(),
     });
@@ -176,7 +69,7 @@ describe("claim and withdraw-close flows", () => {
   it("withdraws, closes, and settles an active position", async () => {
     const positionId = "pos_2";
 
-    await db.createPosition({
+    await repos.positionRepo.createPosition({
       id: positionId,
       intentId: "intent_2",
       action: "add-liquidity",
@@ -185,13 +78,13 @@ describe("claim and withdraw-close flows", () => {
       poolSlug: "sol-usdc",
       amount: "2.50",
     });
-    await db.createExecutionSession({
+    await repos.positionRepo.createExecutionSession({
       id: "session_2",
       positionId,
       state: "active",
       failureStage: null,
     });
-    await db.createActivity({
+    await repos.activityRepo.createActivity({
       id: "activity_2",
       positionId,
       action: "add-liquidity",
@@ -201,7 +94,8 @@ describe("claim and withdraw-close flows", () => {
       safeNextStep: "wait",
     });
 
-    const service = createPositionService(db, {
+    const service = createPositionService({
+      ...repos,
       privacyAdapter: new MockPrivacyAdapter(),
       meteoraExecutor: createMockMeteoraExecutor(),
     });

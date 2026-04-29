@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { PositionReconciliationRecord, PositionReconciliationStore } from "../position-indexer";
-import { createPositionIndexer } from "../position-indexer";
+import type { PositionReconciliationRecord, ReconciliationRepository } from "../indexer.repository";
+import { createIndexerService } from "../indexer.service";
 
-function createMemoryStore(): PositionReconciliationStore {
+function createMemoryStore(): ReconciliationRepository {
   const entries = new Map<string, PositionReconciliationRecord>();
 
   return {
@@ -23,7 +23,7 @@ function createMemoryStore(): PositionReconciliationStore {
 describe("position indexer", () => {
   it("keeps a position in indexing until a snapshot is available", async () => {
     const store = createMemoryStore();
-    const indexer = createPositionIndexer({ store });
+    const indexer = createIndexerService({ store });
 
     const initial = await indexer.beginReconciliation({ positionId: "position-1" });
     expect(initial.state).toBe("indexing");
@@ -45,12 +45,12 @@ describe("position indexer", () => {
 
   it("recovers a pending reconciliation entry after the indexer is recreated", async () => {
     const store = createMemoryStore();
-    const firstIndexer = createPositionIndexer({ store });
+    const firstIndexer = createIndexerService({ store });
 
     await firstIndexer.beginReconciliation({ positionId: "position-2" });
     await firstIndexer.registerSnapshot({ positionId: "position-2", signature: "sig_2" });
 
-    const secondIndexer = createPositionIndexer({ store });
+    const secondIndexer = createIndexerService({ store });
     const result = await secondIndexer.reconcile("position-2");
 
     expect(result.state).toBe("active");

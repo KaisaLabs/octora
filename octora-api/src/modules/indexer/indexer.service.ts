@@ -1,5 +1,7 @@
 import type { ActivityRecord, ExecutionState } from "#domain";
 
+import type { ReconciliationRepository } from "./indexer.repository";
+
 export interface PositionReconciliationInput {
   positionId: string;
 }
@@ -7,17 +9,6 @@ export interface PositionReconciliationInput {
 export interface IndexerSnapshot {
   positionId: string;
   signature: string;
-}
-
-export interface PositionReconciliationRecord {
-  positionId: string;
-  signature: string | null;
-}
-
-export interface PositionReconciliationStore {
-  load(positionId: string): Promise<PositionReconciliationRecord | null>;
-  save(record: PositionReconciliationRecord): Promise<PositionReconciliationRecord>;
-  clear(positionId: string): Promise<void>;
 }
 
 export interface PositionIndexerBeginResult {
@@ -38,7 +29,7 @@ export interface PositionIndexer {
   reconcile(positionId: string): Promise<PositionIndexerReconcileResult>;
 }
 
-export function createPositionIndexer(options: { store: PositionReconciliationStore }): PositionIndexer {
+export function createIndexerService(options: { store: ReconciliationRepository }): PositionIndexer {
   const { store } = options;
 
   return {

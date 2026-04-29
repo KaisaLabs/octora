@@ -1,15 +1,11 @@
 import type { FastifyInstance } from 'fastify'
 
-import { createPositionController } from './controller'
-import { createIntentSchema, executeIntentSchema, positionParamsSchema } from './schema'
-import type { OrchestratorDb } from '../db'
+import { createPositionController } from './position.controller'
+import { createIntentSchema, executeIntentSchema, positionParamsSchema } from './position.schema'
+import type { PositionServiceDependencies } from './position.service'
 
-interface RegisterRoutesOptions {
-  db: OrchestratorDb
-}
-
-export async function registerPositionRoutes(app: FastifyInstance, options: RegisterRoutesOptions) {
-  const controller = createPositionController(options.db)
+export async function registerPositionRoutes(app: FastifyInstance, options: PositionServiceDependencies) {
+  const controller = createPositionController(options)
 
   app.post('/positions/intents', { schema: createIntentSchema }, controller.createIntent)
   app.get('/positions/:positionId', { schema: positionParamsSchema }, controller.getPosition)
