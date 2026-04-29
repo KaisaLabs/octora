@@ -7,9 +7,11 @@ import type { PositionServiceDependencies } from './position.service'
 export async function registerPositionRoutes(app: FastifyInstance, options: PositionServiceDependencies) {
   const controller = createPositionController(options)
 
-  app.post('/positions/intents', { schema: createIntentSchema }, controller.createIntent)
-  app.get('/positions/:positionId', { schema: positionParamsSchema }, controller.getPosition)
-  app.post('/positions/:positionId/execute', { schema: { ...positionParamsSchema, ...executeIntentSchema } }, controller.executeIntent)
-  app.post('/positions/:positionId/claim', { schema: positionParamsSchema }, controller.claimPosition)
-  app.post('/positions/:positionId/withdraw-close', { schema: positionParamsSchema }, controller.withdrawClosePosition)
+  const tags = ['Positions']
+
+  app.post('/positions/intents', { schema: { ...createIntentSchema, tags } }, controller.createIntent)
+  app.get('/positions/:positionId', { schema: { ...positionParamsSchema, tags } }, controller.getPosition)
+  app.post('/positions/:positionId/execute', { schema: { ...positionParamsSchema, ...executeIntentSchema, tags } }, controller.executeIntent)
+  app.post('/positions/:positionId/claim', { schema: { ...positionParamsSchema, tags } }, controller.claimPosition)
+  app.post('/positions/:positionId/withdraw-close', { schema: { ...positionParamsSchema, tags } }, controller.withdrawClosePosition)
 }

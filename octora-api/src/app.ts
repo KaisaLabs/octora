@@ -1,5 +1,7 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
+import fastifySwagger from '@fastify/swagger'
+import scalarApiReference from '@scalar/fastify-api-reference'
 
 import { createPrismaClient } from '#common/db/client'
 import { loadConfig } from '#common/config'
@@ -38,6 +40,24 @@ export async function createApp(options: CreateAppOptions = {}) {
     origin: config.frontendUrl,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+
+  await app.register(fastifySwagger, {
+    openapi: {
+      info: {
+        title: 'Octora API',
+        description: 'Octora — Solana liquidity management API',
+        version: '0.1.0',
+      },
+      tags: [
+        { name: 'Positions', description: 'Position intents and lifecycle' },
+        { name: 'DLMM', description: 'Meteora DLMM pool data and analytics' },
+      ],
+    },
+  })
+
+  await app.register(scalarApiReference, {
+    routePrefix: '/docs',
   })
 
   app.get('/health', async () => ({ ok: true }))
