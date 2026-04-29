@@ -7,7 +7,7 @@ import { createPrismaPositionRepository, type PositionRepository } from '#module
 import { createPrismaActivityRepository, type ActivityRepository } from '#modules/positions/activity.repository'
 import { createPrismaReconciliationRepository, type ReconciliationRepository } from '#modules/indexer/indexer.repository'
 import { registerPositionRoutes } from '#modules/positions/position.routes'
-import { registerPoolRoutes } from '#modules/pools/pool.routes'
+import { registerDlmmRoutes } from '#modules/dlmm/dlmm.routes'
 
 export interface AppRepositories {
   positionRepo: PositionRepository
@@ -42,7 +42,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 
   app.get('/health', async () => ({ ok: true }))
   app.register(registerPositionRoutes, repos)
-  app.register(registerPoolRoutes)
+  app.register(registerDlmmRoutes)
 
   return app
 }
