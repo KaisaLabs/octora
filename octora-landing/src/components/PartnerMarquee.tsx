@@ -1,6 +1,7 @@
 const PARTNERS = [
   { name: "Solana", logo: "/logo/solana.png" },
   { name: "Meteora", logo: "/logo/meteora.png" },
+  { name: "Superteam", logo: "/logo/superteam.jpg" },
 ];
 
 export function PartnerMarquee() {
@@ -25,7 +26,7 @@ export function PartnerMarquee() {
             key={p.name}
             src={p.logo}
             alt={p.name}
-            className="h-32 w-auto object-contain opacity-50 transition-opacity hover:opacity-80"
+            className="h-32 w-auto rounded-full object-contain opacity-50 transition-opacity hover:opacity-80"
           />
         ))}
       </div>
