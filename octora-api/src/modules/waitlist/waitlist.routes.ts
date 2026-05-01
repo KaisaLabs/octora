@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { WaitlistRepository } from "./waitlist.repository";
+import { sendWaitlistConfirmation } from "./email.service";
 
 export interface WaitlistRouteDeps {
   waitlistRepo: WaitlistRepository;
@@ -48,6 +49,11 @@ export async function registerWaitlistRoutes(app: FastifyInstance, { waitlistRep
       }
 
       const entry = await waitlistRepo.add(email, source);
+
+      sendWaitlistConfirmation(email).catch((err) => {
+        request.log.error({ err, email }, "Failed to send waitlist confirmation email");
+      });
+
       return reply.status(201).send(entry);
     }
   );
