@@ -30,9 +30,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     RETURNING id, email, "createdAt"
   `;
 
-  // Send confirmation email (fire-and-forget)
-  resend.emails
-    .send({
+  // Send confirmation email (must await — Vercel kills the runtime after response)
+  try {
+    await resend.emails.send({
       from: FROM_ADDRESS,
       to: email,
       subject: "You're on the Octora waitlist!",
@@ -47,8 +47,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   </div>
   <p style="font-size: 14px; color: #000000; margin: 24px 0 0;">— The Octora Team</p>
 </div>`,
-    })
-    .catch((err) => console.error("Failed to send email:", err));
+    });
+  } catch (err) {
+    console.error("Failed to send email:", err);
+  }
 
   return res.status(201).json(entry);
 }
