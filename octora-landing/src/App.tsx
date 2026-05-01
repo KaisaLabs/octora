@@ -1,5 +1,6 @@
 import { GlowBackground } from "./components/GlowBackground";
 import { FloatingParticles } from "./components/FloatingParticles";
+import { Navbar } from "./components/Navbar";
 import { HeroSection } from "./components/HeroSection";
 import { DemoPreview } from "./components/DemoPreview";
 import { WhyOctora } from "./components/WhyOctora";
@@ -15,6 +16,8 @@ function App() {
     <div className="relative min-h-screen overflow-hidden bg-base font-sans text-white antialiased select-none">
       <GlowBackground />
       <FloatingParticles count={35} />
+
+      <Navbar />
 
       <main className="relative z-10">
         <HeroSection />

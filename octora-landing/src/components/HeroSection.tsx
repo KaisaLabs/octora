@@ -5,29 +5,27 @@ export function HeroSection() {
     <section className="relative flex min-h-screen flex-col items-center justify-center px-6 text-center">
       <ScrollReveal className="flex flex-col items-center">
         {/* Badge */}
-        <div className="mb-6 inline-flex items-center gap-2.5 rounded-full border border-emerald-500/20 bg-emerald-500/5 px-4 py-1.5 backdrop-blur-sm">
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-          </span>
+        <div className="mb-8 inline-flex items-center gap-2.5 rounded-full border border-emerald-500/20 bg-emerald-500/5 px-5 py-2 backdrop-blur-sm">
           <span className="text-xs font-medium tracking-[0.16em] text-emerald-400">
-            PRIVACY LAYER FOR METEORA
+            ✦ PRIVACY LAYER FOR METEORA
           </span>
         </div>
 
         {/* Title */}
-        <h1 className="text-6xl font-bold tracking-tight sm:text-8xl md:text-9xl">
-          <span className="bg-gradient-to-b from-white to-emerald-200/50 bg-clip-text text-transparent drop-shadow-[0_0_30px_rgba(16,185,129,0.2)]">
-            Octora
+        <h1 className="text-5xl font-bold tracking-tight sm:text-6xl md:text-7xl">
+          <span className="text-white">
+            Add liquidity to Meteora
+          </span>
+          <br />
+          <span className="bg-gradient-to-r from-emerald-400 to-emerald-300 bg-clip-text text-transparent">
+            privately.
           </span>
         </h1>
 
         {/* Subtitle */}
-        <p className="mt-6 max-w-md text-lg font-light leading-relaxed text-emerald-100/70">
-          Privacy Layer for LP trade on{" "}
-          <span className="font-medium text-emerald-400">Meteora</span>.
-          <br />
-          Let your main wallet stay invisible.
+        <p className="mt-6 max-w-xl text-base font-light leading-relaxed text-emerald-100/50">
+          Octora hides your origin wallet so copy-trade bots can&apos;t track your
+          moves. Search, deposit, claim, and withdraw from one clean interface.
         </p>
 
         {/* CTAs */}
