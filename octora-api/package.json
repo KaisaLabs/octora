@@ -19,12 +19,16 @@
     "@prisma/client": "^7.8.0",
     "@scalar/fastify-api-reference": "^1.53.1",
     "@solana/web3.js": "^1.98.4",
+    "circomlibjs": "^0.1.7",
     "fastify": "^5.3.0",
-    "pg": "^8.20.0"
+    "fixed-merkle-tree": "^0.7.3",
+    "pg": "^8.20.0",
+    "snarkjs": "^0.7.6"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@types/pg": "^8.20.0",
+    "@types/snarkjs": "^0.7.9",
     "prisma": "^7.8.0",
     "tsx": "^4.19.2",
     "typescript": "^5.8.2",
