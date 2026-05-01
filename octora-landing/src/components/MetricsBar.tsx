@@ -1,10 +1,10 @@
 import { ScrollReveal } from "./ScrollReveal";
 
 const stats = [
-  { label: "Protected TVL", value: "$2.4M" },
-  { label: "Private Sessions", value: "1,280" },
-  { label: "Fees Captured", value: "$184K" },
-  { label: "Active Positions", value: "342" },
+  { label: "Protected TVL", value: "$0" },
+  { label: "Private Sessions", value: "0" },
+  { label: "Fees Captured", value: "$0" },
+  { label: "Active Positions", value: "0" },
 ];
 
 export function MetricsBar() {

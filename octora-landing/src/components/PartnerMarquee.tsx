@@ -1,0 +1,34 @@
+const PARTNERS = [
+  { name: "Solana", logo: "/logo/solana.png" },
+  { name: "Meteora", logo: "/logo/meteora.png" },
+];
+
+export function PartnerMarquee() {
+  return (
+    <section className="relative py-20">
+      <div className="mx-auto max-w-2xl px-6 text-center">
+        <p className="text-xs uppercase tracking-[0.22em] text-emerald-400/50">
+          Ecosystem
+        </p>
+        <h2 className="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+          Built on the protocols you trust.
+        </h2>
+        <p className="mt-3 text-sm leading-7 text-emerald-100/50">
+          Octora integrates with Solana's best protocols to keep your liquidity
+          private at every layer.
+        </p>
+      </div>
+
+      <div className="mt-10 flex items-center justify-center gap-10">
+        {PARTNERS.map((p) => (
+          <img
+            key={p.name}
+            src={p.logo}
+            alt={p.name}
+            className="h-32 w-auto object-contain opacity-50 transition-opacity hover:opacity-80"
+          />
+        ))}
+      </div>
+    </section>
+  );
+}

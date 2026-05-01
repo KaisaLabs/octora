@@ -2,6 +2,8 @@ import { GlowBackground } from "./components/GlowBackground";
 import { FloatingParticles } from "./components/FloatingParticles";
 import { HeroSection } from "./components/HeroSection";
 import { DemoPreview } from "./components/DemoPreview";
+import { WhyOctora } from "./components/WhyOctora";
+import { PartnerMarquee } from "./components/PartnerMarquee";
 import { HowItWorks } from "./components/HowItWorks";
 import { MetricsBar } from "./components/MetricsBar";
 import { WaitlistForm } from "./components/WaitlistForm";
@@ -16,9 +18,11 @@ function App() {
 
       <main className="relative z-10">
         <HeroSection />
-        <DemoPreview />
-        <HowItWorks />
         <MetricsBar />
+        <DemoPreview />
+        <WhyOctora />
+        <HowItWorks />
+        <PartnerMarquee />
         <WaitlistForm />
         <FaqSection />
       </main>
