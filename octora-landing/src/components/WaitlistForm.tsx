@@ -17,10 +17,24 @@ export function WaitlistForm() {
 
     setState("loading");
 
-    // Simulate API call — replace with actual endpoint
-    setTimeout(() => {
-      setState("success");
-    }, 1200);
+    fetch(`${import.meta.env.VITE_API_URL ?? "http://localhost:8787"}/waitlist`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, source: "landing" }),
+    })
+      .then((res) => {
+        if (res.ok || res.status === 409) {
+          setState("success");
+        } else {
+          return res.json().then((data) => {
+            throw new Error(data.error || "Something went wrong");
+          });
+        }
+      })
+      .catch((err) => {
+        setState("error");
+        setErrorMsg(err.message || "Failed to join. Try again.");
+      });
   };
 
   return (
