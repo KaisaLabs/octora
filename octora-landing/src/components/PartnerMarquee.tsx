@@ -3,6 +3,7 @@ const PROTOCOLS = [
   { name: "Meteora", logo: "/logo/meteora.png" },
 ];
 
+// @ts-ignore: commented out pending community approval
 const SUPPORTERS = [
   { name: "Superteam", logo: "/logo/superteam.jpg" },
 ];

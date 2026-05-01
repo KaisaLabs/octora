@@ -16,6 +16,7 @@
     "postgres": "^3.4.9",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "react-router": "^7.14.2",
     "resend": "^6.12.2",
     "tailwind-merge": "^3.5.0",
     "zod": "^4.4.1"
