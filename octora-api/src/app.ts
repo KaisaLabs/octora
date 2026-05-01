@@ -10,11 +10,14 @@ import { createPrismaActivityRepository, type ActivityRepository } from '#module
 import { createPrismaReconciliationRepository, type ReconciliationRepository } from '#modules/indexer/indexer.repository'
 import { registerPositionRoutes } from '#modules/positions/position.routes'
 import { registerDlmmRoutes } from '#modules/dlmm/dlmm.routes'
+import { createPrismaWaitlistRepository, type WaitlistRepository } from '#modules/waitlist/waitlist.repository'
+import { registerWaitlistRoutes } from '#modules/waitlist/waitlist.routes'
 
 export interface AppRepositories {
   positionRepo: PositionRepository
   activityRepo: ActivityRepository
   reconciliationRepo: ReconciliationRepository
+  waitlistRepo: WaitlistRepository
 }
 
 export interface CreateAppOptions {
@@ -28,6 +31,7 @@ function createPrismaRepositories(): AppRepositories {
     positionRepo: createPrismaPositionRepository(client),
     activityRepo: createPrismaActivityRepository(client),
     reconciliationRepo: createPrismaReconciliationRepository(client),
+    waitlistRepo: createPrismaWaitlistRepository(client),
   }
 }
 
@@ -52,6 +56,7 @@ export async function createApp(options: CreateAppOptions = {}) {
       tags: [
         { name: 'Positions', description: 'Position intents and lifecycle' },
         { name: 'DLMM', description: 'Meteora DLMM pool data and analytics' },
+        { name: 'Waitlist', description: 'Landing page waitlist signups' },
       ],
     },
   })
@@ -63,6 +68,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   app.get('/health', async () => ({ ok: true }))
   app.register(registerPositionRoutes, repos)
   app.register(registerDlmmRoutes)
+  app.register(registerWaitlistRoutes, { waitlistRepo: repos.waitlistRepo })
 
   return app
 }

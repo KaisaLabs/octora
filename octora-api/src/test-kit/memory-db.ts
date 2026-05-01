@@ -14,6 +14,7 @@ import type {
   ReconciliationRepository,
   PositionReconciliationRecord,
 } from "#modules/indexer/indexer.repository";
+import type { WaitlistRepository } from "#modules/waitlist/waitlist.repository";
 
 const FIXED_DATE = new Date("2026-04-29T09:00:00.000Z");
 
@@ -104,10 +105,26 @@ export function createMemoryReconciliationRepository(): ReconciliationRepository
   };
 }
 
+export function createMemoryWaitlistRepository(): WaitlistRepository {
+  const entries = new Map<string, { id: string; email: string; createdAt: Date }>();
+
+  return {
+    async add(email, source) {
+      const entry = { id: `wl-${entries.size + 1}`, email, source: source ?? null, createdAt: new Date() };
+      entries.set(email, entry);
+      return entry;
+    },
+    async exists(email) {
+      return entries.has(email);
+    },
+  };
+}
+
 export function createMemoryRepositories() {
   return {
     positionRepo: createMemoryPositionRepository(),
     activityRepo: createMemoryActivityRepository(),
     reconciliationRepo: createMemoryReconciliationRepository(),
+    waitlistRepo: createMemoryWaitlistRepository(),
   };
 }

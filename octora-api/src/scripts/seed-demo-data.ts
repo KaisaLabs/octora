@@ -1,6 +1,6 @@
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "#common/db/client";
 
-const client = new PrismaClient();
+const client = createPrismaClient();
 
 const demoPositions = [
   {
