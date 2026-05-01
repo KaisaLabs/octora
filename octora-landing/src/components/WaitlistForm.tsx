@@ -4,7 +4,7 @@ import { ScrollReveal } from "./ScrollReveal";
 
 export function WaitlistForm() {
   const [email, setEmail] = useState("");
-  const [state, setState] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [state, setState] = useState<"idle" | "loading" | "success" | "duplicate" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
   const handleSubmit = (e: FormEvent) => {
@@ -23,8 +23,10 @@ export function WaitlistForm() {
       body: JSON.stringify({ email, source: "landing" }),
     })
       .then((res) => {
-        if (res.ok || res.status === 409) {
+        if (res.ok) {
           setState("success");
+        } else if (res.status === 409) {
+          setState("duplicate");
         } else {
           return res.json().then((data) => {
             throw new Error(data.error || "Something went wrong");
@@ -61,6 +63,16 @@ export function WaitlistForm() {
               <p className="text-lg font-semibold text-white">You're on the list!</p>
               <p className="text-sm text-emerald-100/50">
                 We'll reach out when it's your turn.
+              </p>
+            </div>
+          ) : state === "duplicate" ? (
+            <div className="flex flex-col items-center gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 py-10">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/20">
+                <Check className="h-6 w-6 text-amber-400" />
+              </div>
+              <p className="text-lg font-semibold text-white">You're already on the list!</p>
+              <p className="text-sm text-emerald-100/50">
+                This email is already registered. We'll reach out when it's your turn.
               </p>
             </div>
           ) : (
