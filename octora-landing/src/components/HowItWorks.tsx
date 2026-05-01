@@ -1,73 +1,116 @@
-import { Wallet, Search, SlidersHorizontal, ShieldCheck } from "lucide-react";
 import { ScrollReveal } from "./ScrollReveal";
+import { Wallet, Shuffle, Ghost, Droplets } from "lucide-react";
 import { motion } from "framer-motion";
+import type { ReactNode } from "react";
 
-const steps = [
+const steps: {
+  label: string;
+  sub: string;
+  icon: ReactNode;
+}[] = [
   {
-    n: "01",
-    icon: Wallet,
-    title: "Connect wallet",
-    desc: "Open a private session — your main wallet stays shielded.",
+    label: "Your Wallet",
+    sub: "Origin stays hidden",
+    icon: <Wallet className="h-6 w-6 text-emerald-400" />,
   },
   {
-    n: "02",
-    icon: Search,
-    title: "Pick a pool",
-    desc: "Search pairs, paste a CA, or browse trending Meteora pools.",
+    label: "Octora Mixer",
+    sub: "ZK proof + relay",
+    icon: <Shuffle className="h-6 w-6 text-emerald-400" />,
   },
   {
-    n: "03",
-    icon: SlidersHorizontal,
-    title: "Set strategy",
-    desc: "Choose range, allocation, and concentration like Meteora.",
+    label: "Stealth Address",
+    sub: "Unlinkable session",
+    icon: <Ghost className="h-6 w-6 text-emerald-400" />,
   },
   {
-    n: "04",
-    icon: ShieldCheck,
-    title: "Deposit privately",
-    desc: "Routed through Vanish + MagicBlock — copy bots see nothing.",
+    label: "Meteora Pool",
+    sub: "LP deposited privately",
+    icon: <Droplets className="h-6 w-6 text-emerald-400" />,
   },
 ];
 
+function AnimatedConnector({ delay }: { delay: number }) {
+  return (
+    <div className="flex flex-col items-center">
+      {/* Top dot */}
+      <div className="h-2 w-2 rounded-full bg-emerald-400/50 shadow-[0_0_6px_rgba(16,185,129,0.4)]" />
+      {/* Line */}
+      <div className="relative h-8 w-[2px] bg-emerald-500/15 overflow-hidden">
+        <motion.div
+          className="absolute top-0 left-0 h-4 w-full bg-emerald-400/70"
+          animate={{ top: ["0%", "100%"] }}
+          transition={{
+            duration: 1.2,
+            repeat: Infinity,
+            ease: "linear",
+            delay,
+          }}
+        />
+      </div>
+      {/* Bottom dot */}
+      <div className="h-2 w-2 rounded-full bg-emerald-400/50 shadow-[0_0_6px_rgba(16,185,129,0.4)]" />
+    </div>
+  );
+}
+
 export function HowItWorks() {
   return (
-    <section id="how" className="border-t border-emerald-500/10 px-6 py-20 sm:py-28">
+    <section
+      id="how"
+      className="border-t border-emerald-500/10 px-6 py-20 sm:py-28"
+    >
       <div className="mx-auto max-w-6xl">
-        <ScrollReveal className="mx-auto max-w-2xl text-center">
-          <p className="text-xs font-medium uppercase tracking-[0.22em] text-emerald-100/50">
-            How it works
-          </p>
-          <h2 className="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-            From wallet to pool — without leaving a trace.
-          </h2>
-        </ScrollReveal>
+        <div className="grid items-center gap-12 lg:grid-cols-[1fr_1.2fr]">
+          {/* Left — heading */}
+          <ScrollReveal>
+            <p className="mb-4 text-xs font-medium uppercase tracking-[0.22em] text-emerald-100/50">
+              How it works
+            </p>
+            <h2 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">
+              From <span className="text-emerald-400">wallet to pool</span>,
+              <br />
+              without{" "}
+              <span className="text-emerald-400">leaving a trace</span>.
+            </h2>
+            <p className="mt-5 max-w-sm text-base leading-7 text-emerald-100/40">
+              Your deposit is routed through a ZK mixer and a stealth address so
+              the Meteora pool never sees your origin wallet.
+            </p>
+          </ScrollReveal>
 
-        <div className="mt-12 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {steps.map((s, i) => (
-            <motion.div
-              key={s.n}
-              initial={{ opacity: 0, y: 30 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.5, delay: i * 0.12 }}
-              className="flex flex-col rounded-2xl border border-emerald-500/10 bg-emerald-950/20 p-6"
-            >
-              <div className="flex items-center gap-3">
-                <span className="font-mono text-xs text-emerald-400/60">
-                  {s.n}
-                </span>
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-500/15 bg-emerald-500/5">
-                  <s.icon className="h-4 w-4 text-emerald-400" />
+          {/* Right — flow diagram */}
+          <ScrollReveal delay={0.15}>
+            <div className="mx-auto flex max-w-[400px] flex-col">
+              {steps.map((step, i) => (
+                <div key={step.label}>
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.4, delay: i * 0.12 }}
+                    className="flex w-full items-center gap-5 rounded-2xl border border-emerald-500/15 bg-emerald-950/60 px-6 py-5 backdrop-blur-sm"
+                  >
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-emerald-500/15 bg-emerald-500/10">
+                      {step.icon}
+                    </div>
+                    <div>
+                      <p className="text-lg font-semibold text-white">
+                        {step.label}
+                      </p>
+                      <p className="text-sm leading-tight text-emerald-100/40">
+                        {step.sub}
+                      </p>
+                    </div>
+                  </motion.div>
+
+                  {i < steps.length - 1 && (
+                    <AnimatedConnector delay={i * 0.4} />
+                  )}
                 </div>
-              </div>
-              <h3 className="mt-4 text-base font-semibold text-white">
-                {s.title}
-              </h3>
-              <p className="mt-2 text-sm leading-6 text-emerald-100/50">
-                {s.desc}
-              </p>
-            </motion.div>
-          ))}
+              ))}
+            </div>
+          </ScrollReveal>
         </div>
       </div>
     </section>

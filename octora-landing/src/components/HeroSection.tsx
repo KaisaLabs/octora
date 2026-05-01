@@ -1,4 +1,3 @@
-import { Sparkles } from "lucide-react";
 import { ScrollReveal } from "./ScrollReveal";
 
 export function HeroSection() {
@@ -6,8 +5,11 @@ export function HeroSection() {
     <section className="relative flex min-h-screen flex-col items-center justify-center px-6 text-center">
       <ScrollReveal className="flex flex-col items-center">
         {/* Badge */}
-        <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/5 px-4 py-1.5 backdrop-blur-sm">
-          <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+        <div className="mb-6 inline-flex items-center gap-2.5 rounded-full border border-emerald-500/20 bg-emerald-500/5 px-4 py-1.5 backdrop-blur-sm">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+          </span>
           <span className="text-xs font-medium tracking-[0.16em] text-emerald-400">
             PRIVACY LAYER FOR METEORA
           </span>

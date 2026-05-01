@@ -13,7 +13,7 @@ export function MetricsBar() {
       <ScrollReveal>
         <div className="mx-auto grid max-w-6xl grid-cols-2 gap-6 px-6 py-10 sm:grid-cols-4 sm:py-14">
           {stats.map((s) => (
-            <div key={s.label} className="text-center sm:text-left">
+            <div key={s.label} className="text-center">
               <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-emerald-100/40">
                 {s.label}
               </p>
