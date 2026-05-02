@@ -2,7 +2,7 @@ import type { ExecutionMode } from "#domain";
 import type { PodRuntime } from "#infra/runtime";
 
 export interface PrivacyCapabilities {
-  adapter: "mock" | "magicblock";
+  adapter: "mock" | "magicblock" | "relayer";
   live: boolean;
   mvpReady: boolean;
   deterministicReceipts: boolean;
