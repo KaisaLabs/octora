@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8787'
+const API_BASE = import.meta.env.VITE_API_URL ?? '/api'
 
 export interface PoolSummary {
   address: string
@@ -49,7 +49,7 @@ function protocolLabel(binStep: number): string {
   return binStep <= 100 ? "Meteora DLMM" : "Meteora DAMM";
 }
 
-/** Maps an API PoolSummary to the internal Pool type used by OctoraPlatform */
+/** Maps an API PoolSummary to the internal Pool type */
 export function mapPoolSummary(summary: PoolSummary): Pool {
   const tokenA = summary.tokenX.symbol;
   const tokenB = summary.tokenY.symbol;
@@ -80,21 +80,25 @@ export function mapPoolSummary(summary: PoolSummary): Pool {
 export async function listPools(opts: {
   network?: 'mainnet' | 'devnet'
   search?: string
-  limit?: number
-  offset?: number
+  page?: number
+  pageSize?: number
+  sortBy?: string
+  filterBy?: string
 } = {}): Promise<PoolSummary[]> {
   const params = new URLSearchParams()
   if (opts.network) params.set('network', opts.network)
   if (opts.search) params.set('search', opts.search)
-  if (opts.limit) params.set('limit', String(opts.limit))
-  if (opts.offset) params.set('offset', String(opts.offset))
+  if (opts.page) params.set('page', String(opts.page))
+  if (opts.pageSize) params.set('pageSize', String(opts.pageSize))
+  if (opts.sortBy) params.set('sortBy', opts.sortBy)
+  if (opts.filterBy) params.set('filterBy', opts.filterBy)
 
-  const res = await fetch(`${API_BASE}/pools?${params.toString()}`)
+  const res = await fetch(`${API_BASE}/dlmm/pools?${params.toString()}`)
   if (!res.ok) {
     throw new Error(`Failed to fetch pools: ${res.status}`)
   }
   const data = await res.json()
-  return data.pools
+  return data.data
 }
 
 export async function getPoolDetail(
@@ -104,7 +108,7 @@ export async function getPoolDetail(
   const params = new URLSearchParams()
   params.set('network', network)
 
-  const res = await fetch(`${API_BASE}/pools/${address}?${params.toString()}`)
+  const res = await fetch(`${API_BASE}/dlmm/pools/${address}?${params.toString()}`)
   if (!res.ok) {
     throw new Error(`Failed to fetch pool: ${res.status}`)
   }

@@ -2,111 +2,110 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
+/* Octora design system — emerald on deep black-green, matching landing page */
 
 @layer base {
   :root {
-    --background: 220 16% 9%;
-    --foreground: 210 20% 96%;
+    --background: 150 33% 2%;
+    --foreground: 150 20% 95%;
 
-    --card: 220 14% 12%;
-    --card-foreground: 210 20% 96%;
+    --card: 155 30% 4%;
+    --card-foreground: 150 20% 95%;
 
-    --popover: 220 14% 12%;
-    --popover-foreground: 210 20% 96%;
+    --popover: 155 30% 4%;
+    --popover-foreground: 150 20% 95%;
 
-    --surface: 220 13% 11%;
-    --surface-foreground: 210 20% 96%;
-    --surface-elevated: 220 12% 15%;
+    --surface: 152 28% 3%;
+    --surface-foreground: 150 20% 95%;
+    --surface-elevated: 153 20% 7%;
 
-    --primary: 153 26% 63%;
-    --primary-foreground: 220 16% 9%;
+    --primary: 160 84% 39%;
+    --primary-foreground: 150 33% 2%;
 
-    --highlight: 37 20% 68%;
-    --highlight-foreground: 220 16% 9%;
+    --highlight: 160 84% 39%;
+    --highlight-foreground: 150 33% 2%;
 
-    --secondary: 220 12% 17%;
-    --secondary-foreground: 210 20% 96%;
+    --secondary: 155 18% 8%;
+    --secondary-foreground: 150 20% 85%;
 
-    --muted: 220 11% 18%;
-    --muted-foreground: 217 12% 67%;
+    --muted: 153 14% 10%;
+    --muted-foreground: 152 20% 55%;
 
-    --accent: 220 10% 14%;
-    --accent-foreground: 210 20% 96%;
+    --accent: 155 16% 6%;
+    --accent-foreground: 150 20% 95%;
 
-    --success: 151 31% 52%;
-    --success-foreground: 210 20% 96%;
+    --success: 160 72% 42%;
+    --success-foreground: 150 20% 95%;
 
-    --destructive: 6 63% 59%;
-    --destructive-foreground: 210 20% 96%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 150 20% 95%;
 
-    --border: 220 10% 22%;
-    --input: 220 10% 22%;
-    --ring: 153 26% 63%;
+    --border: 155 20% 12%;
+    --input: 155 20% 12%;
+    --ring: 160 84% 39%;
 
     --radius: 0.7rem;
 
-    --shadow-soft: 0 20px 50px -30px hsl(220 30% 3% / 0.72);
-    --shadow-glow: 0 0 0 1px hsl(153 26% 63% / 0.12), 0 18px 38px -28px hsl(220 30% 3% / 0.76);
+    --shadow-soft: 0 20px 50px -30px hsl(150 40% 2% / 0.8);
+    --shadow-glow: 0 0 0 1px hsl(160 84% 39% / 0.12), 0 18px 38px -28px hsl(150 40% 2% / 0.8);
 
-    --sidebar-background: 220 16% 9%;
-    --sidebar-foreground: 210 20% 96%;
-    --sidebar-primary: 153 26% 63%;
-    --sidebar-primary-foreground: 220 16% 9%;
-    --sidebar-accent: 220 12% 17%;
-    --sidebar-accent-foreground: 210 20% 96%;
-    --sidebar-border: 220 10% 22%;
-    --sidebar-ring: 153 26% 63%;
+    --sidebar-background: 150 33% 2%;
+    --sidebar-foreground: 150 20% 95%;
+    --sidebar-primary: 160 84% 39%;
+    --sidebar-primary-foreground: 150 33% 2%;
+    --sidebar-accent: 155 18% 8%;
+    --sidebar-accent-foreground: 150 20% 85%;
+    --sidebar-border: 155 20% 12%;
+    --sidebar-ring: 160 84% 39%;
   }
 
   .dark {
-    --background: 220 16% 9%;
-    --foreground: 210 20% 96%;
+    --background: 150 33% 2%;
+    --foreground: 150 20% 95%;
 
-    --card: 220 14% 12%;
-    --card-foreground: 210 20% 96%;
+    --card: 155 30% 4%;
+    --card-foreground: 150 20% 95%;
 
-    --popover: 220 14% 12%;
-    --popover-foreground: 210 20% 96%;
+    --popover: 155 30% 4%;
+    --popover-foreground: 150 20% 95%;
 
-    --surface: 220 13% 11%;
-    --surface-foreground: 210 20% 96%;
-    --surface-elevated: 220 12% 15%;
+    --surface: 152 28% 3%;
+    --surface-foreground: 150 20% 95%;
+    --surface-elevated: 153 20% 7%;
 
-    --primary: 153 26% 63%;
-    --primary-foreground: 220 16% 9%;
+    --primary: 160 84% 39%;
+    --primary-foreground: 150 33% 2%;
 
-    --highlight: 37 20% 68%;
-    --highlight-foreground: 220 16% 9%;
+    --highlight: 160 84% 39%;
+    --highlight-foreground: 150 33% 2%;
 
-    --secondary: 220 12% 17%;
-    --secondary-foreground: 210 20% 96%;
+    --secondary: 155 18% 8%;
+    --secondary-foreground: 150 20% 85%;
 
-    --muted: 220 11% 18%;
-    --muted-foreground: 217 12% 67%;
+    --muted: 153 14% 10%;
+    --muted-foreground: 152 20% 55%;
 
-    --accent: 220 10% 14%;
-    --accent-foreground: 210 20% 96%;
+    --accent: 155 16% 6%;
+    --accent-foreground: 150 20% 95%;
 
-    --success: 151 31% 52%;
-    --success-foreground: 210 20% 96%;
+    --success: 160 72% 42%;
+    --success-foreground: 150 20% 95%;
 
-    --destructive: 6 63% 59%;
-    --destructive-foreground: 210 20% 96%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 150 20% 95%;
 
-    --border: 220 10% 22%;
-    --input: 220 10% 22%;
-    --ring: 153 26% 63%;
-    --sidebar-background: 220 16% 9%;
-    --sidebar-foreground: 210 20% 96%;
-    --sidebar-primary: 153 26% 63%;
-    --sidebar-primary-foreground: 220 16% 9%;
-    --sidebar-accent: 220 12% 17%;
-    --sidebar-accent-foreground: 210 20% 96%;
-    --sidebar-border: 220 10% 22%;
-    --sidebar-ring: 153 26% 63%;
+    --border: 155 20% 12%;
+    --input: 155 20% 12%;
+    --ring: 160 84% 39%;
+
+    --sidebar-background: 150 33% 2%;
+    --sidebar-foreground: 150 20% 95%;
+    --sidebar-primary: 160 84% 39%;
+    --sidebar-primary-foreground: 150 33% 2%;
+    --sidebar-accent: 155 18% 8%;
+    --sidebar-accent-foreground: 150 20% 85%;
+    --sidebar-border: 155 20% 12%;
+    --sidebar-ring: 160 84% 39%;
   }
 }
 
@@ -121,7 +120,9 @@ All colors MUST be HSL.
 
   body {
     @apply bg-background text-foreground antialiased;
-    font-feature-settings: "ss01" 1, "cv02" 1, "cv03" 1;
+    font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   #root {
@@ -129,22 +130,33 @@ All colors MUST be HSL.
   }
 
   ::selection {
-    background: hsl(var(--primary) / 0.28);
+    background: hsl(var(--primary) / 0.25);
     color: hsl(var(--foreground));
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--primary) / 0.2);
+    border-radius: 3px;
   }
 }
 
 @layer utilities {
   .panel-shell {
-    @apply border border-border/80 bg-surface-elevated shadow-soft backdrop-blur-xl;
+    @apply border border-border/60 bg-card/80 shadow-soft backdrop-blur-xl;
   }
 
   .text-gradient {
-    color: hsl(var(--foreground));
+    @apply bg-gradient-to-r from-emerald-400 to-emerald-200 bg-clip-text text-transparent;
   }
 
   .grid-fade {
-    background-image: linear-gradient(hsl(var(--border) / 0.34) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--border) / 0.34) 1px, transparent 1px);
+    background-image: linear-gradient(hsl(var(--primary) / 0.06) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--primary) / 0.06) 1px, transparent 1px);
     background-size: 44px 44px;
     mask-image: radial-gradient(circle at center, black 40%, transparent 85%);
   }
