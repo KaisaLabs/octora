@@ -5,7 +5,7 @@
 
 ---
 
-Octora shields your origin wallet when you add liquidity to Meteora pools — copy-trade bots see nothing. Search pools, configure strategies, deposit privately, and claim rewards through a clean, wallet-gated interface. Behind the scenes, intents are routed through privacy relays (Vanish + MagicBlock) that decouple your identity from pool visibility.
+Octora shields your origin wallet when you add liquidity to Meteora pools — copy-trade bots see nothing. Search pools, configure strategies, deposit privately, and claim rewards through a clean, wallet-gated interface. Behind the scenes, intents are routed through a self-hosted privacy layer (ZK mixer + relayer) that decouples your identity from pool visibility — no third-party services, fully sovereign infrastructure.
 
 ## Architecture
 
@@ -18,7 +18,7 @@ Octora shields your origin wallet when you add liquidity to Meteora pools — co
 ┌──────────────────▼──────────────────────────────────────┐
 │  octora-api (Fastify + Prisma)                          │
 │  Pool proxy · Position orchestrator · State machine     │
-│  Privacy adapters (Mock / MagicBlock) · Indexer         │
+│  Privacy adapters (Mock / Relayer) · Indexer             │
 └──────┬──────────────────────┬───────────────────────────┘
        │                      │
 ┌──────▼──────┐    ┌──────────▼──────────┐
@@ -70,8 +70,9 @@ octora/
 │   │   │   ├── positions/     # Position lifecycle (routes, service, repos, recovery)
 │   │   │   ├── pools/         # Meteora pool discovery (routes, service)
 │   │   │   ├── execution/     # Chain interaction adapters + clients
-│   │   │   │   ├── adapters/  #   PrivacyAdapter (Mock / MagicBlock)
+│   │   │   │   ├── adapters/  #   PrivacyAdapter (Mock / Relayer)
 │   │   │   │   └── clients/   #   MeteoraExecutor (Mock / live)
+│   │   │   ├── relayer/       # Self-hosted privacy relayer + stealth wallets
 │   │   │   └── indexer/       # On-chain reconciliation (service, repo)
 │   │   ├── infra/
 │   │   │   └── runtime/       # PodRuntime abstraction
@@ -251,11 +252,11 @@ curl -X POST http://localhost:8787/positions/intents \
 
 ## Design decisions
 
-- **Privacy-first**: Main wallet stays shielded. Session keys + relay routing (Vanish → MagicBlock → Meteora).
+- **Privacy-first**: Main wallet stays shielded. Self-hosted ZK mixer + relayer → stealth wallet → Meteora. No third-party relay services.
 - **State machine**: Every position moves through 11 well-defined states with strict transition guards. No partial execution.
 - **Recovery-first**: 7 failure stages, each with guided recovery steps (wait/retry/refresh/contact-support). Positions are never orphaned.
-- **Mock-first**: Privacy adapters and Meteora executors are mock-implemented in the MVP with clearly defined seams for production providers.
-- **Non-custodial**: Session wallets are revocable. Users keep full custody of funds.
+- **Mock-first**: Privacy adapters and Meteora executors are mock-implemented in the MVP with clearly defined seams for production.
+- **Non-custodial**: Stealth wallets are ephemeral and recoverable. Users keep full custody of funds.
 
 ## Testing
 
@@ -273,11 +274,12 @@ cd octora-web && npm run test:e2e
 ## Roadmap
 
 - [x] Core position lifecycle (draft → active → completed)
-- [x] Mock privacy adapter (Vanish + MagicBlock seams)
+- [x] Self-hosted relayer (proof verification, nullifier registry, stealth wallets)
+- [x] ZK vault/mixer (Groth16 + Poseidon Merkle tree)
 - [x] Meteora pool proxy (DLMM/DAMM pool listing)
 - [x] Wallet connection (Phantom, Backpack, Solflare)
 - [x] Landing page with animations
-- [ ] Live MagicBlock adapter integration
+- [ ] On-chain mixer program (Anchor — deposit/withdraw instructions)
 - [ ] Live Meteora executor integration
 - [ ] Indexer with real-time on-chain reconciliation
 - [ ] Mainnet deployment
