@@ -1,7 +1,15 @@
+import { ComputeBudgetProgram, PublicKey, SystemProgram } from "@solana/web3.js";
 import { verifyWithdrawProof } from "#modules/vault";
 import type { NullifierRegistry } from "./nullifier-registry.js";
 import type { StealthWallet } from "./stealth-wallet.js";
 import { generateStealthWallet } from "./stealth-wallet.js";
+import { convertProofToBytes, convertPublicInputsToBytes } from "./proof-converter.js";
+import {
+  createMixerClient,
+  deriveMixerPoolPDA,
+  deriveNullifierPDA,
+  type MixerClient,
+} from "./solana-client.js";
 import type { RelayerConfig, RelayerStatus, WithdrawRequest, WithdrawResult } from "./types.js";
 
 /**
@@ -17,11 +25,26 @@ import type { RelayerConfig, RelayerStatus, WithdrawRequest, WithdrawResult } fr
 export class RelayerService {
   private totalProcessed = 0;
   private pendingWithdrawals = 0;
+  private client: MixerClient | null = null;
+  private mixerPoolPDA: PublicKey | null = null;
 
   constructor(
     private readonly config: RelayerConfig,
     private readonly nullifiers: NullifierRegistry,
   ) {}
+
+  /**
+   * Initialize the Solana client connection.
+   * Must be called before processing withdrawals.
+   */
+  initializeClient(): void {
+    this.client = createMixerClient(this.config);
+    const [poolPDA] = deriveMixerPoolPDA(
+      this.client.programId,
+      this.config.poolDenomination,
+    );
+    this.mixerPoolPDA = poolPDA;
+  }
 
   /**
    * Process a withdrawal request:
@@ -73,12 +96,7 @@ export class RelayerService {
       };
     }
 
-    // 3. Verify the relayer address matches our hot wallet
-    if (request.relayer !== this.config.hotWalletSecret) {
-      // In production, compare against hot wallet pubkey
-    }
-
-    // 4. Submit on-chain withdrawal transaction
+    // 3. Submit on-chain withdrawal transaction
     this.pendingWithdrawals++;
     let txSignature: string;
 
@@ -97,7 +115,7 @@ export class RelayerService {
       };
     }
 
-    // 5. Mark nullifier as spent
+    // 4. Mark nullifier as spent
     await this.nullifiers.markSpent(request.nullifierHash, txSignature);
 
     this.pendingWithdrawals--;
@@ -127,7 +145,7 @@ export class RelayerService {
   async status(): Promise<RelayerStatus> {
     return {
       publicKey: this.getHotWalletPublicKey(),
-      balanceLamports: "0", // TODO: query on-chain balance
+      balanceLamports: await this.getHotWalletBalance(),
       pendingWithdrawals: this.pendingWithdrawals,
       totalProcessed: this.totalProcessed,
       nullifierCount: await this.nullifiers.count(),
@@ -158,24 +176,70 @@ export class RelayerService {
   /**
    * Submit the withdrawal instruction to the mixer program on-chain.
    * The hot wallet signs and pays gas; the recipient receives (denomination - fee).
-   *
-   * TODO: Implement actual Solana transaction construction:
-   * - Build instruction with proof, public signals, recipient
-   * - Sign with hot wallet keypair
-   * - Send and confirm transaction
    */
   private async submitWithdrawalTx(request: WithdrawRequest): Promise<string> {
-    // Placeholder for on-chain tx submission.
-    // Will be replaced with actual @solana/web3.js transaction logic
-    // once the mixer program is deployed.
-    throw new Error(
-      `On-chain submission not yet implemented. ` +
-      `Recipient: ${request.recipient}, Root: ${request.root}`,
+    this.ensureClientInitialized();
+
+    const { program, hotWallet, programId } = this.client!;
+    const mixerPoolKey = this.mixerPoolPDA!;
+
+    // Convert proof and public inputs to packed byte format
+    const proofBytes = convertProofToBytes(request.proof);
+    const publicInputsBytes = convertPublicInputsToBytes(request.publicSignals);
+
+    // Derive nullifier PDA
+    const nullifierHashBuf = Buffer.from(
+      BigInt(request.nullifierHash).toString(16).padStart(64, "0"),
+      "hex",
     );
+    const [nullifierPDA] = deriveNullifierPDA(programId, mixerPoolKey, nullifierHashBuf);
+
+    const recipientKey = new PublicKey(request.recipient);
+    const relayerKey = hotWallet.publicKey;
+
+    // Build and send the withdraw instruction
+    const tx = await program.methods
+      .withdraw(
+        Array.from(proofBytes) as number[],
+        Array.from(publicInputsBytes) as number[],
+      )
+      .accounts({
+        signer: hotWallet.publicKey,
+        mixerPool: mixerPoolKey,
+        nullifierAccount: nullifierPDA,
+        recipient: recipientKey,
+        relayer: relayerKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .preInstructions([
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+      ])
+      .signers([hotWallet])
+      .rpc({ commitment: "confirmed" });
+
+    return tx;
   }
 
   private getHotWalletPublicKey(): string {
-    // TODO: derive from config.hotWalletSecret
-    return "RELAYER_HOT_WALLET_PUBKEY";
+    if (this.client) {
+      return this.client.hotWallet.publicKey.toBase58();
+    }
+    return "NOT_INITIALIZED";
+  }
+
+  private async getHotWalletBalance(): Promise<string> {
+    if (!this.client) return "0";
+    const balance = await this.client.provider.connection.getBalance(
+      this.client.hotWallet.publicKey,
+    );
+    return balance.toString();
+  }
+
+  private ensureClientInitialized(): void {
+    if (!this.client || !this.mixerPoolPDA) {
+      throw new Error(
+        "RelayerService Solana client not initialized. Call initializeClient() first.",
+      );
+    }
   }
 }

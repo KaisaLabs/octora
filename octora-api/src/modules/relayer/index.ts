@@ -1,6 +1,10 @@
 export { RelayerService } from "./relayer.service.js";
 export { DepositService } from "./deposit.service.js";
-export { InMemoryNullifierRegistry, type NullifierRegistry } from "./nullifier-registry.js";
+export {
+  InMemoryNullifierRegistry,
+  OnChainNullifierRegistry,
+  type NullifierRegistry,
+} from "./nullifier-registry.js";
 export {
   generateStealthWallet,
   encryptSeed,
@@ -9,6 +13,18 @@ export {
   type StealthWallet,
   type EncryptedSeed,
 } from "./stealth-wallet.js";
+export {
+  convertProofToBytes,
+  convertPublicInputsToBytes,
+  pubkeyToFieldElement,
+} from "./proof-converter.js";
+export {
+  createMixerClient,
+  deriveMixerPoolPDA,
+  deriveNullifierPDA,
+  deriveCommitmentPDA,
+  isNullifierSpentOnChain,
+} from "./solana-client.js";
 export type {
   WithdrawRequest,
   WithdrawResult,
