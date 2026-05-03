@@ -44,5 +44,16 @@ tmp/
 temp/
 
 
+# ─── Anchor / Solana ────────────────────────────────────
+target/
+Cargo.lock
+.anchor/
+
+# ─── ZK Circuit artifacts (regenerate via setup.sh) ─────
+octora-api/src/modules/vault/circuits/withdraw.wasm
+octora-api/src/modules/vault/circuits/withdraw.zkey
+octora-api/src/modules/vault/circuits/build/
+
+# ─── Misc ───────────────────────────────────────────────
 .superstack
 /briefs

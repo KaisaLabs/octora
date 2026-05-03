@@ -19,6 +19,7 @@
     "@prisma/client": "^7.8.0",
     "@scalar/fastify-api-reference": "^1.53.1",
     "@solana/web3.js": "^1.98.4",
+    "circomlib": "^2.0.5",
     "circomlibjs": "^0.1.7",
     "fastify": "^5.3.0",
     "fixed-merkle-tree": "^0.7.3",

@@ -25,7 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
 CIRCUIT="$SCRIPT_DIR/withdraw.circom"
 
-SNARKJS="$(cd "$SCRIPT_DIR/../../.." && pwd)/node_modules/.bin/snarkjs"
+SNARKJS="$(cd "$SCRIPT_DIR/../../../.." && pwd)/node_modules/.bin/snarkjs"
 
 echo "==> Setting up build directory"
 rm -rf "$BUILD_DIR"
@@ -34,10 +34,9 @@ mkdir -p "$BUILD_DIR"
 # ── Step 1: Compile the circuit ──
 echo "==> Compiling circuit..."
 circom "$CIRCUIT" \
-  --r1cs "$BUILD_DIR/withdraw.r1cs" \
-  --wasm "$BUILD_DIR" \
-  --sym "$BUILD_DIR/withdraw.sym" \
-  -l "$(cd "$SCRIPT_DIR/../../.." && pwd)/node_modules"
+  -o "$BUILD_DIR" \
+  --r1cs --wasm --sym \
+  -l "$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 echo "    R1CS, WASM, and SYM files generated."
 
