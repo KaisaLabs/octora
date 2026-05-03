@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "types": ["mocha", "chai"]
+  },
+  "include": ["tests/**/*.ts"],
+  "exclude": ["node_modules", "programs", "octora-api", "octora-web", "octora-landing"]
+}

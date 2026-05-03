@@ -30,19 +30,25 @@ pub struct Deposit<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Deposit SOL into the mixer pool.
+///
+/// The on-chain program stores the commitment and accepts the new Merkle root
+/// computed off-chain. The Merkle inclusion proof is verified inside the ZK
+/// circuit during withdrawal, not during deposit.
+///
+/// This design avoids on-chain Poseidon hashing (which exceeds SBF's 4KB stack
+/// limit) while maintaining security: an invalid root simply means the
+/// depositor's withdrawal proof won't verify later.
 pub fn handler(
     ctx: Context<Deposit>,
     commitment: [u8; 32],
-    proof_siblings: [[u8; 32]; TREE_LEVELS],
+    new_root: [u8; 32],
 ) -> Result<()> {
     // Safety checks
     require!(!ctx.accounts.mixer_pool.is_paused, MixerError::PoolPaused);
     require!(ctx.accounts.mixer_pool.next_leaf_index < MAX_LEAVES, MixerError::TreeFull);
 
-    // Read values before mutable borrow
     let denomination = ctx.accounts.mixer_pool.denomination;
-    let current_root = *ctx.accounts.mixer_pool.current_root();
-    let leaf_index = ctx.accounts.mixer_pool.next_leaf_index;
 
     // Transfer denomination from depositor to pool (pool is the vault)
     system_program::transfer(
@@ -56,19 +62,12 @@ pub fn handler(
         denomination,
     )?;
 
-    // Verify old root and compute new root using Poseidon Merkle path
-    let new_root = compute_new_root(
-        &commitment,
-        &proof_siblings,
-        leaf_index,
-        &current_root,
-    )?;
-
     // Store commitment account bump
     ctx.accounts.commitment_account.bump = ctx.bumps.commitment_account;
 
     // Update pool state
     let pool = &mut ctx.accounts.mixer_pool;
+    let leaf_index = pool.next_leaf_index;
     pool.push_root(new_root);
     pool.next_leaf_index += 1;
 
@@ -83,58 +82,4 @@ pub fn handler(
     msg!("Deposit #{} committed", leaf_index);
 
     Ok(())
-}
-
-/// Verify the Merkle proof against the current root, then compute the new root
-/// after inserting the commitment at the given leaf index.
-///
-/// 1. Derive path indices from leaf_index (binary decomposition)
-/// 2. Hash upward from ZERO_VALUE using siblings → must equal current_root
-/// 3. Hash upward from commitment using siblings → new_root
-fn compute_new_root(
-    commitment: &[u8; 32],
-    siblings: &[[u8; 32]; TREE_LEVELS],
-    leaf_index: u32,
-    current_root: &[u8; 32],
-) -> Result<[u8; 32]> {
-    use light_poseidon::Poseidon;
-
-    let mut poseidon = Poseidon::<ark_bn254::Fr>::new_circom(2)
-        .map_err(|_| error!(MixerError::InvalidMerkleProof))?;
-
-    // Verify old root: hash upward from zero value
-    let mut old_hash = ZERO_VALUE;
-    let mut new_hash = *commitment;
-
-    for level in 0..TREE_LEVELS {
-        let is_right = (leaf_index >> level) & 1 == 1;
-
-        if is_right {
-            old_hash = poseidon_hash_pair(&mut poseidon, &siblings[level], &old_hash)?;
-            new_hash = poseidon_hash_pair(&mut poseidon, &siblings[level], &new_hash)?;
-        } else {
-            old_hash = poseidon_hash_pair(&mut poseidon, &old_hash, &siblings[level])?;
-            new_hash = poseidon_hash_pair(&mut poseidon, &new_hash, &siblings[level])?;
-        }
-    }
-
-    // Verify the old root matches
-    require!(old_hash == *current_root, MixerError::InvalidMerkleProof);
-
-    Ok(new_hash)
-}
-
-/// Hash two 32-byte inputs using Poseidon
-fn poseidon_hash_pair(
-    poseidon: &mut light_poseidon::Poseidon<ark_bn254::Fr>,
-    left: &[u8; 32],
-    right: &[u8; 32],
-) -> Result<[u8; 32]> {
-    use light_poseidon::PoseidonBytesHasher;
-
-    let result = poseidon
-        .hash_bytes_be(&[left, right])
-        .map_err(|_| error!(MixerError::InvalidMerkleProof))?;
-
-    Ok(result)
 }

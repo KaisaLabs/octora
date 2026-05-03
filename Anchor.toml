@@ -7,12 +7,15 @@ skip-lint = false
 [programs.localnet]
 octora_mixer = "Ao58tvHj3FTwFMiGts5HAc5mastNE61Puiw4ER3rA3NJ"
 
+[programs.devnet]
+octora_mixer = "Ao58tvHj3FTwFMiGts5HAc5mastNE61Puiw4ER3rA3NJ"
+
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
+cluster = "Devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "npx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

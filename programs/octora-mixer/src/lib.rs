@@ -23,13 +23,13 @@ pub mod octora_mixer {
 
     /// Deposit SOL into the mixer pool.
     /// The depositor provides a commitment (Poseidon hash of secret + nullifier)
-    /// and the current Merkle siblings for root verification and update.
+    /// and the new Merkle root computed off-chain after inserting the commitment.
     pub fn deposit(
         ctx: Context<Deposit>,
         commitment: [u8; 32],
-        proof_siblings: [[u8; 32]; 20],
+        new_root: [u8; 32],
     ) -> Result<()> {
-        instructions::deposit::handler(ctx, commitment, proof_siblings)
+        instructions::deposit::handler(ctx, commitment, new_root)
     }
 
     /// Withdraw SOL from the mixer pool using a Groth16 ZK proof.
