@@ -34,4 +34,7 @@ pub enum MixerError {
 
     #[msg("Unauthorized: only the authority can perform this action")]
     Unauthorized,
+
+    #[msg("Poseidon hash syscall failed during Merkle tree update")]
+    PoseidonHashFailed,
 }

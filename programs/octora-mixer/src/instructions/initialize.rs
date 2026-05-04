@@ -30,13 +30,17 @@ pub fn handler(ctx: Context<Initialize>, denomination: u64) -> Result<()> {
     pool.is_paused = false;
     pool.bump = ctx.bumps.mixer_pool;
 
-    // Compute the initial empty-tree root from precomputed zero hashes.
-    // The root of an empty 20-level tree is ZERO_HASHES[19]
-    // (or ZERO_VALUE if ZERO_HASHES haven't been computed yet).
-    //
-    // For now, we use the precomputed constant. This MUST match
-    // the off-chain Merkle tree's initial root exactly.
+    // The empty-tree root is ZERO_HASHES[TREE_LEVELS - 1] — the hash of an
+    // all-zeros subtree at the top level. The off-chain Merkle tree must
+    // produce the same value for an empty tree, otherwise the very first
+    // withdrawal proof will fail.
     pool.root_history[0] = ZERO_HASHES[TREE_LEVELS - 1];
+
+    // Seed filled_subtrees with the per-level zero hashes so the first
+    // (even-index) insertion behaves exactly like a fresh tree.
+    for (i, slot) in pool.filled_subtrees.iter_mut().enumerate() {
+        *slot = ZERO_HASHES[i];
+    }
 
     msg!("Mixer pool initialized with denomination: {} lamports", denomination);
 

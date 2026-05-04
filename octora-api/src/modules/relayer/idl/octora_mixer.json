@@ -11,8 +11,9 @@
       "name": "deposit",
       "docs": [
         "Deposit SOL into the mixer pool.",
-        "The depositor provides a commitment (Poseidon hash of secret + nullifier)",
-        "and the new Merkle root computed off-chain after inserting the commitment."
+        "The depositor provides a commitment (Poseidon hash of secret + nullifier).",
+        "The new Merkle root is computed on-chain from the cached filled_subtrees,",
+        "so the depositor cannot influence which root lands in the history."
       ],
       "discriminator": [
         242,
@@ -97,15 +98,6 @@
       "args": [
         {
           "name": "commitment",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "new_root",
           "type": {
             "array": [
               "u8",
@@ -492,6 +484,23 @@
                   ]
                 },
                 30
+              ]
+            }
+          },
+          {
+            "name": "filled_subtrees",
+            "docs": [
+              "Cached left-side subtree hashes for incremental insertion"
+            ],
+            "type": {
+              "array": [
+                {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                },
+                20
               ]
             }
           },

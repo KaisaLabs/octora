@@ -201,24 +201,37 @@ export function MixerTestPage() {
   }, []);
 
   // ── Step 3: Deposit ──
+  // The on-chain program now computes the new Merkle root deterministically
+  // from its filled_subtrees cache, so the browser doesn't need to insert
+  // into the local tree before submitting. We learn the assigned leaf index
+  // by reading the post-confirmation pool state.
   const deposit = useCallback(async () => {
     if (!wallet.address || !commitment) return;
-    setDepositStep({ status: "loading", message: "Inserting commitment + computing root..." });
+    setDepositStep({ status: "loading", message: "Building deposit transaction..." });
     try {
-      const tree = await ensureTree();
-      const leafIndex = tree.insert(commitment.commitment);
-      const newRoot = tree.root();
-
-      setDepositStep({ status: "loading", message: "Building deposit transaction..." });
       const { transaction } = await apiPost("/mixer/deposit", {
         depositor: wallet.address,
         commitment: commitment.commitment.toString(),
-        newRoot: newRoot.toString(),
-        leafIndex,
       });
 
       setDepositStep({ status: "loading", message: "Sign the deposit in your wallet..." });
       const sig = await signAndSend(transaction);
+
+      // The program assigns leaf_index = pool.next_leaf_index at insert time
+      // and increments. Read the post-confirmation pool state to learn the
+      // index this deposit got. We use it later for proof generation.
+      const status = await apiGet("/mixer/status");
+      const leafIndex = (status?.nextLeafIndex ?? 1) - 1;
+
+      // Mirror it into the local tree so withdrawal-time path lookup works
+      // without re-fetching everything.
+      const tree = await ensureTree();
+      try {
+        tree.insert(commitment.commitment);
+      } catch {
+        // Tree already had this commitment from /mixer/deposits hydration —
+        // ignore.
+      }
 
       // Tell the API to record this deposit so future users get the right tree.
       // Best-effort — even if this fails, the on-chain tx already landed.

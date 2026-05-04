@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use crate::constants::ROOT_HISTORY_SIZE;
+use crate::constants::{ROOT_HISTORY_SIZE, TREE_LEVELS};
 
 /// Main mixer pool account (also serves as SOL vault).
 /// PDA seeds: [b"mixer_pool", denomination.to_le_bytes()]
@@ -20,6 +20,19 @@ pub struct MixerPool {
     /// Ring buffer of recent valid Merkle roots
     pub root_history: [[u8; 32]; ROOT_HISTORY_SIZE],
 
+    /// "Filled subtrees" cache for incremental Merkle insertion.
+    ///
+    /// At each level `i`, this stores the most recently inserted left-side
+    /// subtree hash. When the next deposit lands at an odd index at level
+    /// `i`, this value is the left sibling for the level-`i` hash; when it
+    /// lands at an even index, this slot is overwritten with the new
+    /// left-side subtree.
+    ///
+    /// Together with the precomputed `ZERO_HASHES`, this lets the program
+    /// compute the new Merkle root in `TREE_LEVELS` Poseidon syscalls per
+    /// deposit, without ever trusting a depositor-supplied root.
+    pub filled_subtrees: [[u8; 32]; TREE_LEVELS],
+
     /// Emergency pause flag
     pub is_paused: bool,
 
@@ -30,8 +43,10 @@ pub struct MixerPool {
 impl MixerPool {
     /// Account discriminator (8) + authority (32) + denomination (8) +
     /// next_leaf_index (4) + current_root_index (1) +
-    /// root_history (32 * 30 = 960) + is_paused (1) + bump (1) = 1015
-    pub const SPACE: usize = 8 + 32 + 8 + 4 + 1 + (32 * ROOT_HISTORY_SIZE) + 1 + 1;
+    /// root_history (32 * 30 = 960) + filled_subtrees (32 * 20 = 640) +
+    /// is_paused (1) + bump (1) = 1655
+    pub const SPACE: usize =
+        8 + 32 + 8 + 4 + 1 + (32 * ROOT_HISTORY_SIZE) + (32 * TREE_LEVELS) + 1 + 1;
 
     /// Check if a root exists in the history ring buffer
     pub fn is_known_root(&self, root: &[u8; 32]) -> bool {

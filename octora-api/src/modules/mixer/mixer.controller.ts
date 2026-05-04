@@ -30,22 +30,15 @@ export function createMixerController(mixer: MixerService) {
     /** POST /mixer/deposit — build unsigned deposit tx */
     async deposit(
       req: FastifyRequest<{
-        Body: {
-          depositor: string;
-          commitment: string;
-          newRoot: string;
-          leafIndex: number;
-        };
+        Body: { depositor: string; commitment: string };
       }>,
       reply: FastifyReply,
     ) {
-      const { depositor, commitment, newRoot, leafIndex } = req.body;
+      const { depositor, commitment } = req.body;
       try {
         const result = await mixer.buildDepositTransaction({
           depositorPubkey: depositor,
           commitment: BigInt(commitment),
-          newRoot: BigInt(newRoot),
-          leafIndex,
         });
         return reply.send(result);
       } catch (err) {

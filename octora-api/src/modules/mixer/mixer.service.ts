@@ -35,8 +35,6 @@ export interface PublicDepositRecord {
 interface BuildDepositArgs {
   depositorPubkey: string;
   commitment: bigint;
-  newRoot: bigint;
-  leafIndex: number;
 }
 
 /**
@@ -81,16 +79,20 @@ export class MixerService {
   }
 
   /**
-   * Build an unsigned deposit transaction. The browser supplies both the
-   * commitment and the new merkle root computed against its local tree.
+   * Build an unsigned deposit transaction.
+   *
+   * The new Merkle root is computed on-chain from the program's
+   * filled_subtrees cache, so the browser doesn't need to (and can't)
+   * supply one. The leaf index assigned to this deposit is whatever
+   * `next_leaf_index` is when the tx lands — clients should read it
+   * from the post-confirmation pool state or the emitted DepositEvent.
+   *
+   * The deposit performs 20 Poseidon syscalls during incremental
+   * insertion, so we bump the compute budget on the tx.
    */
-  async buildDepositTransaction(args: BuildDepositArgs): Promise<{
-    transaction: string;
-    leafIndex: number;
-  }> {
+  async buildDepositTransaction(args: BuildDepositArgs): Promise<{ transaction: string }> {
     const depositor = new PublicKey(args.depositorPubkey);
     const commitmentBytes = this.bigintToBytes32(args.commitment);
-    const newRootBytes = Array.from(this.bigintToBytes32(args.newRoot));
 
     const [commitmentPDA] = PublicKey.findProgramAddressSync(
       [COMMITMENT_SEED, this.poolPDA.toBuffer(), commitmentBytes],
@@ -98,7 +100,7 @@ export class MixerService {
     );
 
     const ix = await this.program.methods
-      .deposit(Array.from(commitmentBytes), newRootBytes)
+      .deposit(Array.from(commitmentBytes))
       .accounts({
         depositor,
         mixerPool: this.poolPDA,
@@ -107,19 +109,18 @@ export class MixerService {
       })
       .instruction();
 
+    const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
+
     const { blockhash } = await this.connection.getLatestBlockhash("confirmed");
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: depositor });
-    tx.add(ix);
+    tx.add(computeIx, ix);
 
     const serialized = tx.serialize({
       requireAllSignatures: false,
       verifySignatures: false,
     });
 
-    return {
-      transaction: serialized.toString("base64"),
-      leafIndex: args.leafIndex,
-    };
+    return { transaction: serialized.toString("base64") };
   }
 
   /**

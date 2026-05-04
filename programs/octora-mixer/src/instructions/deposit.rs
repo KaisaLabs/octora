@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::poseidon::{hashv, Endianness, Parameters};
 use anchor_lang::system_program;
 use crate::constants::*;
 use crate::errors::MixerError;
@@ -32,21 +33,23 @@ pub struct Deposit<'info> {
 
 /// Deposit SOL into the mixer pool.
 ///
-/// The on-chain program stores the commitment and accepts the new Merkle root
-/// computed off-chain. The Merkle inclusion proof is verified inside the ZK
-/// circuit during withdrawal, not during deposit.
+/// The on-chain program computes the new Merkle root deterministically from
+/// the previous tree state (filled_subtrees + zero hashes) using the Solana
+/// Poseidon syscall. This closes the audit's HIGH finding that any depositor
+/// could push an arbitrary `new_root` into the ring buffer and grief other
+/// users by evicting their roots before they can withdraw.
 ///
-/// This design avoids on-chain Poseidon hashing (which exceeds SBF's 4KB stack
-/// limit) while maintaining security: an invalid root simply means the
-/// depositor's withdrawal proof won't verify later.
+/// The new root is now provably consistent with the deposit history.
 pub fn handler(
     ctx: Context<Deposit>,
     commitment: [u8; 32],
-    new_root: [u8; 32],
 ) -> Result<()> {
-    // Safety checks
+    // Safety checks (read state before mutable borrow)
     require!(!ctx.accounts.mixer_pool.is_paused, MixerError::PoolPaused);
-    require!(ctx.accounts.mixer_pool.next_leaf_index < MAX_LEAVES, MixerError::TreeFull);
+    require!(
+        ctx.accounts.mixer_pool.next_leaf_index < MAX_LEAVES,
+        MixerError::TreeFull,
+    );
 
     let denomination = ctx.accounts.mixer_pool.denomination;
 
@@ -65,11 +68,44 @@ pub fn handler(
     // Store commitment account bump
     ctx.accounts.commitment_account.bump = ctx.bumps.commitment_account;
 
-    // Update pool state
+    // ── Tornado-style incremental Merkle insertion ──
+    //
+    // Walk the tree from leaf to root, hashing the commitment up alongside
+    // the existing siblings (cached filled_subtrees on the left, zero
+    // hashes on the right). At each even-index level, this insertion's
+    // hash becomes the new filled_subtrees[level] for future inserts.
+    //
+    // Cost: TREE_LEVELS Poseidon syscalls per deposit. The tx must request
+    // a higher compute budget — see the off-chain client.
     let pool = &mut ctx.accounts.mixer_pool;
     let leaf_index = pool.next_leaf_index;
+
+    let mut current_hash = commitment;
+    let mut current_index = leaf_index;
+    for i in 0..TREE_LEVELS {
+        let (left, right) = if current_index & 1 == 0 {
+            // current node is the left child; right sibling is empty at this level
+            pool.filled_subtrees[i] = current_hash;
+            (current_hash, ZERO_HASHES[i])
+        } else {
+            // current node is the right child; left sibling is the cached subtree
+            (pool.filled_subtrees[i], current_hash)
+        };
+
+        let hash = hashv(
+            Parameters::Bn254X5,
+            Endianness::BigEndian,
+            &[&left, &right],
+        )
+        .map_err(|_| error!(MixerError::PoseidonHashFailed))?;
+        current_hash = hash.to_bytes();
+
+        current_index >>= 1;
+    }
+    let new_root = current_hash;
+
     pool.push_root(new_root);
-    pool.next_leaf_index += 1;
+    pool.next_leaf_index = leaf_index + 1;
 
     // Emit event for off-chain indexing
     let clock = Clock::get()?;

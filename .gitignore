@@ -48,6 +48,7 @@ temp/
 target/
 Cargo.lock
 .anchor/
+solana-localnet-validator/
 
 # ─── ZK Circuit artifacts (regenerate via setup.sh) ─────
 octora-api/src/modules/vault/circuits/withdraw.wasm

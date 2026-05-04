@@ -185,27 +185,33 @@ async function doDeposit(
   mixerPoolPDA: PublicKey,
   authority: anchor.Wallet,
   commitment: bigint,
-  allLeaves: bigint[], // leaves AFTER inserting this commitment
+  allLeaves: bigint[], // leaves AFTER inserting this commitment, used to assert
   zeroHashes: bigint[],
 ) {
   const commitmentBytes = bigintToBytes32(commitment);
   const [commitmentPDA] = deriveCommitmentPDA(programId, mixerPoolPDA, commitmentBytes);
 
-  // Compute new root with this commitment included
-  const newRoot = computeRoot(allLeaves, zeroHashes);
-  const newRootBytes = bigintToArray32(newRoot);
+  // The on-chain program now computes the new root deterministically via the
+  // Solana Poseidon syscall — no off-chain root passed in. We still compute
+  // the expected root locally so the test can assert parity below.
+  const expectedRoot = computeRoot(allLeaves, zeroHashes);
+
+  // The on-chain insertion does TREE_LEVELS (=20) Poseidon syscalls, so
+  // bump the compute budget the same way the API service does.
+  const computeIx = anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
 
   await program.methods
-    .deposit(Array.from(commitmentBytes), newRootBytes)
+    .deposit(Array.from(commitmentBytes))
     .accounts({
       depositor: authority.publicKey,
       mixerPool: mixerPoolPDA,
       commitmentAccount: commitmentPDA,
       systemProgram: SystemProgram.programId,
     })
+    .preInstructions([computeIx])
     .rpc();
 
-  return newRoot;
+  return expectedRoot;
 }
 
 /** Fund an account by transferring SOL from authority (avoids airdrop rate limits on devnet). */
@@ -277,14 +283,17 @@ describe("octora-mixer", () => {
   // ── Test 2: Deposit ────────────────────────────────────────────────
 
   describe("deposit", () => {
-    it("accepts a valid deposit with correct commitment and new root", async () => {
+    it("accepts a valid deposit and computes the new root on-chain", async () => {
       const { commitment } = generateCommitment();
 
       const balanceBefore = await provider.connection.getBalance(mixerPoolPDA);
 
-      // Add to local leaves and deposit
+      // Add to local leaves; doDeposit returns the locally-expected root so
+      // we can assert the on-chain Poseidon syscall produced the same value.
       depositedLeaves.push(commitment);
-      await doDeposit(program, programId, mixerPoolPDA, authority, commitment, depositedLeaves, zeroHashes);
+      const expectedRoot = await doDeposit(
+        program, programId, mixerPoolPDA, authority, commitment, depositedLeaves, zeroHashes,
+      );
 
       const pool = await program.account.mixerPool.fetch(mixerPoolPDA);
       expect(pool.nextLeafIndex).to.equal(1);
@@ -293,10 +302,12 @@ describe("octora-mixer", () => {
       const balanceAfter = await provider.connection.getBalance(mixerPoolPDA);
       expect(balanceAfter - balanceBefore).to.be.greaterThanOrEqual(DENOMINATION.toNumber());
 
-      // Verify root updated
-      const newRoot = pool.rootHistory[pool.currentRootIndex] as number[];
-      const emptyRoot = bigintToArray32(zeroHashes[TREE_LEVELS - 1]);
-      expect(Array.from(newRoot)).to.not.deep.equal(emptyRoot);
+      // The root the on-chain program pushed must match the off-chain
+      // Poseidon-tree computation byte-for-byte. This is the key assertion
+      // for the audit's "untrusted new_root" fix.
+      const onChainRoot = Array.from(pool.rootHistory[pool.currentRootIndex] as number[]);
+      const expectedRootBytes = bigintToArray32(expectedRoot);
+      expect(onChainRoot).to.deep.equal(expectedRootBytes);
     });
 
     // ── Test 3: Reject duplicate commitment ────────────────────────
@@ -306,17 +317,18 @@ describe("octora-mixer", () => {
       const commitmentBytes = bigintToBytes32(commitment);
       const [commitmentPDA] = deriveCommitmentPDA(programId, mixerPoolPDA, commitmentBytes);
 
-      const fakeRoot = bigintToArray32(randomFieldElement());
+      const computeIx = anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
 
       try {
         await program.methods
-          .deposit(Array.from(commitmentBytes), fakeRoot)
+          .deposit(Array.from(commitmentBytes))
           .accounts({
             depositor: authority.publicKey,
             mixerPool: mixerPoolPDA,
             commitmentAccount: commitmentPDA,
             systemProgram: SystemProgram.programId,
           })
+          .preInstructions([computeIx])
           .rpc();
 
         expect.fail("Should have thrown on duplicate commitment");
