@@ -1,9 +1,18 @@
 import type { FastifyInstance } from "fastify";
 import { MixerService } from "./mixer.service.js";
 import { createMixerController } from "./mixer.controller.js";
+import { makeRateLimiter } from "./rate-limit.js";
 
 const RPC_URL = process.env.SOLANA_RPC_URL || "http://localhost:8899";
 const DENOMINATION = BigInt(process.env.MIXER_DENOMINATION || "20000000"); // 0.02 SOL
+
+// Rate-limit ceilings — chosen to allow normal interactive use of the test
+// page (a few clicks per minute) while bounding what an abusive client can
+// do. /mixer/withdraw and /mixer/deposit each cost an RPC roundtrip
+// (getLatestBlockhash) so they're tighter; the read-only endpoints are
+// mostly cache hits and can be looser.
+const WRITE_LIMIT = { windowMs: 60_000, max: 30 };
+const READ_LIMIT = { windowMs: 60_000, max: 120 };
 
 /**
  * Mixer routes intentionally do NOT include endpoints for:
@@ -25,29 +34,69 @@ export async function registerMixerRoutes(app: FastifyInstance) {
     denomination: DENOMINATION,
   });
 
+  // Rehydrate the deposit cache from on-chain DepositEvent logs so a
+  // server restart doesn't blank the public deposit history that
+  // browsers rely on for Merkle-tree reconstruction. Best-effort and
+  // non-blocking: kicked off in the background — /mixer/deposits will
+  // still serve whatever is loaded so far, and /mixer/confirm-deposit
+  // can backfill anything we miss.
+  void mixer
+    .hydrateFromChain({ log: (m) => app.log.warn(m) })
+    .then((res) => {
+      app.log.info(
+        { depositsLoaded: res.depositsLoaded, scannedSignatures: res.scannedSignatures },
+        "mixer: hydrated deposit cache from chain",
+      );
+    })
+    .catch((err) => {
+      app.log.warn({ err }, "mixer: hydrateFromChain failed");
+    });
+
   const controller = createMixerController(mixer);
 
-  // Pool status
-  app.get("/mixer/status", { schema: { tags } }, controller.getStatus);
+  // Independent buckets per route family so heavy abuse on one endpoint
+  // doesn't starve unrelated reads. Applied via scoped onRequest hooks
+  // inside two `register` blocks so each route's request-body inference
+  // (which collides with route-level preHandler typing) stays clean.
+  const readLimiter = makeRateLimiter(READ_LIMIT);
+  const writeLimiter = makeRateLimiter(WRITE_LIMIT);
 
-  // Initialize pool (build unsigned tx)
-  app.post("/mixer/initialize", { schema: { tags } }, controller.initialize);
+  // ── Read-only endpoints (looser limit) ─────────────────────────
+  await app.register(async (scope) => {
+    scope.addHook("onRequest", readLimiter);
 
-  // Public deposit history — used by the browser to reconstruct the Merkle
-  // tree locally before computing inclusion proofs. Returns only public data.
-  app.get("/mixer/deposits", { schema: { tags } }, controller.listDeposits);
+    // Pool status
+    scope.get("/mixer/status", { schema: { tags } }, controller.getStatus);
 
-  // Build deposit transaction (unsigned, frontend signs).
-  // Body: { depositor, commitment, newRoot, leafIndex } — newRoot/leafIndex
-  // are computed client-side against the local tree.
-  app.post("/mixer/deposit", { schema: { tags } }, controller.deposit);
+    // Public deposit history — used by the browser to reconstruct the Merkle
+    // tree locally before computing inclusion proofs. Returns only public data.
+    scope.get("/mixer/deposits", { schema: { tags } }, controller.listDeposits);
+  });
 
-  // Record a confirmed deposit so future depositors can rebuild the tree.
-  // Best-effort: even if this fails, the on-chain DepositEvent is the
-  // authoritative source.
-  app.post("/mixer/confirm-deposit", { schema: { tags } }, controller.confirmDeposit);
+  // ── Build-an-unsigned-tx / write-ish endpoints (tighter limit) ─
+  await app.register(async (scope) => {
+    scope.addHook("onRequest", writeLimiter);
 
-  // Build withdraw transaction (unsigned, frontend signs).
-  // Proof + public-input bytes come from the browser-side prover.
-  app.post("/mixer/withdraw", { schema: { tags } }, controller.withdraw);
+    // Initialize pool (build unsigned tx)
+    scope.post("/mixer/initialize", { schema: { tags } }, controller.initialize);
+
+    // Build deposit transaction (unsigned, frontend signs).
+    // Body: { depositor, commitment } — the on-chain program computes the new
+    // Merkle root deterministically.
+    scope.post("/mixer/deposit", { schema: { tags } }, controller.deposit);
+
+    // Record a confirmed deposit so future depositors can rebuild the tree.
+    // Best-effort: even if this fails, the on-chain DepositEvent is the
+    // authoritative source (and the next server start will pick it up via
+    // hydrateFromChain).
+    scope.post(
+      "/mixer/confirm-deposit",
+      { schema: { tags } },
+      controller.confirmDeposit,
+    );
+
+    // Build withdraw transaction (unsigned, frontend signs).
+    // Proof + public-input bytes come from the browser-side prover.
+    scope.post("/mixer/withdraw", { schema: { tags } }, controller.withdraw);
+  });
 }

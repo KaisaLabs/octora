@@ -5,6 +5,7 @@ import {
   SystemProgram,
   Transaction,
   ComputeBudgetProgram,
+  type ConfirmedSignatureInfo,
 } from "@solana/web3.js";
 import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
 import { readFileSync } from "node:fs";
@@ -53,10 +54,10 @@ export class MixerService {
   private poolPDA: PublicKey;
   private program: Program;
 
-  // In-memory mirror of the public deposit history. Authoritative source is
-  // the on-chain DepositEvent stream; this cache is best-effort and may be
-  // stale if the API restarts. Future work: hydrate from on-chain events
-  // on startup.
+  // In-memory mirror of the public deposit history. The on-chain DepositEvent
+  // stream is the authoritative source; this cache is rehydrated on startup
+  // by `hydrateFromChain()` and kept warm via `recordDeposit()` callbacks
+  // from /mixer/confirm-deposit.
   private deposits = new Map<string, PublicDepositRecord>();
 
   constructor(config: MixerServiceConfig) {
@@ -136,6 +137,108 @@ export class MixerService {
   /** List public deposit history for browser tree reconstruction. */
   listDeposits(): PublicDepositRecord[] {
     return Array.from(this.deposits.values()).sort((a, b) => a.leafIndex - b.leafIndex);
+  }
+
+  /**
+   * Rehydrate the deposit cache from on-chain DepositEvent logs.
+   *
+   * Walks signatures involving the pool PDA (paginated via getSignaturesForAddress),
+   * fetches each transaction's log messages, and decodes Anchor's
+   * `Program data: <base64>` lines via `program.coder.events.decode`. Any
+   * DepositEvent found is upserted into the cache (idempotent on commitment).
+   *
+   * Best-effort: RPC failures on individual transactions are logged but
+   * don't abort the scan, since /mixer/confirm-deposit can backfill any
+   * gap when the next withdrawal / deposit happens. The cap on `maxPages`
+   * (1000 signatures each) prevents an unbounded scan on a busy program.
+   */
+  async hydrateFromChain(opts: {
+    maxPages?: number;
+    log?: (msg: string) => void;
+  } = {}): Promise<{ scannedSignatures: number; depositsLoaded: number }> {
+    const maxPages = opts.maxPages ?? 50; // up to 50_000 signatures
+    const log = opts.log ?? (() => {});
+
+    const signatures: ConfirmedSignatureInfo[] = [];
+    let before: string | undefined;
+
+    for (let page = 0; page < maxPages; page++) {
+      let batch: ConfirmedSignatureInfo[];
+      try {
+        batch = await this.connection.getSignaturesForAddress(
+          this.poolPDA,
+          { limit: 1000, before },
+          "confirmed",
+        );
+      } catch (err) {
+        log(
+          `hydrateFromChain: getSignaturesForAddress failed on page ${page}: ${
+            err instanceof Error ? err.message : "unknown"
+          }`,
+        );
+        break;
+      }
+      if (batch.length === 0) break;
+      signatures.push(...batch);
+      if (batch.length < 1000) break;
+      before = batch[batch.length - 1].signature;
+    }
+
+    // Process oldest-first so leaf indices land in chronological order.
+    signatures.reverse();
+
+    let depositsLoaded = 0;
+    for (const sig of signatures) {
+      if (sig.err) continue;
+      let tx: Awaited<ReturnType<Connection["getTransaction"]>>;
+      try {
+        tx = await this.connection.getTransaction(sig.signature, {
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0,
+        });
+      } catch (err) {
+        log(
+          `hydrateFromChain: getTransaction failed for ${sig.signature}: ${
+            err instanceof Error ? err.message : "unknown"
+          }`,
+        );
+        continue;
+      }
+      if (!tx?.meta?.logMessages) continue;
+
+      for (const line of tx.meta.logMessages) {
+        const m = line.match(/^Program data: (.+)$/);
+        if (!m) continue;
+        let decoded: { name: string; data: unknown } | null = null;
+        try {
+          decoded = this.program.coder.events.decode(m[1]) as
+            | { name: string; data: unknown }
+            | null;
+        } catch {
+          continue;
+        }
+        if (!decoded || decoded.name !== "DepositEvent") continue;
+
+        // Anchor decodes [u8; 32] as number[]; rebuild as bigint to match
+        // how recordDeposit stores keys.
+        const data = decoded.data as {
+          commitment: number[] | Uint8Array;
+          leafIndex?: number;
+          leaf_index?: number;
+        };
+        const commitmentBuf = Buffer.from(data.commitment as ArrayLike<number>);
+        const commitment = BigInt("0x" + commitmentBuf.toString("hex"));
+        const leafIndex = data.leafIndex ?? data.leaf_index ?? 0;
+
+        const key = commitment.toString();
+        if (!this.deposits.has(key)) {
+          this.deposits.set(key, { commitment: key, leafIndex, txSignature: sig.signature });
+          depositsLoaded++;
+        }
+      }
+    }
+
+    return { scannedSignatures: signatures.length, depositsLoaded };
   }
 
   /**
