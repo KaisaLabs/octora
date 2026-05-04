@@ -18,12 +18,15 @@ pub struct Withdraw<'info> {
     #[account(mut)]
     pub signer: Signer<'info>,
 
+    // Boxed: see Initialize for the rationale (MixerPool is ~1.6KB after
+    // adding filled_subtrees, and withdraw's try_accounts also carries the
+    // 256+160 byte instruction args, so this struct overflowed worst).
     #[account(
         mut,
         seeds = [MIXER_POOL_SEED, &mixer_pool.denomination.to_le_bytes()],
         bump = mixer_pool.bump,
     )]
-    pub mixer_pool: Account<'info, MixerPool>,
+    pub mixer_pool: Box<Account<'info, MixerPool>>,
 
     /// Nullifier PDA — init ensures double-spend prevention atomically
     #[account(

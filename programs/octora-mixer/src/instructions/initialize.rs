@@ -8,6 +8,10 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
+    // Boxed because MixerPool is now ~1.6KB after adding filled_subtrees,
+    // and the auto-generated `try_accounts` would otherwise blow the SBF
+    // 4KB stack budget. The Box puts the deserialized struct on the heap
+    // and leaves only an 8-byte pointer in the Accounts frame.
     #[account(
         init,
         payer = authority,
@@ -15,7 +19,7 @@ pub struct Initialize<'info> {
         seeds = [MIXER_POOL_SEED, &denomination.to_le_bytes()],
         bump,
     )]
-    pub mixer_pool: Account<'info, MixerPool>,
+    pub mixer_pool: Box<Account<'info, MixerPool>>,
 
     pub system_program: Program<'info, System>,
 }

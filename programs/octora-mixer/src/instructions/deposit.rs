@@ -12,12 +12,14 @@ pub struct Deposit<'info> {
     #[account(mut)]
     pub depositor: Signer<'info>,
 
+    // Boxed: see Initialize for the rationale (MixerPool is ~1.6KB after
+    // adding filled_subtrees and would overflow the SBF stack otherwise).
     #[account(
         mut,
         seeds = [MIXER_POOL_SEED, &mixer_pool.denomination.to_le_bytes()],
         bump = mixer_pool.bump,
     )]
-    pub mixer_pool: Account<'info, MixerPool>,
+    pub mixer_pool: Box<Account<'info, MixerPool>>,
 
     #[account(
         init,
@@ -83,10 +85,19 @@ pub fn handler(
     let mut current_hash = commitment;
     let mut current_index = leaf_index;
     for i in 0..TREE_LEVELS {
+        // Empty-sibling at level `i`:
+        //   - At level 0 the sibling is an empty LEAF — the bare zero value.
+        //   - At level i>0 the sibling is the empty *subtree* hash at level i,
+        //     which is ZERO_HASHES[i-1] under our existing zero-hash table
+        //     (ZERO_HASHES[k] = poseidon^(k+1)(0,0) = empty subtree hash at
+        //     level k+1). Off-chain `fixed-merkle-tree` uses the same shape
+        //     (its _zeros[0] == 0 and _zeros[i] = hash(_zeros[i-1], _zeros[i-1])).
+        let zero_sibling = if i == 0 { ZERO_VALUE } else { ZERO_HASHES[i - 1] };
+
         let (left, right) = if current_index & 1 == 0 {
             // current node is the left child; right sibling is empty at this level
             pool.filled_subtrees[i] = current_hash;
-            (current_hash, ZERO_HASHES[i])
+            (current_hash, zero_sibling)
         } else {
             // current node is the right child; left sibling is the cached subtree
             (pool.filled_subtrees[i], current_hash)

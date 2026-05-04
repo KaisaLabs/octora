@@ -112,6 +112,11 @@ export function MixerTestPage() {
   const [proofResult, setProofResult] = useState<WithdrawProofResult | null>(null);
   const treeRef = useRef<MixerMerkleTree | null>(null);
 
+  // Pool denomination, in SOL, learned from /mixer/status. Used for step
+  // labels so the UI never lies about how much is being deposited /
+  // withdrawn — the on-chain denomination is the source of truth.
+  const [denomSol, setDenomSol] = useState<string | null>(null);
+
   // Bootstrap: fetch existing deposits from the API and rebuild the tree
   // locally so we can compute correct merkle paths/roots. The API only
   // exposes the public history (commitments + leaf indices) — never anything
@@ -135,6 +140,30 @@ export function MixerTestPage() {
         // Empty / not-yet-initialised pool is fine — build an empty tree.
         const tree = await createMixerMerkleTree();
         if (!cancelled) treeRef.current = tree;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Pull the live pool denomination so step labels display the actual amount
+  // every deposit/withdrawal moves. The default denomination is set by the
+  // API's MIXER_DENOMINATION env var (0.02 SOL) and frozen at pool init.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await apiGet("/mixer/status");
+        if (cancelled) return;
+        if (status?.denomination) {
+          const lamports = BigInt(status.denomination);
+          // 1 SOL = 1e9 lamports. Render with up to 9 decimals, trimmed.
+          const sol = (Number(lamports) / 1e9).toString();
+          setDenomSol(sol);
+        }
+      } catch {
+        // Pool may not be initialised yet — leave label as a placeholder.
       }
     })();
     return () => {
@@ -377,7 +406,7 @@ export function MixerTestPage() {
       <StepCard
         number={1}
         title="Initialize Pool (one-time)"
-        description="Creates a 0.01 SOL denomination pool on-chain"
+        description={`Creates a ${denomSol ?? "?"} SOL denomination pool on-chain`}
         state={initStep}
         onAction={initializePool}
         actionLabel="Initialize Pool"
@@ -392,7 +421,7 @@ export function MixerTestPage() {
       />
       <StepCard
         number={3}
-        title="Deposit 0.01 SOL"
+        title={`Deposit ${denomSol ?? "?"} SOL`}
         description="Sends SOL to the mixer pool with your commitment"
         state={depositStep}
         onAction={deposit}
@@ -420,7 +449,7 @@ export function MixerTestPage() {
       <StepCard
         number={6}
         title="Withdraw to Stealth Wallet"
-        description="Sends 0.01 SOL from the pool to your stealth wallet"
+        description={`Sends ${denomSol ?? "?"} SOL from the pool to your stealth wallet`}
         state={withdrawStep}
         onAction={withdraw}
         actionLabel="Withdraw"
