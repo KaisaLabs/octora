@@ -17,7 +17,7 @@ export {
   convertProofToBytes,
   convertPublicInputsToBytes,
   pubkeyToFieldElement,
-  pubkeyToReducedField,
+  pubkeyToFieldHash,
 } from "./proof-converter.js";
 export {
   createMixerClient,

@@ -9,7 +9,7 @@ import {
   generateWithdrawProof,
   convertProofToBytes,
   convertPublicInputsToBytes,
-  pubkeyToReducedField,
+  pubkeyToFieldHash,
   uint8ArrayToBase64,
   type Commitment,
   type MixerMerkleTree,
@@ -310,8 +310,10 @@ export function MixerTestPage() {
     try {
       const tree = await ensureTree();
 
-      const recipientField = pubkeyToReducedField(new PublicKey(stealthWallet.publicKey));
-      const relayerField = pubkeyToReducedField(new PublicKey(wallet.address));
+      const [recipientField, relayerField] = await Promise.all([
+        pubkeyToFieldHash(new PublicKey(stealthWallet.publicKey)),
+        pubkeyToFieldHash(new PublicKey(wallet.address)),
+      ]);
 
       const inputs = buildWithdrawCircuitInput({
         tree,

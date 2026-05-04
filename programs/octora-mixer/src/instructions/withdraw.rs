@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::poseidon::{hashv, Endianness, Parameters};
 use crate::constants::*;
 use crate::errors::MixerError;
 use crate::events::WithdrawEvent;
@@ -88,14 +89,21 @@ pub fn handler(
     // Verify the root is in history
     require!(ctx.accounts.mixer_pool.is_known_root(&root), MixerError::RootNotFound);
 
-    // Verify recipient account matches the proof's public input
+    // Verify recipient account matches the proof's public input.
+    //
+    // We bind the recipient via Poseidon(hi, lo) where (hi, lo) are the
+    // two 16-byte halves of pubkey.to_bytes(). The previous design used
+    // `pubkey mod r` which has a collision class of ~4 distinct pubkeys
+    // per field element (since BN254's scalar field is ~254 bits and a
+    // pubkey is 256 bits). Splitting + Poseidon-hashing eliminates that
+    // class: (hi, lo) → pubkey is injective and Poseidon is collision
+    // resistant in the field.
     let recipient_key = ctx.accounts.recipient.key();
-    let recipient_bytes = pubkey_to_field_element(&recipient_key);
+    let recipient_bytes = pubkey_to_field_hash(&recipient_key)?;
     require!(recipient_bytes == recipient_field, MixerError::RecipientMismatch);
 
-    // Verify relayer account matches
     let relayer_key = ctx.accounts.relayer.key();
-    let relayer_bytes = pubkey_to_field_element(&relayer_key);
+    let relayer_bytes = pubkey_to_field_hash(&relayer_key)?;
     require!(relayer_bytes == relayer_field, MixerError::RelayerMismatch);
 
     // Verify Groth16 proof
@@ -141,56 +149,29 @@ pub fn handler(
     Ok(())
 }
 
-/// Convert a Solana Pubkey to a BN254 field element (big-endian bytes).
-/// Reduces mod the BN254 scalar field order so it matches what the
-/// ZK circuit does internally (all field elements are auto-reduced).
+/// Bind a 32-byte pubkey to a single BN254 field element via
+/// `Poseidon(hi, lo)`, where (hi, lo) are the two 16-byte big-endian
+/// halves of `pubkey.to_bytes()`, each zero-extended to 32 bytes.
 ///
-/// Pubkeys are 256 bits but the field is ~254 bits, so values can be
-/// up to ~4x the field order. We subtract R repeatedly until in range.
-fn pubkey_to_field_element(pubkey: &Pubkey) -> [u8; 32] {
-    let mut bytes = pubkey.to_bytes();
+/// 16-byte halves are ≤ 128 bits, well below the BN254 scalar field
+/// order (~254 bits), so each half is a valid field input. The
+/// (hi, lo) → pubkey mapping is injective, and Poseidon is collision
+/// resistant in the field, so distinct pubkeys map to distinct field
+/// elements — closing the mod-r collision class the previous version
+/// allowed.
+///
+/// Off-chain (browser, relayer, integration tests) use the same
+/// `Poseidon(hi, lo)` over circomlibjs, so the values match byte-for-byte.
+fn pubkey_to_field_hash(pubkey: &Pubkey) -> Result<[u8; 32]> {
+    let bytes = pubkey.to_bytes();
 
-    // BN254 scalar field order r (big-endian)
-    const R: [u8; 32] = [
-        0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29,
-        0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
-        0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91,
-        0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
-    ];
+    let mut hi = [0u8; 32];
+    hi[16..].copy_from_slice(&bytes[0..16]);
 
-    // Subtract R until bytes < R (at most 3 iterations since max pubkey < 4*R)
-    while ge_be(&bytes, &R) {
-        bytes = sub_be(&bytes, &R);
-    }
+    let mut lo = [0u8; 32];
+    lo[16..].copy_from_slice(&bytes[16..32]);
 
-    bytes
-}
-
-/// Big-endian comparison: a >= b
-fn ge_be(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    for i in 0..32 {
-        if a[i] > b[i] {
-            return true;
-        } else if a[i] < b[i] {
-            return false;
-        }
-    }
-    true // equal
-}
-
-/// Big-endian subtraction: a - b (assumes a >= b)
-fn sub_be(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
-    let mut result = [0u8; 32];
-    let mut borrow: i16 = 0;
-    for i in (0..32).rev() {
-        let diff = a[i] as i16 - b[i] as i16 - borrow;
-        if diff < 0 {
-            result[i] = (diff + 256) as u8;
-            borrow = 1;
-        } else {
-            result[i] = diff as u8;
-            borrow = 0;
-        }
-    }
-    result
+    let hash = hashv(Parameters::Bn254X5, Endianness::BigEndian, &[&hi, &lo])
+        .map_err(|_| error!(MixerError::PoseidonHashFailed))?;
+    Ok(hash.to_bytes())
 }

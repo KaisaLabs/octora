@@ -24,7 +24,7 @@ export {
   convertProofToBytes,
   convertPublicInputsToBytes,
   pubkeyToFieldElement,
-  pubkeyToReducedField,
+  pubkeyToFieldHash,
   uint8ArrayToBase64,
   type Groth16Proof,
 } from "./bytes";

@@ -1,5 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
-import type { Groth16Proof } from "#modules/vault";
+import { poseidonHash, type Groth16Proof } from "#modules/vault";
 
 /**
  * Convert a snarkjs Groth16 proof to the packed byte format
@@ -12,11 +12,6 @@ import type { Groth16Proof } from "#modules/vault";
  */
 // BN254 base field prime p (for G1 point negation)
 const BN254_P = BigInt("21888242871839275222246405745257275088696311157297823662689037894645226208583");
-
-// BN254 scalar field order r (matches BN254_FIELD_ORDER in the on-chain program).
-// Public signals coming back from snarkjs are always reduced mod r, so any
-// off-chain comparison against them must reduce too.
-const BN254_R = BigInt("21888242871839275222246405745257275088548364400416034343698204186575808495617");
 
 export function convertProofToBytes(proof: Groth16Proof): Buffer {
   const buf = Buffer.alloc(256);
@@ -69,25 +64,33 @@ export function convertPublicInputsToBytes(publicSignals: string[]): Buffer {
 }
 
 /**
- * Convert a Solana PublicKey to a BN254 field element.
- *
- * Pubkeys are 32 bytes (256 bits). The BN254 scalar field is ~254 bits.
- * Most pubkeys (~94%) fit within the field. For the rest, we use the
- * raw bytes directly — the on-chain program does the same conversion.
+ * Raw 256-bit pubkey as a bigint. Kept as a low-level helper; do NOT use
+ * this for binding a recipient/relayer in a proof — see pubkeyToFieldHash.
  */
 export function pubkeyToFieldElement(pubkey: PublicKey): bigint {
   return BigInt("0x" + Buffer.from(pubkey.toBytes()).toString("hex"));
 }
 
 /**
- * Convert a Solana PublicKey to its reduced BN254 field element.
+ * Bind a Solana pubkey to a single BN254 field element via Poseidon.
  *
- * Equivalent to `pubkeyToFieldElement(pubkey) mod r`. This matches what the
- * circuit and the on-chain `pubkey_to_field_element` produce, and is the
- * value that ends up in publicSignals.
+ * Splits the 32-byte pubkey into two 16-byte big-endian halves and hashes
+ * them: `Poseidon(hi, lo)`. Each half is ≤ 128 bits, comfortably below the
+ * BN254 scalar field order (~254 bits). The (hi, lo) → pubkey mapping is
+ * injective, and Poseidon is collision-resistant in the field, so distinct
+ * pubkeys always map to distinct field elements.
+ *
+ * This replaces the old `pubkeyToReducedField` (= `pubkey mod r`) which
+ * had a collision class of ~4 distinct pubkeys per field element. The
+ * on-chain program computes the same Poseidon(hi, lo) via the Solana
+ * syscall, and the integration tests / browser do likewise via
+ * circomlibjs — all three sides produce the same value byte-for-byte.
  */
-export function pubkeyToReducedField(pubkey: PublicKey): bigint {
-  return pubkeyToFieldElement(pubkey) % BN254_R;
+export async function pubkeyToFieldHash(pubkey: PublicKey): Promise<bigint> {
+  const bytes = pubkey.toBytes();
+  const hi = BigInt("0x" + Buffer.from(bytes.slice(0, 16)).toString("hex"));
+  const lo = BigInt("0x" + Buffer.from(bytes.slice(16, 32)).toString("hex"));
+  return poseidonHash([hi, lo]);
 }
 
 /**

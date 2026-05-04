@@ -6,7 +6,7 @@ import { generateStealthWallet } from "./stealth-wallet.js";
 import {
   convertProofToBytes,
   convertPublicInputsToBytes,
-  pubkeyToReducedField,
+  pubkeyToFieldHash,
 } from "./proof-converter.js";
 import {
   createMixerClient,
@@ -76,7 +76,7 @@ export class RelayerService {
     // The on-chain program enforces this too, but failing here saves a round trip
     // and prevents wasted gas / confusing on-chain errors when a client sends
     // mismatched body fields against an unrelated proof.
-    const parity = checkPublicSignalsParity(request);
+    const parity = await checkPublicSignalsParity(request);
     if (!parity.ok) {
       return {
         success: false,
@@ -180,7 +180,7 @@ export class RelayerService {
       return { valid: false, reason: "Nullifier already spent." };
     }
 
-    const parity = checkPublicSignalsParity(request);
+    const parity = await checkPublicSignalsParity(request);
     if (!parity.ok) {
       return { valid: false, reason: `Public signal mismatch: ${parity.reason}` };
     }
@@ -279,9 +279,11 @@ type ParityResult = { ok: true } | { ok: false; reason: string };
  *   [0] root, [1] nullifierHash, [2] recipient (field), [3] relayer (field), [4] fee
  *
  * Each entry is a decimal-string BN254 field element. Pubkeys end up there as
- * `pubkey_bytes mod r`, so we compare the request's pubkey reduced the same way.
+ * `Poseidon(hi, lo)` over the two 16-byte halves of the pubkey bytes, the
+ * same scheme the on-chain `pubkey_to_field_hash` uses. Async because the
+ * Poseidon implementation in the vault module is async.
  */
-function checkPublicSignalsParity(request: WithdrawRequest): ParityResult {
+async function checkPublicSignalsParity(request: WithdrawRequest): Promise<ParityResult> {
   const sigs = request.publicSignals;
   if (!sigs || sigs.length !== 5) {
     return { ok: false, reason: `expected 5 publicSignals, got ${sigs?.length ?? 0}` };
@@ -296,8 +298,12 @@ function checkPublicSignalsParity(request: WithdrawRequest): ParityResult {
 
     const recPub = new PublicKey(request.recipient);
     const relPub = new PublicKey(request.relayer);
-    if (pubkeyToReducedField(recPub) !== sigRec) return { ok: false, reason: "recipient mismatch" };
-    if (pubkeyToReducedField(relPub) !== sigRel) return { ok: false, reason: "relayer mismatch" };
+    const [recHash, relHash] = await Promise.all([
+      pubkeyToFieldHash(recPub),
+      pubkeyToFieldHash(relPub),
+    ]);
+    if (recHash !== sigRec) return { ok: false, reason: "recipient mismatch" };
+    if (relHash !== sigRel) return { ok: false, reason: "relayer mismatch" };
 
     return { ok: true };
   } catch (err) {

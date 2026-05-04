@@ -58,6 +58,18 @@ function bigintToBytes32(value: bigint): Buffer {
   return Buffer.from(hex, "hex");
 }
 
+/**
+ * Bind a pubkey to a single BN254 field element via Poseidon(hi, lo)
+ * over the two 16-byte halves of the pubkey bytes. Mirrors the on-chain
+ * `pubkey_to_field_hash` helper. Replaces the previous mod-r reduction.
+ */
+function pubkeyToFieldHash(pubkey: PublicKey): bigint {
+  const bytes = pubkey.toBytes();
+  const hi = BigInt("0x" + Buffer.from(bytes.slice(0, 16)).toString("hex"));
+  const lo = BigInt("0x" + Buffer.from(bytes.slice(16, 32)).toString("hex"));
+  return poseidonHash([hi, lo]);
+}
+
 function bigintToArray32(value: bigint): number[] {
   return Array.from(bigintToBytes32(value));
 }
@@ -375,8 +387,8 @@ describe("octora-mixer", () => {
       const root = computeRoot(depositedLeaves, zeroHashes);
       const proof = computeMerkleProof(depositedLeaves, depositLeafIndex);
 
-      const recipientField = BigInt("0x" + Buffer.from(recipientKeypair.publicKey.toBytes()).toString("hex"));
-      const relayerField = BigInt("0x" + Buffer.from(authority.publicKey.toBytes()).toString("hex"));
+      const recipientField = pubkeyToFieldHash(recipientKeypair.publicKey);
+      const relayerField = pubkeyToFieldHash(authority.publicKey);
 
       const inputs = {
         root: root.toString(),
@@ -474,8 +486,8 @@ describe("octora-mixer", () => {
       const currentRoot = pool.rootHistory[pool.currentRootIndex] as number[];
 
       const recipientKeypair = Keypair.generate();
-      const recipientField = BigInt("0x" + Buffer.from(recipientKeypair.publicKey.toBytes()).toString("hex"));
-      const relayerField = BigInt("0x" + Buffer.from(authority.publicKey.toBytes()).toString("hex"));
+      const recipientField = pubkeyToFieldHash(recipientKeypair.publicKey);
+      const relayerField = pubkeyToFieldHash(authority.publicKey);
 
       const publicInputs = Buffer.alloc(160);
       Buffer.from(currentRoot).copy(publicInputs, 0);
@@ -526,8 +538,8 @@ describe("octora-mixer", () => {
       const [nullifierPDA] = deriveNullifierPDA(programId, mixerPoolPDA, nullifierHashBytes);
 
       const recipientKeypair = Keypair.generate();
-      const recipientField = BigInt("0x" + Buffer.from(recipientKeypair.publicKey.toBytes()).toString("hex"));
-      const relayerField = BigInt("0x" + Buffer.from(authority.publicKey.toBytes()).toString("hex"));
+      const recipientField = pubkeyToFieldHash(recipientKeypair.publicKey);
+      const relayerField = pubkeyToFieldHash(authority.publicKey);
 
       const fakeRoot = bigintToBytes32(randomFieldElement());
 

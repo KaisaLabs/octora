@@ -3,15 +3,11 @@
 // landing on-chain are identical regardless of where they were built.
 
 import { PublicKey } from "@solana/web3.js";
+import { poseidonHash } from "./poseidon";
 
 // BN254 base field prime p (used to negate G1 point's y coordinate)
 const BN254_P = BigInt(
   "21888242871839275222246405745257275088696311157297823662689037894645226208583",
-);
-
-// BN254 scalar field order r
-const BN254_R = BigInt(
-  "21888242871839275222246405745257275088548364400416034343698204186575808495617",
 );
 
 export interface Groth16Proof {
@@ -76,7 +72,10 @@ export function convertPublicInputsToBytes(publicSignals: string[]): Uint8Array 
   return buf;
 }
 
-/** Raw 256-bit pubkey as bigint (matches off-chain semantics in the relayer). */
+/**
+ * Raw 256-bit pubkey as a bigint. Kept as a low-level helper; do NOT use
+ * this for binding a recipient/relayer in a proof — see pubkeyToFieldHash.
+ */
 export function pubkeyToFieldElement(pubkey: PublicKey): bigint {
   let hex = "0x";
   for (const b of pubkey.toBytes()) hex += b.toString(16).padStart(2, "0");
@@ -84,13 +83,26 @@ export function pubkeyToFieldElement(pubkey: PublicKey): bigint {
 }
 
 /**
- * Reduce a Solana pubkey mod the BN254 scalar field order.
- * This matches both the on-chain `pubkey_to_field_element` and the value
- * the circuit auto-reduces inputs to, so it's the canonical form for proof
- * inputs and on-chain comparison.
+ * Bind a Solana pubkey to a single BN254 field element via Poseidon.
+ *
+ * Splits the 32-byte pubkey into two 16-byte big-endian halves and hashes
+ * them: `Poseidon(hi, lo)`. Each half is ≤ 128 bits, comfortably below
+ * the BN254 scalar field order. The (hi, lo) → pubkey mapping is
+ * injective and Poseidon is collision-resistant, so distinct pubkeys
+ * always map to distinct field elements.
+ *
+ * Replaces the previous `pubkeyToReducedField` (= `pubkey mod r`) which
+ * had a ~4-pubkey collision class per field element. The on-chain
+ * program computes the same Poseidon(hi, lo) via the Solana syscall, so
+ * the values match byte-for-byte.
  */
-export function pubkeyToReducedField(pubkey: PublicKey): bigint {
-  return pubkeyToFieldElement(pubkey) % BN254_R;
+export async function pubkeyToFieldHash(pubkey: PublicKey): Promise<bigint> {
+  const bytes = pubkey.toBytes();
+  let hiHex = "0x";
+  let loHex = "0x";
+  for (let i = 0; i < 16; i++) hiHex += bytes[i].toString(16).padStart(2, "0");
+  for (let i = 16; i < 32; i++) loHex += bytes[i].toString(16).padStart(2, "0");
+  return poseidonHash([BigInt(hiHex), BigInt(loHex)]);
 }
 
 export function uint8ArrayToBase64(bytes: Uint8Array): string {
