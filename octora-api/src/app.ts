@@ -12,6 +12,7 @@ import { registerPositionRoutes } from '#modules/positions/position.routes'
 import { registerDlmmRoutes } from '#modules/dlmm/dlmm.routes'
 import { createPrismaWaitlistRepository, type WaitlistRepository } from '#modules/waitlist/waitlist.repository'
 import { registerWaitlistRoutes } from '#modules/waitlist/waitlist.routes'
+import { registerMixerRoutes } from '#modules/mixer/mixer.routes'
 
 export interface AppRepositories {
   positionRepo: PositionRepository
@@ -69,6 +70,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   app.register(registerPositionRoutes, repos)
   app.register(registerDlmmRoutes)
   app.register(registerWaitlistRoutes, { waitlistRepo: repos.waitlistRepo })
+  app.register(registerMixerRoutes)
 
   return app
 }

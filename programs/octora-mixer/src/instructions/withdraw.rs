@@ -132,15 +132,55 @@ pub fn handler(
 }
 
 /// Convert a Solana Pubkey to a BN254 field element (big-endian bytes).
-/// Since Pubkeys are 256 bits but BN254 scalar field is ~254 bits,
-/// we reduce mod the field order for keys that exceed it.
+/// Reduces mod the BN254 scalar field order so it matches what the
+/// ZK circuit does internally (all field elements are auto-reduced).
+///
+/// Pubkeys are 256 bits but the field is ~254 bits, so values can be
+/// up to ~4x the field order. We subtract R repeatedly until in range.
 fn pubkey_to_field_element(pubkey: &Pubkey) -> [u8; 32] {
-    let bytes = pubkey.to_bytes();
-    // Most pubkeys (>93%) are already within the field.
-    // For simplicity in MVP, we just use the raw bytes.
-    // The off-chain code must perform the same conversion.
-    //
-    // TODO: implement proper modular reduction for the ~6% of pubkeys
-    // that exceed the BN254 field order.
+    let mut bytes = pubkey.to_bytes();
+
+    // BN254 scalar field order r (big-endian)
+    const R: [u8; 32] = [
+        0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29,
+        0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+        0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91,
+        0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
+    ];
+
+    // Subtract R until bytes < R (at most 3 iterations since max pubkey < 4*R)
+    while ge_be(&bytes, &R) {
+        bytes = sub_be(&bytes, &R);
+    }
+
     bytes
+}
+
+/// Big-endian comparison: a >= b
+fn ge_be(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    for i in 0..32 {
+        if a[i] > b[i] {
+            return true;
+        } else if a[i] < b[i] {
+            return false;
+        }
+    }
+    true // equal
+}
+
+/// Big-endian subtraction: a - b (assumes a >= b)
+fn sub_be(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    let mut result = [0u8; 32];
+    let mut borrow: i16 = 0;
+    for i in (0..32).rev() {
+        let diff = a[i] as i16 - b[i] as i16 - borrow;
+        if diff < 0 {
+            result[i] = (diff + 256) as u8;
+            borrow = 1;
+        } else {
+            result[i] = diff as u8;
+            borrow = 0;
+        }
+    }
+    result
 }

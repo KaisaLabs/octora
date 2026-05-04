@@ -17,16 +17,16 @@ pub const NR_PUBLIC_INPUTS: usize = 5;
 // Protocol: groth16, Curve: bn128
 // ============================================================================
 
-/// vk.alpha_1 (G1 point, y-negated for pairing check)
+/// vk.alpha_1 (G1 point, original — NOT negated)
 pub const VK_ALPHA: [u8; 64] = [
     0x2e, 0xb0, 0x19, 0x8b, 0xa4, 0xe2, 0x47, 0xa8,
     0x71, 0x15, 0x65, 0x72, 0x36, 0x22, 0x8d, 0xa1,
     0xd1, 0x7d, 0x3b, 0x09, 0x91, 0x1c, 0xcf, 0x91,
     0x5d, 0x2a, 0xf0, 0x5a, 0x4a, 0x59, 0xf3, 0x98,
-    0x22, 0x81, 0x59, 0x25, 0x3b, 0x81, 0x48, 0xfa,
-    0xda, 0xfb, 0xcd, 0x34, 0x10, 0x88, 0x58, 0x62,
-    0x37, 0x38, 0x03, 0x3f, 0x11, 0x94, 0x82, 0x62,
-    0xd3, 0xbf, 0x05, 0x5c, 0xb2, 0x82, 0xc0, 0x41,
+    0x0d, 0xe2, 0xf5, 0x4d, 0xa5, 0xb0, 0x57, 0x2e,
+    0xdd, 0x54, 0x78, 0x82, 0x70, 0xf8, 0xff, 0xfb,
+    0x60, 0x49, 0x67, 0x52, 0x56, 0xdd, 0x48, 0x2a,
+    0x68, 0x61, 0x86, 0xba, 0x25, 0xfa, 0x3d, 0x06,
 ];
 
 /// vk.beta_2 (G2 point)
@@ -183,20 +183,18 @@ pub const VERIFYING_KEY: Groth16Verifyingkey = Groth16Verifyingkey {
 /// * `Ok(true)` if proof is valid
 /// * `Ok(false)` if proof is invalid
 /// * `Err` if verification computation fails
+/// Verify a Groth16 proof against the hardcoded verification key.
+///
+/// IMPORTANT: pi_a must be pre-negated by the caller (client-side).
+/// The proof_data is passed directly to groth16-solana.
 pub fn verify_proof(
     proof_data: &[u8; PROOF_SIZE],
     public_inputs: &[u8; PUBLIC_INPUTS_SIZE],
 ) -> Result<bool> {
-    // Extract proof components
-    let proof_a_raw: [u8; 64] = proof_data[0..64].try_into().unwrap();
+    // Extract proof components (pi_a is already negated by the client)
+    let proof_a: [u8; 64] = proof_data[0..64].try_into().unwrap();
     let proof_b: [u8; 128] = proof_data[64..192].try_into().unwrap();
     let proof_c: [u8; 64] = proof_data[192..256].try_into().unwrap();
-
-    // Negate proof_a for the pairing check.
-    // In BN254, negating a G1 point means: (x, y) -> (x, -y mod p)
-    // where p is the base field prime.
-    // The y-coordinate is in bytes [32..64] of proof_a (big-endian).
-    let proof_a = negate_g1_y(&proof_a_raw)?;
 
     // Extract individual public inputs as [u8; 32] arrays
     let mut inputs: [[u8; 32]; NR_PUBLIC_INPUTS] = [[0u8; 32]; NR_PUBLIC_INPUTS];
@@ -218,39 +216,4 @@ pub fn verify_proof(
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
     }
-}
-
-/// Negate the y-coordinate of a G1 point (big-endian encoding).
-///
-/// BN254 base field prime p:
-/// 21888242871839275222246405745257275088696311157297823662689037894645226208583
-///
-/// For a point (x, y), the negation is (x, p - y).
-fn negate_g1_y(point: &[u8; 64]) -> Result<[u8; 64]> {
-    // BN254 base field prime (big-endian)
-    const P: [u8; 32] = [
-        0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29,
-        0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
-        0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d,
-        0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c, 0xfd, 0x47,
-    ];
-
-    let mut result = [0u8; 64];
-    // Copy x coordinate unchanged
-    result[0..32].copy_from_slice(&point[0..32]);
-
-    // Compute p - y for the y coordinate (big-endian subtraction)
-    let mut borrow: i16 = 0;
-    for i in (0..32).rev() {
-        let diff = P[i] as i16 - point[32 + i] as i16 - borrow;
-        if diff < 0 {
-            result[32 + i] = (diff + 256) as u8;
-            borrow = 1;
-        } else {
-            result[32 + i] = diff as u8;
-            borrow = 0;
-        }
-    }
-
-    Ok(result)
 }

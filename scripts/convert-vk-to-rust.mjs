@@ -62,11 +62,11 @@ function negateG1Y(yDec) {
   return (p - y) % p;
 }
 
-// ── Alpha (G1, NEGATED y for groth16-solana pairing check) ──
+// ── Alpha (G1, NOT negated — groth16-solana uses it as-is in the pairing) ──
 const alphaX = toBytes32(vk.vk_alpha_1[0]);
-const alphaY = toBytes32(negateG1Y(vk.vk_alpha_1[1]).toString());
+const alphaY = toBytes32(vk.vk_alpha_1[1]);
 
-console.log("/// vk.alpha_1 (G1 point, y-negated for pairing check)");
+console.log("/// vk.alpha_1 (G1 point, original — NOT negated)");
 console.log("pub const VK_ALPHA: [u8; 64] = [");
 console.log(formatBytes([...alphaX, ...alphaY]));
 console.log("];");

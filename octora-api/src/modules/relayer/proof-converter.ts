@@ -10,14 +10,19 @@ import type { Groth16Proof } from "#modules/vault";
  *   pi_b: 128 bytes (G2 point: x_c1 || x_c0 || y_c1 || y_c0, big-endian)
  *   pi_c: 64 bytes (G1 point: x || y, big-endian)
  */
+// BN254 base field prime p (for G1 point negation)
+const BN254_P = BigInt("21888242871839275222246405745257275088696311157297823662689037894645226208583");
+
 export function convertProofToBytes(proof: Groth16Proof): Buffer {
   const buf = Buffer.alloc(256);
 
-  // pi_a: [x, y, "1"] — take x and y, each as 32-byte big-endian
+  // pi_a: [x, y, "1"] — negate y for the pairing check (p - y)
+  // groth16-solana expects pi_a already negated
   const piAx = bigintToBeBytes(BigInt(proof.pi_a[0]));
-  const piAy = bigintToBeBytes(BigInt(proof.pi_a[1]));
+  const piAyRaw = BigInt(proof.pi_a[1]);
+  const piAyNeg = bigintToBeBytes(BN254_P - piAyRaw);
   piAx.copy(buf, 0);
-  piAy.copy(buf, 32);
+  piAyNeg.copy(buf, 32);
 
   // pi_b: [[x_c0, x_c1], [y_c0, y_c1], ["1", "0"]]
   // groth16-solana expects: x_c1 || x_c0 || y_c1 || y_c0 (reversed coefficient order)

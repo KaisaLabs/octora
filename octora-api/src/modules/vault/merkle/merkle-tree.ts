@@ -1,4 +1,4 @@
-import MerkleTree from "fixed-merkle-tree";
+import { MerkleTree } from "fixed-merkle-tree";
 import { createPoseidonHasher } from "./hasher.js";
 
 export const TREE_LEVELS = 20;

@@ -152,8 +152,9 @@ function deriveNullifierPDA(
 
 function convertProofToBytes(proof: any): Buffer {
   const buf = Buffer.alloc(256);
+  const BN254_P = BigInt("21888242871839275222246405745257275088696311157297823662689037894645226208583");
   bigintToBe32(BigInt(proof.pi_a[0])).copy(buf, 0);
-  bigintToBe32(BigInt(proof.pi_a[1])).copy(buf, 32);
+  bigintToBe32(BN254_P - BigInt(proof.pi_a[1])).copy(buf, 32); // negate y
   bigintToBe32(BigInt(proof.pi_b[0][1])).copy(buf, 64);
   bigintToBe32(BigInt(proof.pi_b[0][0])).copy(buf, 96);
   bigintToBe32(BigInt(proof.pi_b[1][1])).copy(buf, 128);

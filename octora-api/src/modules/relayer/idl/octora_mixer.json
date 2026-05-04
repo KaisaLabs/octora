@@ -12,7 +12,7 @@
       "docs": [
         "Deposit SOL into the mixer pool.",
         "The depositor provides a commitment (Poseidon hash of secret + nullifier)",
-        "and the current Merkle siblings for root verification and update."
+        "and the new Merkle root computed off-chain after inserting the commitment."
       ],
       "discriminator": [
         242,
@@ -105,16 +105,11 @@
           }
         },
         {
-          "name": "proof_siblings",
+          "name": "new_root",
           "type": {
             "array": [
-              {
-                "array": [
-                  "u8",
-                  32
-                ]
-              },
-              20
+              "u8",
+              32
             ]
           }
         }

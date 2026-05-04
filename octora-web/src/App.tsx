@@ -10,6 +10,7 @@ import { PoolsPage } from "@/pages/PoolsPage";
 import { PortfolioPage } from "@/pages/PortfolioPage";
 import { ActivityPage } from "@/pages/ActivityPage";
 import NotFound from "./pages/NotFound.tsx";
+import { MixerTestPage } from "./pages/MixerTestPage";
 import type { Pool } from "@/components/octora/types";
 import { listPools, mapPoolSummary } from "@/lib/api";
 import { portfolioActivity, portfolioPositions } from "@/data/octora";
@@ -57,6 +58,7 @@ function AppRoutes() {
         <Route path="portfolio" element={<PortfolioPage positions={portfolioPositions} />} />
         <Route path="activity" element={<ActivityPage activity={portfolioActivity} />} />
       </Route>
+      <Route path="mixer-test" element={<MixerTestPage />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
