@@ -13,6 +13,11 @@ import type { Groth16Proof } from "#modules/vault";
 // BN254 base field prime p (for G1 point negation)
 const BN254_P = BigInt("21888242871839275222246405745257275088696311157297823662689037894645226208583");
 
+// BN254 scalar field order r (matches BN254_FIELD_ORDER in the on-chain program).
+// Public signals coming back from snarkjs are always reduced mod r, so any
+// off-chain comparison against them must reduce too.
+const BN254_R = BigInt("21888242871839275222246405745257275088548364400416034343698204186575808495617");
+
 export function convertProofToBytes(proof: Groth16Proof): Buffer {
   const buf = Buffer.alloc(256);
 
@@ -72,6 +77,17 @@ export function convertPublicInputsToBytes(publicSignals: string[]): Buffer {
  */
 export function pubkeyToFieldElement(pubkey: PublicKey): bigint {
   return BigInt("0x" + Buffer.from(pubkey.toBytes()).toString("hex"));
+}
+
+/**
+ * Convert a Solana PublicKey to its reduced BN254 field element.
+ *
+ * Equivalent to `pubkeyToFieldElement(pubkey) mod r`. This matches what the
+ * circuit and the on-chain `pubkey_to_field_element` produce, and is the
+ * value that ends up in publicSignals.
+ */
+export function pubkeyToReducedField(pubkey: PublicKey): bigint {
+  return pubkeyToFieldElement(pubkey) % BN254_R;
 }
 
 /**

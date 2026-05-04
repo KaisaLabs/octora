@@ -3,7 +3,11 @@ import { verifyWithdrawProof } from "#modules/vault";
 import type { NullifierRegistry } from "./nullifier-registry.js";
 import type { StealthWallet } from "./stealth-wallet.js";
 import { generateStealthWallet } from "./stealth-wallet.js";
-import { convertProofToBytes, convertPublicInputsToBytes } from "./proof-converter.js";
+import {
+  convertProofToBytes,
+  convertPublicInputsToBytes,
+  pubkeyToReducedField,
+} from "./proof-converter.js";
 import {
   createMixerClient,
   deriveMixerPoolPDA,
@@ -68,7 +72,24 @@ export class RelayerService {
       };
     }
 
-    // 2. Verify proof off-chain (fast sanity check before paying gas)
+    // 2. Parity check: request fields must match what's bound in publicSignals.
+    // The on-chain program enforces this too, but failing here saves a round trip
+    // and prevents wasted gas / confusing on-chain errors when a client sends
+    // mismatched body fields against an unrelated proof.
+    const parity = checkPublicSignalsParity(request);
+    if (!parity.ok) {
+      return {
+        success: false,
+        txSignature: null,
+        nullifierHash: request.nullifierHash,
+        recipient: request.recipient,
+        amountLamports: "0",
+        feeLamports: request.fee,
+        error: `Public signal mismatch: ${parity.reason}`,
+      };
+    }
+
+    // 3. Verify proof off-chain (fast sanity check before paying gas)
     let proofValid: boolean;
     try {
       proofValid = await verifyWithdrawProof(request.proof, request.publicSignals);
@@ -96,7 +117,7 @@ export class RelayerService {
       };
     }
 
-    // 3. Submit on-chain withdrawal transaction
+    // 4. Submit on-chain withdrawal transaction
     this.pendingWithdrawals++;
     let txSignature: string;
 
@@ -115,7 +136,7 @@ export class RelayerService {
       };
     }
 
-    // 4. Mark nullifier as spent
+    // 5. Mark nullifier as spent
     await this.nullifiers.markSpent(request.nullifierHash, txSignature);
 
     this.pendingWithdrawals--;
@@ -157,6 +178,11 @@ export class RelayerService {
     const spent = await this.nullifiers.isSpent(request.nullifierHash);
     if (spent) {
       return { valid: false, reason: "Nullifier already spent." };
+    }
+
+    const parity = checkPublicSignalsParity(request);
+    if (!parity.ok) {
+      return { valid: false, reason: `Public signal mismatch: ${parity.reason}` };
     }
 
     try {
@@ -241,5 +267,40 @@ export class RelayerService {
         "RelayerService Solana client not initialized. Call initializeClient() first.",
       );
     }
+  }
+}
+
+type ParityResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Verify that the request body matches what's bound in the proof's publicSignals.
+ *
+ * publicSignals layout from withdraw.circom:
+ *   [0] root, [1] nullifierHash, [2] recipient (field), [3] relayer (field), [4] fee
+ *
+ * Each entry is a decimal-string BN254 field element. Pubkeys end up there as
+ * `pubkey_bytes mod r`, so we compare the request's pubkey reduced the same way.
+ */
+function checkPublicSignalsParity(request: WithdrawRequest): ParityResult {
+  const sigs = request.publicSignals;
+  if (!sigs || sigs.length !== 5) {
+    return { ok: false, reason: `expected 5 publicSignals, got ${sigs?.length ?? 0}` };
+  }
+
+  try {
+    const [sigRoot, sigNul, sigRec, sigRel, sigFee] = sigs.map((s) => BigInt(s));
+
+    if (BigInt(request.root) !== sigRoot) return { ok: false, reason: "root mismatch" };
+    if (BigInt(request.nullifierHash) !== sigNul) return { ok: false, reason: "nullifierHash mismatch" };
+    if (BigInt(request.fee) !== sigFee) return { ok: false, reason: "fee mismatch" };
+
+    const recPub = new PublicKey(request.recipient);
+    const relPub = new PublicKey(request.relayer);
+    if (pubkeyToReducedField(recPub) !== sigRec) return { ok: false, reason: "recipient mismatch" };
+    if (pubkeyToReducedField(relPub) !== sigRel) return { ok: false, reason: "relayer mismatch" };
+
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : "parity parse error" };
   }
 }

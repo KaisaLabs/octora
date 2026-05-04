@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
@@ -10,7 +10,12 @@ import { PoolsPage } from "@/pages/PoolsPage";
 import { PortfolioPage } from "@/pages/PortfolioPage";
 import { ActivityPage } from "@/pages/ActivityPage";
 import NotFound from "./pages/NotFound.tsx";
-import { MixerTestPage } from "./pages/MixerTestPage";
+
+// MixerTestPage transitively imports circomlibjs + the mixer crypto bundle
+// (~3MB). Lazy-load so the rest of the app renders without paying for it.
+const MixerTestPage = lazy(() =>
+  import("./pages/MixerTestPage").then((m) => ({ default: m.MixerTestPage })),
+);
 import type { Pool } from "@/components/octora/types";
 import { listPools, mapPoolSummary } from "@/lib/api";
 import { portfolioActivity, portfolioPositions } from "@/data/octora";
@@ -58,7 +63,20 @@ function AppRoutes() {
         <Route path="portfolio" element={<PortfolioPage positions={portfolioPositions} />} />
         <Route path="activity" element={<ActivityPage activity={portfolioActivity} />} />
       </Route>
-      <Route path="mixer-test" element={<MixerTestPage />} />
+      <Route
+        path="mixer-test"
+        element={
+          <Suspense
+            fallback={
+              <div className="min-h-screen flex items-center justify-center text-sm text-muted-foreground">
+                Loading mixer crypto…
+              </div>
+            }
+          >
+            <MixerTestPage />
+          </Suspense>
+        }
+      />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );

@@ -21,6 +21,12 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Browser shims for Node-only modules pulled in transitively by
+      // snarkjs / circomlibjs / readable-stream. Without these, Vite leaves
+      // them as undefined and the bundles throw "assert is not defined" /
+      // "events is not defined" at runtime.
+      assert: path.resolve(__dirname, "./src/lib/mixer/shims/assert-shim.ts"),
+      events: path.resolve(__dirname, "./src/lib/mixer/shims/events-shim.ts"),
     },
     dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime", "@tanstack/react-query", "@tanstack/query-core"],
   },

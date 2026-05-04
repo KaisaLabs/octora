@@ -22,71 +22,52 @@ export function createMixerController(mixer: MixerService) {
       return reply.send(result);
     },
 
-    /** POST /mixer/commitment — generate a fresh commitment */
-    async generateCommitment(_req: FastifyRequest, reply: FastifyReply) {
-      const commitment = await mixer.generateCommitment();
-      return reply.send({
-        secret: commitment.secret.toString(),
-        nullifier: commitment.nullifier.toString(),
-        commitment: commitment.commitment.toString(),
-        nullifierHash: commitment.nullifierHash.toString(),
-      });
+    /** GET /mixer/deposits — public history for browser-side tree reconstruction */
+    async listDeposits(_req: FastifyRequest, reply: FastifyReply) {
+      return reply.send({ deposits: mixer.listDeposits() });
     },
 
     /** POST /mixer/deposit — build unsigned deposit tx */
     async deposit(
       req: FastifyRequest<{
-        Body: { depositor: string; commitment: string };
-      }>,
-      reply: FastifyReply,
-    ) {
-      const { depositor, commitment } = req.body;
-      const result = await mixer.buildDepositTransaction(
-        depositor,
-        BigInt(commitment),
-      );
-      return reply.send({
-        transaction: result.transaction,
-        newRoot: result.newRoot,
-        leafIndex: result.leafIndex,
-      });
-    },
-
-    /** POST /mixer/stealth-wallet — generate a stealth wallet */
-    async generateStealth(_req: FastifyRequest, reply: FastifyReply) {
-      const wallet = mixer.generateStealthWallet();
-      return reply.send(wallet);
-    },
-
-    /** POST /mixer/prove — generate ZK proof for withdrawal */
-    async prove(
-      req: FastifyRequest<{
         Body: {
-          secret: string;
-          nullifier: string;
+          depositor: string;
+          commitment: string;
+          newRoot: string;
           leafIndex: number;
-          recipient: string;
-          relayer: string;
-          fee: string;
         };
       }>,
       reply: FastifyReply,
     ) {
-      const { secret, nullifier, leafIndex, recipient, relayer, fee } = req.body;
-      const result = await mixer.generateProof(
-        secret,
-        nullifier,
-        leafIndex,
-        recipient,
-        relayer,
-        fee,
-      );
-      return reply.send({
-        proof: result.proof,
-        publicSignals: result.publicSignals,
-        proofBytes: result.proofBytes,
-        publicInputsBytes: result.publicInputsBytes,
-      });
+      const { depositor, commitment, newRoot, leafIndex } = req.body;
+      try {
+        const result = await mixer.buildDepositTransaction({
+          depositorPubkey: depositor,
+          commitment: BigInt(commitment),
+          newRoot: BigInt(newRoot),
+          leafIndex,
+        });
+        return reply.send(result);
+      } catch (err) {
+        return reply
+          .status(400)
+          .send({ error: err instanceof Error ? err.message : "deposit build failed" });
+      }
+    },
+
+    /**
+     * POST /mixer/confirm-deposit — record an on-chain deposit so the
+     * browser-served deposit history stays in sync. Best-effort.
+     */
+    async confirmDeposit(
+      req: FastifyRequest<{
+        Body: { commitment: string; leafIndex: number; txSignature: string };
+      }>,
+      reply: FastifyReply,
+    ) {
+      const { commitment, leafIndex, txSignature } = req.body;
+      mixer.recordDeposit(BigInt(commitment), leafIndex, txSignature);
+      return reply.send({ ok: true });
     },
 
     /** POST /mixer/withdraw — build unsigned withdraw tx */

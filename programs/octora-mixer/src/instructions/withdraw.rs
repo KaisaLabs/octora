@@ -64,7 +64,14 @@ pub fn handler(
     let relayer_field: [u8; 32] = public_inputs[96..128].try_into().unwrap();
     let fee_field: [u8; 32] = public_inputs[128..160].try_into().unwrap();
 
-    // Extract fee (big-endian 32 bytes → u64 from last 8 bytes)
+    // Extract fee (big-endian 32 bytes → u64 from last 8 bytes).
+    // The circuit binds the full field element, so reject any proof whose fee
+    // doesn't fit in u64 — otherwise the upper 24 bytes are silently dropped
+    // and the on-chain enforcement diverges from what the circuit guarantees.
+    require!(
+        fee_field[0..24].iter().all(|&b| b == 0),
+        MixerError::FeeOverflow,
+    );
     let fee = u64::from_be_bytes(fee_field[24..32].try_into().unwrap());
 
     // Read pool values before mutable operations

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { randomBytes } from "node:crypto";
+import { createCipheriv, randomBytes } from "node:crypto";
 import { generateStealthWallet, encryptSeed, decryptSeed, recoverStealthWallet } from "../stealth-wallet.js";
 
 describe("StealthWallet", () => {
@@ -70,6 +70,38 @@ describe("StealthWallet", () => {
 
       expect(e1.iv).not.toBe(e2.iv);
       expect(e1.ciphertext).not.toBe(e2.ciphertext);
+    });
+
+    it("tags new blobs as version 2 (HKDF)", () => {
+      const wallet = generateStealthWallet();
+      const encrypted = encryptSeed(wallet, encryptionKey);
+      expect(encrypted.version).toBe(2);
+    });
+
+    it("can still decrypt legacy v1 blobs (raw signature slice)", () => {
+      const wallet = generateStealthWallet();
+      // Hand-build a v1 blob using the pre-HKDF derivation:
+      //   key = first 32 bytes of the input directly.
+      const iv = randomBytes(12);
+      const cipher = createCipheriv(
+        "aes-256-gcm",
+        Buffer.from(encryptionKey.slice(0, 32)),
+        iv,
+      );
+      const ciphertext = Buffer.concat([cipher.update(wallet.seed), cipher.final()]);
+      const authTag = cipher.getAuthTag();
+
+      const legacy = {
+        ciphertext: ciphertext.toString("hex"),
+        iv: iv.toString("hex"),
+        authTag: authTag.toString("hex"),
+        publicKey: wallet.publicKey,
+        // no version field → treated as v1
+      };
+
+      const recovered = decryptSeed(legacy, encryptionKey);
+      expect(recovered.publicKey).toBe(wallet.publicKey);
+      expect(Buffer.compare(recovered.seed, wallet.seed)).toBe(0);
     });
   });
 

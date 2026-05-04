@@ -26,6 +26,9 @@ pub enum MixerError {
     #[msg("Fee exceeds the pool denomination")]
     FeeExceedsDenomination,
 
+    #[msg("Fee field exceeds u64 — upper 24 bytes must be zero")]
+    FeeOverflow,
+
     #[msg("Insufficient pool balance for withdrawal")]
     InsufficientPoolBalance,
 

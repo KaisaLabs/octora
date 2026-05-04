@@ -1,5 +1,10 @@
 import { Keypair } from "@solana/web3.js";
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  hkdfSync,
+  randomBytes,
+} from "node:crypto";
 
 /**
  * Stealth wallet — a fresh ephemeral keypair with zero mathematical link to the user's main wallet.
@@ -35,6 +40,32 @@ export interface EncryptedSeed {
   authTag: string;
   /** The stealth public key this seed belongs to. */
   publicKey: string;
+  /**
+   * Key-derivation version.
+   *   1 — legacy: AES key = first 32 bytes of the input (raw signature slice).
+   *   2 — HKDF-SHA256 over the input with a fixed domain separator.
+   * Missing field is treated as v1 for backward compatibility.
+   */
+  version?: number;
+}
+
+const HKDF_INFO = Buffer.from("octora.stealth.seed.v2");
+// HKDF salt is non-secret and fixed — it just provides domain separation
+// across application contexts that might share the same input keying material.
+const HKDF_SALT = Buffer.from("octora-stealth-salt-v2");
+
+/**
+ * Derive a 32-byte AES-256-GCM key from input keying material (e.g. a wallet
+ * signature) using HKDF-SHA256. Replaces the v1 raw-slice approach so that
+ * the signature isn't reused as a key material directly.
+ */
+function deriveAesKey(ikm: Uint8Array): Buffer {
+  // hkdfSync requires non-empty IKM
+  if (ikm.length === 0) {
+    throw new Error("Encryption input keying material must be non-empty.");
+  }
+  const out = hkdfSync("sha256", ikm, HKDF_SALT, HKDF_INFO, 32);
+  return Buffer.from(out);
 }
 
 /**
@@ -56,14 +87,16 @@ export function generateStealthWallet(): StealthWallet {
  * Encrypt a stealth wallet's seed for safe storage.
  *
  * @param wallet - The stealth wallet to encrypt
- * @param encryptionKey - 32 bytes derived from user's wallet signature (use first 32 bytes of signature)
+ * @param encryptionKey - input keying material (e.g. a wallet signature, ≥ 32 bytes).
+ *   The actual AES key is derived via HKDF-SHA256 with a fixed domain separator;
+ *   the input is never used directly as the key.
  */
 export function encryptSeed(wallet: StealthWallet, encryptionKey: Uint8Array): EncryptedSeed {
   if (encryptionKey.length < 32) {
     throw new Error("Encryption key must be at least 32 bytes.");
   }
 
-  const key = encryptionKey.slice(0, 32);
+  const key = deriveAesKey(encryptionKey);
   const iv = randomBytes(12); // 96-bit IV for GCM
   const cipher = createCipheriv("aes-256-gcm", key, iv);
 
@@ -75,21 +108,34 @@ export function encryptSeed(wallet: StealthWallet, encryptionKey: Uint8Array): E
     iv: iv.toString("hex"),
     authTag: authTag.toString("hex"),
     publicKey: wallet.publicKey,
+    version: 2,
   };
 }
 
 /**
  * Decrypt a stored seed and recover the stealth wallet.
  *
+ * Supports both v2 blobs (HKDF-derived key) and v1 blobs (legacy raw slice)
+ * by inspecting the `version` field on the encrypted payload.
+ *
  * @param encrypted - The encrypted seed blob
- * @param encryptionKey - Same key used to encrypt (from user's wallet signature)
+ * @param encryptionKey - Same input keying material used to encrypt
  */
 export function decryptSeed(encrypted: EncryptedSeed, encryptionKey: Uint8Array): StealthWallet {
   if (encryptionKey.length < 32) {
     throw new Error("Encryption key must be at least 32 bytes.");
   }
 
-  const key = encryptionKey.slice(0, 32);
+  const version = encrypted.version ?? 1;
+  let key: Buffer;
+  if (version === 1) {
+    key = Buffer.from(encryptionKey.slice(0, 32));
+  } else if (version === 2) {
+    key = deriveAesKey(encryptionKey);
+  } else {
+    throw new Error(`Unsupported encrypted seed version: ${version}`);
+  }
+
   const iv = Buffer.from(encrypted.iv, "hex");
   const authTag = Buffer.from(encrypted.authTag, "hex");
   const ciphertext = Buffer.from(encrypted.ciphertext, "hex");

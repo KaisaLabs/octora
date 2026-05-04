@@ -105,35 +105,61 @@ export async function isNullifierSpentOnChain(
 }
 
 /**
- * Load the hot wallet keypair from a secret key.
- * Supports base58 string or JSON byte array file path.
+ * Load the hot wallet keypair from a secret.
+ *
+ * Supported formats:
+ *   - JSON keypair file path (e.g. ~/.config/solana/id.json or /etc/octora/hot.json)
+ *   - Inline JSON byte array (e.g. "[12,34,...,89]") — useful for env vars
+ *
+ * Base58 secret keys are intentionally not supported here to avoid pulling
+ * in a base58 dependency just for hot-wallet loading. If you need base58,
+ * convert to a JSON byte array first (`solana-keygen recover` / web3.js).
  */
 function loadHotWallet(secret: string): Keypair {
-  // If it looks like a file path, read it
-  if (secret.startsWith("/") || secret.startsWith("~") || secret.endsWith(".json")) {
-    const raw = readFileSync(secret, "utf-8");
-    const bytes = JSON.parse(raw) as number[];
-    return Keypair.fromSecretKey(Uint8Array.from(bytes));
+  const trimmed = secret.trim();
+
+  // Inline JSON byte array
+  if (trimmed.startsWith("[")) {
+    return keypairFromJsonBytes(trimmed, "inline secret");
   }
 
-  // Otherwise treat as base58 secret key bytes
-  const { bs58 } = await_bs58();
-  return Keypair.fromSecretKey(bs58.decode(secret));
+  // Path to a JSON keypair file
+  const looksLikePath =
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("~") ||
+    trimmed.startsWith("./") ||
+    trimmed.endsWith(".json");
+  if (looksLikePath) {
+    const raw = readFileSync(trimmed, "utf-8");
+    return keypairFromJsonBytes(raw, trimmed);
+  }
+
+  throw new Error(
+    "Unrecognised hot wallet secret format. " +
+      "Provide a JSON keypair file path or an inline JSON byte array.",
+  );
 }
 
-function await_bs58() {
-  // @solana/web3.js bundles bs58 internally
-  // For simplicity, decode from hex or use raw bytes
-  return {
-    bs58: {
-      decode: (str: string): Uint8Array => {
-        // Use the Keypair.fromSecretKey with the raw bytes
-        // In practice, hot wallet is usually a JSON file path
-        throw new Error(
-          `Base58 secret key not supported directly. ` +
-          `Use a JSON keypair file path instead.`,
-        );
-      },
-    },
-  };
+function keypairFromJsonBytes(raw: string, source: string): Keypair {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `Hot wallet secret at ${source} is not valid JSON: ${
+        err instanceof Error ? err.message : "unknown"
+      }`,
+    );
+  }
+  if (!Array.isArray(parsed) || !parsed.every((b) => typeof b === "number")) {
+    throw new Error(
+      `Hot wallet secret at ${source} must be a JSON array of numbers (Solana keypair format).`,
+    );
+  }
+  if (parsed.length !== 64) {
+    throw new Error(
+      `Hot wallet secret at ${source} must be 64 bytes, got ${parsed.length}.`,
+    );
+  }
+  return Keypair.fromSecretKey(Uint8Array.from(parsed as number[]));
 }

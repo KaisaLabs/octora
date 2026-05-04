@@ -1,20 +1,15 @@
-import { Connection, Keypair, PublicKey, SystemProgram, Transaction, ComputeBudgetProgram } from "@solana/web3.js";
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  ComputeBudgetProgram,
+} from "@solana/web3.js";
 import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  generateCommitment as genCommitment,
-  generateProofInputs,
-  type Commitment,
-} from "#modules/vault";
-import {
-  createVaultMerkleTree,
-  type VaultMerkleTree,
-} from "#modules/vault";
-import { generateWithdrawProof, verifyWithdrawProof } from "#modules/vault";
-import { generateStealthWallet, type StealthWallet } from "#modules/relayer";
-import { convertProofToBytes, convertPublicInputsToBytes, pubkeyToFieldElement } from "#modules/relayer";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const IDL_PATH = join(__dirname, "..", "relayer", "idl", "octora_mixer.json");
@@ -23,31 +18,48 @@ const PROGRAM_ID = new PublicKey("Ao58tvHj3FTwFMiGts5HAc5mastNE61Puiw4ER3rA3NJ")
 const MIXER_POOL_SEED = Buffer.from("mixer_pool");
 const COMMITMENT_SEED = Buffer.from("commitment");
 const NULLIFIER_SEED = Buffer.from("nullifier");
-const TREE_LEVELS = 20;
 
 export interface MixerServiceConfig {
   rpcUrl: string;
   denomination: bigint;
 }
 
+export interface PublicDepositRecord {
+  /** Decimal-string BN254 field element. */
+  commitment: string;
+  leafIndex: number;
+  /** On-chain signature (or "pending" when only the build was requested). */
+  txSignature: string;
+}
+
+interface BuildDepositArgs {
+  depositorPubkey: string;
+  commitment: bigint;
+  newRoot: bigint;
+  leafIndex: number;
+}
+
 /**
- * Mixer Service — manages the full deposit → proof → withdraw lifecycle.
+ * Mixer Service — public-data orchestrator.
  *
- * This is the API-level orchestrator that ties together:
- * - Commitment generation (vault module)
- * - Merkle tree management (vault module)
- * - On-chain deposit transaction building
- * - ZK proof generation (snarkjs)
- * - Stealth wallet generation (relayer module)
- * - On-chain withdrawal (relayer service)
+ * This service intentionally does NOT generate commitments, stealth
+ * wallets, or proofs. Anything that requires the user's secret material
+ * runs in the browser (octora-web/src/lib/mixer/). The service only:
+ *   - builds unsigned on-chain transactions
+ *   - exposes the public deposit history for tree reconstruction
+ *   - tracks which deposits the API has observed (best-effort cache)
  */
 export class MixerService {
   private connection: Connection;
-  private tree: VaultMerkleTree | null = null;
-  private deposits: { commitment: bigint; leafIndex: number }[] = [];
   private denomination: bigint;
   private poolPDA: PublicKey;
   private program: Program;
+
+  // In-memory mirror of the public deposit history. Authoritative source is
+  // the on-chain DepositEvent stream; this cache is best-effort and may be
+  // stale if the API restarts. Future work: hydrate from on-chain events
+  // on startup.
+  private deposits = new Map<string, PublicDepositRecord>();
 
   constructor(config: MixerServiceConfig) {
     this.connection = new Connection(config.rpcUrl, "confirmed");
@@ -60,7 +72,7 @@ export class MixerService {
       PROGRAM_ID,
     );
 
-    // Create a read-only provider (no wallet needed for building unsigned txs)
+    // Read-only provider — we never sign on the server.
     const dummyKeypair = Keypair.generate();
     const wallet = new Wallet(dummyKeypair);
     const provider = new AnchorProvider(this.connection, wallet, { commitment: "confirmed" });
@@ -68,39 +80,23 @@ export class MixerService {
     this.program = new Program(idl, provider);
   }
 
-  async initialize(): Promise<void> {
-    this.tree = await createVaultMerkleTree(TREE_LEVELS);
-  }
-
-  /** Generate a fresh commitment for deposit. */
-  async generateCommitment(): Promise<Commitment> {
-    return genCommitment();
-  }
-
   /**
-   * Build an unsigned deposit transaction.
-   * The frontend will sign it with the user's wallet.
+   * Build an unsigned deposit transaction. The browser supplies both the
+   * commitment and the new merkle root computed against its local tree.
    */
-  async buildDepositTransaction(
-    depositorPubkey: string,
-    commitment: bigint,
-  ): Promise<{ transaction: string; newRoot: string; leafIndex: number }> {
-    this.ensureInitialized();
-
-    const depositor = new PublicKey(depositorPubkey);
-    const commitmentBytes = this.bigintToBytes32(commitment);
-
-    // Insert commitment into local tree and get new root
-    const leafIndex = this.tree!.insert(commitment);
-    const newRoot = this.tree!.root();
-    const newRootBytes = Array.from(this.bigintToBytes32(newRoot));
+  async buildDepositTransaction(args: BuildDepositArgs): Promise<{
+    transaction: string;
+    leafIndex: number;
+  }> {
+    const depositor = new PublicKey(args.depositorPubkey);
+    const commitmentBytes = this.bigintToBytes32(args.commitment);
+    const newRootBytes = Array.from(this.bigintToBytes32(args.newRoot));
 
     const [commitmentPDA] = PublicKey.findProgramAddressSync(
       [COMMITMENT_SEED, this.poolPDA.toBuffer(), commitmentBytes],
       PROGRAM_ID,
     );
 
-    // Build the instruction
     const ix = await this.program.methods
       .deposit(Array.from(commitmentBytes), newRootBytes)
       .accounts({
@@ -111,100 +107,40 @@ export class MixerService {
       })
       .instruction();
 
-    // Build transaction
     const { blockhash } = await this.connection.getLatestBlockhash("confirmed");
-    const tx = new Transaction({
-      recentBlockhash: blockhash,
-      feePayer: depositor,
-    });
+    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: depositor });
     tx.add(ix);
 
-    // Serialize for frontend signing
     const serialized = tx.serialize({
       requireAllSignatures: false,
       verifySignatures: false,
     });
 
-    this.deposits.push({ commitment, leafIndex });
-
     return {
       transaction: serialized.toString("base64"),
-      newRoot: newRoot.toString(),
-      leafIndex,
+      leafIndex: args.leafIndex,
     };
   }
 
   /**
-   * Confirm a deposit after the user signed and sent the transaction.
-   * Updates internal state tracking.
+   * Record a confirmed deposit so future browser tree reconstructions
+   * include it. Idempotent on commitment.
    */
-  async confirmDeposit(commitment: bigint, txSignature: string): Promise<void> {
-    // The tree was already updated in buildDepositTransaction
-    // Just track the confirmation
-    console.log(`Deposit confirmed: ${txSignature} for commitment ${commitment}`);
+  recordDeposit(commitment: bigint, leafIndex: number, txSignature: string): void {
+    const key = commitment.toString();
+    if (this.deposits.has(key)) return;
+    this.deposits.set(key, { commitment: key, leafIndex, txSignature });
   }
 
-  /** Generate a stealth wallet. */
-  generateStealthWallet(): { publicKey: string; secretKey: string } {
-    const wallet = generateStealthWallet();
-    return {
-      publicKey: wallet.publicKey,
-      secretKey: Buffer.from(wallet.keypair.secretKey).toString("hex"),
-    };
+  /** List public deposit history for browser tree reconstruction. */
+  listDeposits(): PublicDepositRecord[] {
+    return Array.from(this.deposits.values()).sort((a, b) => a.leafIndex - b.leafIndex);
   }
 
   /**
-   * Generate a ZK proof for withdrawal.
-   * Returns the proof + public signals + packed bytes ready for on-chain submission.
-   */
-  async generateProof(
-    secret: string,
-    nullifier: string,
-    leafIndex: number,
-    recipientPubkey: string,
-    relayerPubkey: string,
-    fee: string,
-  ): Promise<{
-    proof: any;
-    publicSignals: string[];
-    proofBytes: string;
-    publicInputsBytes: string;
-  }> {
-    this.ensureInitialized();
-
-    const secretBigint = BigInt(secret);
-    const nullifierBigint = BigInt(nullifier);
-    const nullifierHash = (await import("#modules/vault")).poseidonHash([nullifierBigint]);
-    const recipientField = pubkeyToFieldElement(new PublicKey(recipientPubkey));
-    const relayerField = pubkeyToFieldElement(new PublicKey(relayerPubkey));
-
-    const inputs = generateProofInputs(
-      this.tree!,
-      leafIndex,
-      secretBigint,
-      nullifierBigint,
-      await nullifierHash,
-      recipientField,
-      relayerField,
-      BigInt(fee),
-    );
-
-    const { proof, publicSignals } = await generateWithdrawProof(inputs);
-
-    const proofBytes = convertProofToBytes(proof);
-    const publicInputsBytes = convertPublicInputsToBytes(publicSignals);
-
-    return {
-      proof,
-      publicSignals,
-      proofBytes: proofBytes.toString("base64"),
-      publicInputsBytes: publicInputsBytes.toString("base64"),
-    };
-  }
-
-  /**
-   * Build an unsigned withdrawal transaction.
-   * The relayer (or user) will sign and submit it.
+   * Build an unsigned withdrawal transaction. The proof + public inputs
+   * arrive packed (base64) from the browser-side prover; we don't have
+   * the witness inputs here and never see the secret/nullifier.
    */
   async buildWithdrawTransaction(
     signerPubkey: string,
@@ -240,10 +176,7 @@ export class MixerService {
     const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
 
     const { blockhash } = await this.connection.getLatestBlockhash("confirmed");
-    const tx = new Transaction({
-      recentBlockhash: blockhash,
-      feePayer: signer,
-    });
+    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: signer });
     tx.add(computeIx, ix);
 
     const serialized = tx.serialize({
@@ -269,11 +202,12 @@ export class MixerService {
 
       const balance = await this.connection.getBalance(this.poolPDA);
 
-      // Parse pool data manually (skip 8-byte discriminator):
-      // authority (32) + denomination (8) + next_leaf_index (4) + current_root_index (1) + ...
+      // Layout: discriminator(8) + authority(32) + denomination(8) +
+      //         next_leaf_index(4) + current_root_index(1) + root_history(32*30) +
+      //         is_paused(1) + bump(1)
       const data = accountInfo.data;
-      const nextLeafIndex = data.readUInt32LE(8 + 32 + 8); // offset: discriminator(8) + authority(32) + denomination(8)
-      const isPaused = data[8 + 32 + 8 + 4 + 1 + 32 * 30] === 1; // after root_history
+      const nextLeafIndex = data.readUInt32LE(8 + 32 + 8);
+      const isPaused = data[8 + 32 + 8 + 4 + 1 + 32 * 30] === 1;
 
       return {
         poolAddress: this.poolPDA.toBase58(),
@@ -281,7 +215,7 @@ export class MixerService {
         nextLeafIndex,
         isPaused,
         balance: balance.toString(),
-        depositsTracked: this.deposits.length,
+        depositsTracked: this.deposits.size,
       };
     } catch {
       return null;
@@ -304,10 +238,7 @@ export class MixerService {
       .instruction();
 
     const { blockhash } = await this.connection.getLatestBlockhash("confirmed");
-    const tx = new Transaction({
-      recentBlockhash: blockhash,
-      feePayer: authority,
-    });
+    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: authority });
     tx.add(ix);
 
     const serialized = tx.serialize({
@@ -324,11 +255,5 @@ export class MixerService {
   private bigintToBytes32(value: bigint): Buffer {
     const hex = value.toString(16).padStart(64, "0");
     return Buffer.from(hex, "hex");
-  }
-
-  private ensureInitialized(): void {
-    if (!this.tree) {
-      throw new Error("MixerService not initialized. Call initialize() first.");
-    }
   }
 }

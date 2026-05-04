@@ -1,6 +1,21 @@
-import { useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useSolana } from "@/providers/SolanaProvider";
-import { Connection, Transaction } from "@solana/web3.js";
+import { Connection, PublicKey, Transaction } from "@solana/web3.js";
+import {
+  generateCommitment,
+  createMixerMerkleTree,
+  generateStealthWallet,
+  buildWithdrawCircuitInput,
+  generateWithdrawProof,
+  convertProofToBytes,
+  convertPublicInputsToBytes,
+  pubkeyToReducedField,
+  uint8ArrayToBase64,
+  type Commitment,
+  type MixerMerkleTree,
+  type StealthWallet,
+  type WithdrawProofResult,
+} from "@/lib/mixer";
 
 const API = import.meta.env.VITE_API_URL ?? "/api";
 const RPC_URL = "http://localhost:8899";
@@ -44,40 +59,35 @@ async function signAndSend(txBase64: string): Promise<string> {
 
   const connection = new Connection(RPC_URL, "confirmed");
 
-  // Deserialize the transaction from the API
   const txBytes = Uint8Array.from(atob(txBase64), (c) => c.charCodeAt(0));
   const tx = Transaction.from(txBytes);
 
-  // Replace with a fresh blockhash from the same RPC
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
 
-  // Verify the feePayer has balance on this RPC
   const balance = await connection.getBalance(tx.feePayer!);
   if (balance === 0) {
     throw new Error(
       `Wallet ${tx.feePayer!.toBase58()} has 0 SOL on ${RPC_URL}. ` +
-      `Make sure your wallet is set to the correct network and has SOL.`
+        `Make sure your wallet is set to the correct network and has SOL.`,
     );
   }
 
-  // Sign with the wallet
   const signed = await provider.signTransaction(tx);
-
-  // Send via the same RPC (not the wallet's default RPC)
   const sig = await connection.sendRawTransaction(signed.serialize(), {
     skipPreflight: false,
     preflightCommitment: "confirmed",
   });
-
-  // Wait for confirmation
-  await connection.confirmTransaction({
-    signature: sig,
-    blockhash,
-    lastValidBlockHeight,
-  }, "confirmed");
-
+  await connection.confirmTransaction(
+    { signature: sig, blockhash, lastValidBlockHeight },
+    "confirmed",
+  );
   return sig;
+}
+
+interface DepositSummary {
+  commitment: string;
+  leafIndex: number;
 }
 
 export function MixerTestPage() {
@@ -91,11 +101,53 @@ export function MixerTestPage() {
   const [proveStep, setProveStep] = useState<StepState>({ status: "idle" });
   const [withdrawStep, setWithdrawStep] = useState<StepState>({ status: "idle" });
 
-  // Saved data between steps
-  const [commitment, setCommitment] = useState<any>(null);
-  const [depositResult, setDepositResult] = useState<any>(null);
-  const [stealthWallet, setStealthWallet] = useState<any>(null);
-  const [proofResult, setProofResult] = useState<any>(null);
+  // Saved data between steps. All secret material stays in component state /
+  // refs and is never sent to the server.
+  const [commitment, setCommitment] = useState<Commitment | null>(null);
+  const [depositResult, setDepositResult] = useState<{
+    leafIndex: number;
+    signature: string;
+  } | null>(null);
+  const [stealthWallet, setStealthWallet] = useState<StealthWallet | null>(null);
+  const [proofResult, setProofResult] = useState<WithdrawProofResult | null>(null);
+  const treeRef = useRef<MixerMerkleTree | null>(null);
+
+  // Bootstrap: fetch existing deposits from the API and rebuild the tree
+  // locally so we can compute correct merkle paths/roots. The API only
+  // exposes the public history (commitments + leaf indices) — never anything
+  // secret.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { deposits } = (await apiGet("/mixer/deposits")) as {
+          deposits: DepositSummary[];
+        };
+        const sorted = [...deposits].sort((a, b) => a.leafIndex - b.leafIndex);
+        const tree = await createMixerMerkleTree(
+          undefined,
+          sorted.map((d) => BigInt(d.commitment)),
+        );
+        if (!cancelled) {
+          treeRef.current = tree;
+        }
+      } catch {
+        // Empty / not-yet-initialised pool is fine — build an empty tree.
+        const tree = await createMixerMerkleTree();
+        if (!cancelled) treeRef.current = tree;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const ensureTree = useCallback(async (): Promise<MixerMerkleTree> => {
+    if (treeRef.current) return treeRef.current;
+    const tree = await createMixerMerkleTree();
+    treeRef.current = tree;
+    return tree;
+  }, []);
 
   // ── Step 0: Check pool status ──
   const checkStatus = useCallback(async () => {
@@ -120,7 +172,7 @@ export function MixerTestPage() {
       const sig = await signAndSend(transaction);
       setInitStep({
         status: "success",
-        message: `Pool initialized!`,
+        message: "Pool initialized!",
         data: { poolAddress, signature: sig },
       });
     } catch (err: any) {
@@ -128,13 +180,21 @@ export function MixerTestPage() {
     }
   }, [wallet.address]);
 
-  // ── Step 2: Generate commitment ──
+  // ── Step 2: Generate commitment (BROWSER-SIDE) ──
   const genCommitment = useCallback(async () => {
-    setCommitmentStep({ status: "loading" });
+    setCommitmentStep({ status: "loading", message: "Generating in browser..." });
     try {
-      const data = await apiGet("/mixer/commitment");
-      setCommitment(data);
-      setCommitmentStep({ status: "success", data });
+      const c = await generateCommitment();
+      setCommitment(c);
+      setCommitmentStep({
+        status: "success",
+        // Only public values are surfaced; secret/nullifier are kept in state.
+        data: {
+          commitment: c.commitment.toString(),
+          nullifierHash: c.nullifierHash.toString(),
+          note: "Secret + nullifier kept in browser memory only.",
+        },
+      });
     } catch (err: any) {
       setCommitmentStep({ status: "error", message: err.message });
     }
@@ -143,68 +203,113 @@ export function MixerTestPage() {
   // ── Step 3: Deposit ──
   const deposit = useCallback(async () => {
     if (!wallet.address || !commitment) return;
-    setDepositStep({ status: "loading", message: "Building deposit transaction..." });
+    setDepositStep({ status: "loading", message: "Inserting commitment + computing root..." });
     try {
-      const result = await apiPost("/mixer/deposit", {
+      const tree = await ensureTree();
+      const leafIndex = tree.insert(commitment.commitment);
+      const newRoot = tree.root();
+
+      setDepositStep({ status: "loading", message: "Building deposit transaction..." });
+      const { transaction } = await apiPost("/mixer/deposit", {
         depositor: wallet.address,
-        commitment: commitment.commitment,
+        commitment: commitment.commitment.toString(),
+        newRoot: newRoot.toString(),
+        leafIndex,
       });
+
       setDepositStep({ status: "loading", message: "Sign the deposit in your wallet..." });
-      const sig = await signAndSend(result.transaction);
-      setDepositResult({ ...result, signature: sig });
+      const sig = await signAndSend(transaction);
+
+      // Tell the API to record this deposit so future users get the right tree.
+      // Best-effort — even if this fails, the on-chain tx already landed.
+      apiPost("/mixer/confirm-deposit", {
+        commitment: commitment.commitment.toString(),
+        leafIndex,
+        txSignature: sig,
+      }).catch(() => {});
+
+      setDepositResult({ leafIndex, signature: sig });
       setDepositStep({
         status: "success",
-        message: "Deposited 0.01 SOL into mixer!",
-        data: { signature: sig, leafIndex: result.leafIndex },
+        message: "Deposit confirmed on-chain.",
+        data: { signature: sig, leafIndex },
       });
     } catch (err: any) {
       setDepositStep({ status: "error", message: err.message });
     }
-  }, [wallet.address, commitment]);
+  }, [wallet.address, commitment, ensureTree]);
 
-  // ── Step 4: Generate stealth wallet ──
-  const genStealth = useCallback(async () => {
-    setStealthStep({ status: "loading" });
+  // ── Step 4: Generate stealth wallet (BROWSER-SIDE) ──
+  const genStealth = useCallback(() => {
+    setStealthStep({ status: "loading", message: "Generating in browser..." });
     try {
-      const data = await apiGet("/mixer/stealth-wallet");
-      setStealthWallet(data);
-      setStealthStep({ status: "success", data });
+      const w = generateStealthWallet();
+      setStealthWallet(w);
+      setStealthStep({
+        status: "success",
+        // Never surface the secret key in the UI summary.
+        data: {
+          publicKey: w.publicKey,
+          note: "Private key kept in browser memory only.",
+        },
+      });
     } catch (err: any) {
       setStealthStep({ status: "error", message: err.message });
     }
   }, []);
 
-  // ── Step 5: Generate ZK proof ──
+  // ── Step 5: Generate ZK proof (BROWSER-SIDE) ──
   const genProof = useCallback(async () => {
     if (!commitment || !depositResult || !stealthWallet || !wallet.address) return;
-    setProveStep({ status: "loading", message: "Generating ZK proof... (may take 10-30s)" });
+    setProveStep({
+      status: "loading",
+      message: "Generating ZK proof in browser… (~10–60s, do not close tab)",
+    });
     try {
-      const data = await apiPost("/mixer/prove", {
+      const tree = await ensureTree();
+
+      const recipientField = pubkeyToReducedField(new PublicKey(stealthWallet.publicKey));
+      const relayerField = pubkeyToReducedField(new PublicKey(wallet.address));
+
+      const inputs = buildWithdrawCircuitInput({
+        tree,
+        leafIndex: depositResult.leafIndex,
         secret: commitment.secret,
         nullifier: commitment.nullifier,
-        leafIndex: depositResult.leafIndex,
-        recipient: stealthWallet.publicKey,
-        relayer: wallet.address,
-        fee: "0",
+        nullifierHash: commitment.nullifierHash,
+        recipientField,
+        relayerField,
+        fee: 0n,
       });
-      setProofResult(data);
-      setProveStep({ status: "success", message: "Proof generated!", data });
+
+      const result = await generateWithdrawProof(inputs);
+      setProofResult(result);
+      setProveStep({
+        status: "success",
+        message: "Proof generated locally.",
+        data: { publicSignals: result.publicSignals },
+      });
     } catch (err: any) {
       setProveStep({ status: "error", message: err.message });
     }
-  }, [commitment, depositResult, stealthWallet, wallet.address]);
+  }, [commitment, depositResult, stealthWallet, wallet.address, ensureTree]);
 
   // ── Step 6: Withdraw ──
   const withdraw = useCallback(async () => {
     if (!proofResult || !stealthWallet || !wallet.address || !commitment) return;
-    setWithdrawStep({ status: "loading", message: "Building withdraw transaction..." });
+    setWithdrawStep({ status: "loading", message: "Packing proof + building tx..." });
     try {
+      const proofBytes = uint8ArrayToBase64(convertProofToBytes(proofResult.proof));
+      const publicInputsBytes = uint8ArrayToBase64(
+        convertPublicInputsToBytes(proofResult.publicSignals),
+      );
+
       const { transaction } = await apiPost("/mixer/withdraw", {
         signer: wallet.address,
         recipient: stealthWallet.publicKey,
-        proofBytes: proofResult.proofBytes,
-        publicInputsBytes: proofResult.publicInputsBytes,
-        nullifierHash: commitment.nullifierHash,
+        proofBytes,
+        publicInputsBytes,
+        nullifierHash: commitment.nullifierHash.toString(),
       });
       setWithdrawStep({ status: "loading", message: "Sign the withdrawal in your wallet..." });
       const sig = await signAndSend(transaction);
@@ -245,11 +350,10 @@ export function MixerTestPage() {
           Wallet: {wallet.address?.slice(0, 8)}...{wallet.address?.slice(-4)}
         </p>
         <p className="text-xs text-muted-foreground">
-          Flow: Your Wallet → Mixer Pool → ZK Proof → Stealth Wallet
+          All secrets, stealth keys, and proofs are generated in your browser.
         </p>
       </div>
 
-      {/* Pool Status */}
       <StepCard
         number={0}
         title="Check Pool Status"
@@ -257,8 +361,6 @@ export function MixerTestPage() {
         onAction={checkStatus}
         actionLabel="Check Status"
       />
-
-      {/* Initialize */}
       <StepCard
         number={1}
         title="Initialize Pool (one-time)"
@@ -267,18 +369,14 @@ export function MixerTestPage() {
         onAction={initializePool}
         actionLabel="Initialize Pool"
       />
-
-      {/* Generate Commitment */}
       <StepCard
         number={2}
-        title="Generate Commitment"
-        description="Creates secret + nullifier → commitment hash"
+        title="Generate Commitment (browser)"
+        description="secret + nullifier → commitment hash, in your browser"
         state={commitmentStep}
         onAction={genCommitment}
         actionLabel="Generate"
       />
-
-      {/* Deposit */}
       <StepCard
         number={3}
         title="Deposit 0.01 SOL"
@@ -288,30 +386,24 @@ export function MixerTestPage() {
         actionLabel="Deposit"
         disabled={!commitment}
       />
-
-      {/* Stealth Wallet */}
       <StepCard
         number={4}
-        title="Generate Stealth Wallet"
-        description="Creates a random wallet with no link to yours"
+        title="Generate Stealth Wallet (browser)"
+        description="Random ed25519 keypair, kept entirely in browser memory"
         state={stealthStep}
         onAction={genStealth}
         actionLabel="Generate Stealth"
         disabled={depositStep.status !== "success"}
       />
-
-      {/* Generate Proof */}
       <StepCard
         number={5}
-        title="Generate ZK Proof"
-        description="Proves you deposited without revealing which deposit is yours"
+        title="Generate ZK Proof (browser)"
+        description="snarkjs.groth16.fullProve runs locally — secrets never leave"
         state={proveStep}
         onAction={genProof}
         actionLabel="Generate Proof"
         disabled={!stealthWallet || depositStep.status !== "success"}
       />
-
-      {/* Withdraw */}
       <StepCard
         number={6}
         title="Withdraw to Stealth Wallet"
@@ -322,13 +414,14 @@ export function MixerTestPage() {
         disabled={!proofResult}
       />
 
-      {/* Result */}
       {withdrawStep.status === "success" && stealthWallet && (
         <div className="border border-primary/30 bg-primary/5 rounded-lg p-4 space-y-2">
           <h3 className="font-bold text-primary">Flow Complete!</h3>
           <p className="text-sm">Your SOL has been privately transferred to a stealth wallet.</p>
           <div className="text-xs text-muted-foreground space-y-1">
-            <p>Stealth address: <code className="text-foreground">{stealthWallet.publicKey}</code></p>
+            <p>
+              Stealth address: <code className="text-foreground">{stealthWallet.publicKey}</code>
+            </p>
             <p>
               <a
                 href={`https://explorer.solana.com/address/${stealthWallet.publicKey}?cluster=devnet`}
