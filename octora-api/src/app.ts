@@ -13,6 +13,7 @@ import { registerDlmmRoutes } from '#modules/dlmm/dlmm.routes'
 import { createPrismaWaitlistRepository, type WaitlistRepository } from '#modules/waitlist/waitlist.repository'
 import { registerWaitlistRoutes } from '#modules/waitlist/waitlist.routes'
 import { registerMixerRoutes } from '#modules/mixer/mixer.routes'
+import { registerExecutorRoutes } from '#modules/executor/executor.routes'
 import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
 
 export interface AppRepositories {
@@ -77,6 +78,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   app.register(registerDlmmRoutes)
   app.register(registerWaitlistRoutes, { waitlistRepo: repos.waitlistRepo })
   app.register(registerMixerRoutes)
+  app.register(registerExecutorRoutes)
 
   return app
 }

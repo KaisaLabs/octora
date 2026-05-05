@@ -16,6 +16,11 @@ import NotFound from "./pages/NotFound.tsx";
 const MixerTestPage = lazy(() =>
   import("./pages/MixerTestPage").then((m) => ({ default: m.MixerTestPage })),
 );
+// Same crypto bundle as MixerTestPage, plus the executor IDL — also heavy,
+// also dev-only.
+const IntegratedTestPage = lazy(() =>
+  import("./pages/IntegratedTestPage").then((m) => ({ default: m.IntegratedTestPage })),
+);
 import type { Pool } from "@/components/octora/types";
 import { listPools, mapPoolSummary } from "@/lib/api";
 import { portfolioActivity, portfolioPositions } from "@/data/octora";
@@ -74,6 +79,20 @@ function AppRoutes() {
             }
           >
             <MixerTestPage />
+          </Suspense>
+        }
+      />
+      <Route
+        path="integrated-test"
+        element={
+          <Suspense
+            fallback={
+              <div className="min-h-screen flex items-center justify-center text-sm text-muted-foreground">
+                Loading integrated test…
+              </div>
+            }
+          >
+            <IntegratedTestPage />
           </Suspense>
         }
       />
