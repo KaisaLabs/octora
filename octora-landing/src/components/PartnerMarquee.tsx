@@ -36,7 +36,7 @@ export function PartnerMarquee() {
         ))}
       </div>
 
-      {*/Supporters — uncomment when community confirms*/}
+      {/*Supporters — uncomment when community confirms*/}
       <div className="mx-auto mt-20 max-w-2xl px-6 text-center">
         <p className="text-xs uppercase tracking-[0.22em] text-emerald-400/50">
           Backed By
