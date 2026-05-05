@@ -1,0 +1,436 @@
+{
+  "address": "86zj6EvHxMywP4Bw4EyZ2VcAjLm1pfGsc6ZjsZbrWwwc",
+  "metadata": {
+    "name": "octora_executor",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "On-chain executor that wraps Meteora DLMM via CPI on behalf of stealth wallets"
+  },
+  "instructions": [
+    {
+      "name": "add_liquidity",
+      "docs": [
+        "Add liquidity to a previously-initialised DLMM position. The stealth",
+        "wallet authorises; the PDA signs the inner Meteora CPI as position",
+        "owner.",
+        "",
+        "`liquidity_params` is the Borsh-encoded `LiquidityParameterByStrategy`",
+        "blob expected by DLMM. We forward bytes verbatim to stay decoupled",
+        "from Meteora's strategy enum."
+      ],
+      "discriminator": [
+        181,
+        157,
+        89,
+        67,
+        143,
+        182,
+        52,
+        72
+      ],
+      "accounts": [
+        {
+          "name": "stealth",
+          "docs": [
+            "Stealth wallet authorising the deposit. Outer signer only."
+          ],
+          "signer": true
+        },
+        {
+          "name": "position_authority",
+          "docs": [
+            "PDA that owns the Meteora position. Must already exist (created via",
+            "`init_position`).",
+            "",
+            "`seeds` re-derives the address from the stealth signer, so the only",
+            "way to land on this PDA is to sign with the wallet it was created",
+            "for. The explicit `constraint` is belt-and-braces: even if a future",
+            "change adds an index byte to the seeds, the on-account",
+            "`stealth_pubkey` field still has to match."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stealth"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dlmm_program",
+          "docs": [
+            "The DLMM program — verified by program ID."
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "liquidity_params",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "claim_fees",
+      "docs": [
+        "Claim accrued swap fees on the position into ATAs whose owner is",
+        "pinned to `PositionAuthority.exit_recipient`."
+      ],
+      "discriminator": [
+        82,
+        251,
+        233,
+        156,
+        12,
+        52,
+        184,
+        202
+      ],
+      "accounts": [
+        {
+          "name": "stealth",
+          "docs": [
+            "Stealth wallet authorising the claim. Outer signer only."
+          ],
+          "signer": true
+        },
+        {
+          "name": "position_authority",
+          "docs": [
+            "PDA that owns the Meteora position. Position + lb_pair + exit_recipient",
+            "are read from here and enforced against the forwarded accounts."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stealth"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dlmm_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "init_position",
+      "docs": [
+        "Initialise a Meteora DLMM position owned by a `PositionAuthority` PDA",
+        "derived from the stealth wallet. Forwards account list to DLMM's",
+        "`initialize_position` ix."
+      ],
+      "discriminator": [
+        197,
+        20,
+        10,
+        1,
+        97,
+        160,
+        177,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "stealth",
+          "docs": [
+            "The stealth wallet that authorises this position. It is the outer",
+            "signer; it does NOT sign the inner DLMM CPI — the PDA does."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "position_authority",
+          "docs": [
+            "PDA created here. Owns the Meteora position from DLMM's perspective."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stealth"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dlmm_program",
+          "docs": [
+            "The Meteora DLMM program. Verified against `DLMM_PROGRAM_ID`."
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "lower_bin_id",
+          "type": "i32"
+        },
+        {
+          "name": "width",
+          "type": "i32"
+        },
+        {
+          "name": "exit_recipient",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "withdraw_close",
+      "docs": [
+        "Remove `bps_to_remove` basis points of liquidity from the inclusive",
+        "bin range `[from_bin_id, to_bin_id]` and close the position. Tokens",
+        "flow to ATAs constrained to `exit_recipient`; the position rent",
+        "rebate goes to the same address."
+      ],
+      "discriminator": [
+        84,
+        247,
+        1,
+        99,
+        135,
+        143,
+        165,
+        105
+      ],
+      "accounts": [
+        {
+          "name": "stealth",
+          "signer": true
+        },
+        {
+          "name": "position_authority",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stealth"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dlmm_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "from_bin_id",
+          "type": "i32"
+        },
+        {
+          "name": "to_bin_id",
+          "type": "i32"
+        },
+        {
+          "name": "bps_to_remove",
+          "type": "u16"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "PositionAuthority",
+      "discriminator": [
+        14,
+        241,
+        184,
+        186,
+        212,
+        213,
+        96,
+        192
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "DlmmProgramMismatch",
+      "msg": "DLMM program account does not match the configured program ID"
+    },
+    {
+      "code": 6001,
+      "name": "PositionMismatch",
+      "msg": "Position account passed in does not match PositionAuthority.position"
+    },
+    {
+      "code": 6002,
+      "name": "LbPairMismatch",
+      "msg": "LB pair account passed in does not match PositionAuthority.lb_pair"
+    },
+    {
+      "code": 6003,
+      "name": "StealthMismatch",
+      "msg": "Stealth signer does not match PositionAuthority.stealth_pubkey"
+    },
+    {
+      "code": 6004,
+      "name": "ExitRecipientMismatch",
+      "msg": "Token account owner does not match PositionAuthority.exit_recipient"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidTokenAccount",
+      "msg": "Failed to deserialize SPL token account"
+    }
+  ],
+  "types": [
+    {
+      "name": "PositionAuthority",
+      "docs": [
+        "PDA that owns a Meteora DLMM position on behalf of a stealth wallet.",
+        "",
+        "The PDA is the position's `owner` field as far as Meteora is concerned;",
+        "only this program can sign for it, and only when the outer instruction",
+        "is signed by the matching `stealth_pubkey`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "stealth_pubkey",
+            "docs": [
+              "Stealth wallet that authorises actions against this position."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "lb_pair",
+            "docs": [
+              "Meteora `LbPair` this position is opened against."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "position",
+            "docs": [
+              "Meteora `Position` account owned by this PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "exit_recipient",
+            "docs": [
+              "Where claim/withdraw outflows are allowed to land. Set at init and",
+              "immutable afterwards: every `claim_fees` and `withdraw_close` checks",
+              "that the destination ATAs (and rent receiver) resolve to this owner,",
+              "so a leaked stealth key still can't redirect funds elsewhere."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump for `[POSITION_AUTHORITY_SEED, stealth_pubkey]`."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -13,6 +13,7 @@ import { registerDlmmRoutes } from '#modules/dlmm/dlmm.routes'
 import { createPrismaWaitlistRepository, type WaitlistRepository } from '#modules/waitlist/waitlist.repository'
 import { registerWaitlistRoutes } from '#modules/waitlist/waitlist.routes'
 import { registerMixerRoutes } from '#modules/mixer/mixer.routes'
+import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
 
 export interface AppRepositories {
   positionRepo: PositionRepository
@@ -66,8 +67,13 @@ export async function createApp(options: CreateAppOptions = {}) {
     routePrefix: '/docs',
   })
 
+  // Pick the MeteoraExecutor implementation up-front so we can hand the
+  // same instance to every position route. Default = mock; switching to
+  // the on-chain executor is a single env flag (OCTORA_USE_ONCHAIN_EXECUTOR).
+  const meteoraExecutor = createMeteoraExecutorFromConfig(config)
+
   app.get('/health', async () => ({ ok: true }))
-  app.register(registerPositionRoutes, repos)
+  app.register(registerPositionRoutes, { ...repos, meteoraExecutor })
   app.register(registerDlmmRoutes)
   app.register(registerWaitlistRoutes, { waitlistRepo: repos.waitlistRepo })
   app.register(registerMixerRoutes)
