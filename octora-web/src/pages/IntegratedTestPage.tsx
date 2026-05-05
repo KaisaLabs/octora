@@ -104,6 +104,27 @@ async function apiGet(path: string) {
   return res.json();
 }
 
+/**
+ * Best-effort error → string. Wallet adapters (Phantom, Solflare) often throw
+ * `WalletSignTransactionError("Unexpected error")` whose `.cause` carries the
+ * actual `SendTransactionError` with logs. Pull whatever we can find and
+ * dump the rest to the console so the dev tools have full detail.
+ */
+function describeError(err: unknown): string {
+  // Always log the raw object — the cheapest way to get full context in DevTools.
+  // eslint-disable-next-line no-console
+  console.error("integrated-test error:", err);
+
+  if (err instanceof Error) {
+    const cause = (err as { cause?: unknown }).cause;
+    const logs = (err as { logs?: unknown }).logs ?? (cause as { logs?: unknown })?.logs;
+    const causeMsg = cause instanceof Error ? cause.message : undefined;
+    const logTail = Array.isArray(logs) ? `\n${(logs as string[]).slice(-6).join("\n")}` : "";
+    return [err.message, causeMsg].filter(Boolean).join(" / ") + logTail;
+  }
+  return String(err);
+}
+
 /** Sign + send a base64 tx with the user's wallet only. */
 async function signAndSendUser(txBase64: string): Promise<string> {
   const provider = (window as any).solana;
@@ -135,10 +156,12 @@ async function signAndSendStealth(opts: {
   const connection = new Connection(RPC_URL, "confirmed");
   const tx = Transaction.from(Uint8Array.from(atob(opts.txBase64), (c) => c.charCodeAt(0)));
 
-  // Server set a recentBlockhash but it may be stale by the time we sign;
-  // refresh so we don't burn a wallet prompt on a "Blockhash not found".
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-  tx.recentBlockhash = blockhash;
+  // DO NOT refresh `tx.recentBlockhash` here. The server has already
+  // partial-signed as fee payer over the original blockhash; rewriting it
+  // would invalidate that signature and Phantom would reject the tx during
+  // pre-sim with a generic "Unexpected error". Devnet blockhashes are valid
+  // for ~60s, plenty of time for the user to confirm in their wallet.
+  const blockhash = tx.recentBlockhash!;
 
   // Stealth signs first — anything in browser memory should sign before we
   // hand off to the wallet adapter (a wallet prompt is the riskiest step
@@ -159,7 +182,7 @@ async function signAndSendStealth(opts: {
     skipPreflight: false,
     preflightCommitment: "confirmed",
   });
-  await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
+  await connection.confirmTransaction({ signature: sig, blockhash }, "confirmed");
   return sig;
 }
 
@@ -244,7 +267,7 @@ export function IntegratedTestPage() {
       const data = await apiGet("/mixer/status");
       setPoolStatus({ status: "success", data });
     } catch (err) {
-      setPoolStatus({ status: "error", message: (err as Error).message });
+      setPoolStatus({ status: "error", message: describeError(err) });
     }
   }, []);
 
@@ -259,7 +282,7 @@ export function IntegratedTestPage() {
       const sig = await signAndSendUser(transaction);
       setInitStep({ status: "success", message: "Pool initialized.", data: { poolAddress, signature: sig } });
     } catch (err) {
-      setInitStep({ status: "error", message: (err as Error).message });
+      setInitStep({ status: "error", message: describeError(err) });
     }
   }, [wallet.address]);
 
@@ -273,7 +296,7 @@ export function IntegratedTestPage() {
         data: { commitment: c.commitment.toString(), nullifierHash: c.nullifierHash.toString() },
       });
     } catch (err) {
-      setCommitmentStep({ status: "error", message: (err as Error).message });
+      setCommitmentStep({ status: "error", message: describeError(err) });
     }
   }, []);
 
@@ -299,7 +322,7 @@ export function IntegratedTestPage() {
       setDepositResult({ leafIndex, signature: sig });
       setDepositStep({ status: "success", data: { signature: sig, leafIndex } });
     } catch (err) {
-      setDepositStep({ status: "error", message: (err as Error).message });
+      setDepositStep({ status: "error", message: describeError(err) });
     }
   }, [wallet.address, commitment, ensureTree]);
 
@@ -310,7 +333,7 @@ export function IntegratedTestPage() {
       setStealthWallet(w);
       setStealthStep({ status: "success", data: { publicKey: w.publicKey } });
     } catch (err) {
-      setStealthStep({ status: "error", message: (err as Error).message });
+      setStealthStep({ status: "error", message: describeError(err) });
     }
   }, []);
 
@@ -333,7 +356,7 @@ export function IntegratedTestPage() {
       setProofResult(result);
       setProveStep({ status: "success", data: { publicSignals: result.publicSignals } });
     } catch (err) {
-      setProveStep({ status: "error", message: (err as Error).message });
+      setProveStep({ status: "error", message: describeError(err) });
     }
   }, [commitment, depositResult, stealthWallet, wallet.address, ensureTree]);
 
@@ -352,7 +375,7 @@ export function IntegratedTestPage() {
       const sig = await signAndSendUser(transaction);
       setWithdrawStep({ status: "success", data: { signature: sig } });
     } catch (err) {
-      setWithdrawStep({ status: "error", message: (err as Error).message });
+      setWithdrawStep({ status: "error", message: describeError(err) });
     }
   }, [proofResult, stealthWallet, wallet.address, commitment]);
 
@@ -375,7 +398,7 @@ export function IntegratedTestPage() {
         setPairConfig(config);
         setSetupPairStep({ status: "success", data: config });
       } catch (err) {
-        setSetupPairStep({ status: "error", message: (err as Error).message });
+        setSetupPairStep({ status: "error", message: describeError(err) });
       }
       return;
     }
@@ -389,7 +412,7 @@ export function IntegratedTestPage() {
       setPairConfig(config);
       setSetupPairStep({ status: "success", data: config });
     } catch (err) {
-      setSetupPairStep({ status: "error", message: (err as Error).message });
+      setSetupPairStep({ status: "error", message: describeError(err) });
     }
   }, [poolSource, selectedPoolAddress]);
 
@@ -404,7 +427,7 @@ export function IntegratedTestPage() {
     } catch (err) {
       setSetupPairStep({
         status: "error",
-        message: `Failed to load devnet pools: ${(err as Error).message}`,
+        message: `Failed to load devnet pools: ${describeError(err)}`,
       });
     }
   }, []);
@@ -426,7 +449,7 @@ export function IntegratedTestPage() {
         data: result,
       });
     } catch (err) {
-      setMintTokensStep({ status: "error", message: (err as Error).message });
+      setMintTokensStep({ status: "error", message: describeError(err) });
     }
   }, [pairConfig, wallet.address]);
 
@@ -451,7 +474,7 @@ export function IntegratedTestPage() {
         data: { signature: sig, positionPubkey },
       });
     } catch (err) {
-      setInitPositionStep({ status: "error", message: (err as Error).message });
+      setInitPositionStep({ status: "error", message: describeError(err) });
     }
   }, [pairConfig, stealthWallet, wallet.address]);
 
@@ -474,7 +497,7 @@ export function IntegratedTestPage() {
       });
       setAddLiquidityStep({ status: "success", data: { signature: sig } });
     } catch (err) {
-      setAddLiquidityStep({ status: "error", message: (err as Error).message });
+      setAddLiquidityStep({ status: "error", message: describeError(err) });
     }
   }, [pairConfig, stealthWallet, wallet.address]);
 
@@ -491,7 +514,7 @@ export function IntegratedTestPage() {
       const sig = await signAndSendStealth({ txBase64: transaction, stealth: stealthWallet });
       setWithdrawCloseStep({ status: "success", data: { signature: sig } });
     } catch (err) {
-      setWithdrawCloseStep({ status: "error", message: (err as Error).message });
+      setWithdrawCloseStep({ status: "error", message: describeError(err) });
     }
   }, [pairConfig, stealthWallet, wallet.address]);
 
@@ -671,16 +694,25 @@ export function IntegratedTestPage() {
         }
       />
       <StepCard
-        number={10} title="Add Liquidity (your wallet + stealth co-sign)"
-        description="100 X + 100 Y escrowed via PDA ATA, then deposited into the position"
+        number={10}
+        title="Add Liquidity (your wallet + stealth co-sign)"
+        description={
+          poolSource === "fresh"
+            ? "100 X + 100 Y escrowed via PDA ATA, then deposited into the position"
+            : "Disabled in pick-pool mode: needs balance in both pool mints. Devnet test tokens (e.g. LEGO) have no faucet, and SOL must be pre-wrapped into wSOL. Switch to 'Create fresh' to exercise this path."
+        }
         state={addLiquidityStep} onAction={addLiquidity} actionLabel="Add Liquidity"
-        disabled={!positionPubkey}
+        disabled={!positionPubkey || poolSource !== "fresh"}
       />
       <StepCard
         number={11} title="Withdraw Close (stealth signs)"
-        description="Tokens flow back to your wallet (exit_recipient) and the position closes"
+        description={
+          poolSource === "fresh"
+            ? "Tokens flow back to your wallet (exit_recipient) and the position closes"
+            : "Skip in pick-pool mode (no liquidity was added). Position can be closed by add_liquidity → withdraw_close in 'Create fresh' mode instead."
+        }
         state={withdrawCloseStep} onAction={withdrawClose} actionLabel="Withdraw + Close"
-        disabled={addLiquidityStep.status !== "success"}
+        disabled={addLiquidityStep.status !== "success" || poolSource !== "fresh"}
       />
 
       {withdrawCloseStep.status === "success" && stealthWallet && (

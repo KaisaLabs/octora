@@ -274,6 +274,11 @@
       "accounts": [
         {
           "name": "stealth",
+          "docs": [
+            "Mut so Anchor can rebate the PositionAuthority's rent here when we",
+            "`close = stealth` it below."
+          ],
+          "writable": true,
           "signer": true
         },
         {

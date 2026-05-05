@@ -416,7 +416,9 @@ describe("octora-executor :: happy path lifecycle (fresh local LB pair)", () => 
       { pubkey: exitRecipient, isSigner: false, isWritable: true },             // 16 rent_receiver
     ];
     const accounts: AccountMeta[] = [
-      { pubkey: stealth.publicKey, isSigner: true, isWritable: false },
+      // stealth is mut now: it receives the PositionAuthority's rent rebate
+      // when the program closes the PDA at the end of withdraw_close.
+      { pubkey: stealth.publicKey, isSigner: true, isWritable: true },
       { pubkey: positionAuthority, isSigner: false, isWritable: true },
       { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },
       ...dlmmAccounts,
@@ -438,5 +440,10 @@ describe("octora-executor :: happy path lifecycle (fresh local LB pair)", () => 
     // Position account should be closed (zero lamports = collected).
     const positionInfo = await connection.getAccountInfo(positionKeypair.publicKey);
     expect(positionInfo, "position account closed").to.be.null;
+
+    // PositionAuthority PDA is also closed now (Anchor `close = stealth`).
+    // Address is freed up so the same stealth can init another position.
+    const paInfo = await connection.getAccountInfo(positionAuthority);
+    expect(paInfo, "PositionAuthority closed").to.be.null;
   });
 });

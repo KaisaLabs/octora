@@ -36,16 +36,23 @@ use crate::state::PositionAuthority;
 ///   16. rent_receiver            (writable)               — close only; must == exit_recipient
 #[derive(Accounts)]
 pub struct WithdrawClose<'info> {
+    /// Mut so Anchor can rebate the PositionAuthority's rent here when we
+    /// `close = stealth` it below.
+    #[account(mut)]
     pub stealth: Signer<'info>,
 
     #[account(
-        mut, // close_position credits SOL rebate to rent_receiver via DLMM, but
-             // PositionAuthority itself stays alive across this ix; mut here is
-             // belt-and-braces so any future bookkeeping write doesn't ABI-break.
+        mut,
         seeds = [POSITION_AUTHORITY_SEED, stealth.key().as_ref()],
         bump = position_authority.bump,
         constraint = position_authority.stealth_pubkey == stealth.key()
             @ ExecutorError::StealthMismatch,
+        // Closing the PDA on the way out frees its address so the same
+        // stealth can be re-used for another position. Also avoids the
+        // stale-`position` field problem: after withdraw_close the DLMM
+        // position is gone, so an alive PA pointing at it would be a
+        // tripping hazard for any later claim_fees / withdraw_close call.
+        close = stealth,
     )]
     pub position_authority: Account<'info, PositionAuthority>,
 

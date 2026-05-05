@@ -316,7 +316,9 @@ describe("octora-executor :: lifecycle (security boundary)", () => {
     ];
 
     const accounts: AccountMeta[] = [
-      { pubkey: stealth.publicKey, isSigner: true, isWritable: false },
+      // stealth is mut: it receives the PositionAuthority rent rebate on
+      // successful withdraw_close (Anchor `close = stealth`).
+      { pubkey: stealth.publicKey, isSigner: true, isWritable: true },
       { pubkey: positionAuthority, isSigner: false, isWritable: true },
       { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },
       ...dlmmAccounts,

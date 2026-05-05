@@ -4,7 +4,11 @@ import { createMixerController } from "./mixer.controller.js";
 import { makeRateLimiter } from "./rate-limit.js";
 
 const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
-const DENOMINATION = BigInt(process.env.MIXER_DENOMINATION || "20000000"); // 0.02 SOL
+// 0.025 SOL. Bumped from 0.02 because the old default's mixer_pool PDA on
+// devnet was initialised by a pre-`filled_subtrees` build of the program,
+// so Anchor can't deserialize it against the current MixerPool layout.
+// A new denomination → new PDA → fresh account, no migration needed.
+const DENOMINATION = BigInt(process.env.MIXER_DENOMINATION || "25000000");
 
 // Rate-limit ceilings — chosen to allow normal interactive use of the test
 // page (a few clicks per minute) while bounding what an abusive client can
