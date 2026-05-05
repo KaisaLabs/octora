@@ -1,10 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import postgres from "postgres";
-import { Resend } from "resend";
-
-const sql = postgres(process.env.DATABASE_URL!, { ssl: "require" });
-const resend = new Resend(process.env.RESEND_API_KEY);
-const FROM_ADDRESS = process.env.EMAIL_FROM ?? "Octora <onboarding@resend.dev>";
+import { FROM_ADDRESS, getResend, getSql, MissingEnvError } from "./_lib/clients";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
@@ -17,13 +12,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: "Invalid email" });
   }
 
-  // Check if already on waitlist
+  let sql, resend;
+  try {
+    sql = getSql();
+    resend = getResend();
+  } catch (err) {
+    if (err instanceof MissingEnvError) {
+      return res.status(500).json({ error: err.message });
+    }
+    throw err;
+  }
+
   const existing = await sql`SELECT id FROM "Waitlist" WHERE email = ${email}`;
   if (existing.length > 0) {
     return res.status(409).json({ error: "Email already on waitlist" });
   }
 
-  // Insert into waitlist
   const [entry] = await sql`
     INSERT INTO "Waitlist" (id, email, source, "createdAt")
     VALUES (gen_random_uuid(), ${email}, ${source ?? null}, NOW())

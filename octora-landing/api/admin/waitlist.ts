@@ -1,12 +1,20 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import postgres from "postgres";
+import { getSql, MissingEnvError } from "../_lib/clients";
 import { requireAdmin } from "../_lib/admin-auth";
-
-const sql = postgres(process.env.DATABASE_URL!, { ssl: "require" });
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
   if (!(await requireAdmin(req, res))) return;
+
+  let sql;
+  try {
+    sql = getSql();
+  } catch (err) {
+    if (err instanceof MissingEnvError) {
+      return res.status(500).json({ error: err.message });
+    }
+    throw err;
+  }
 
   const limit = Math.min(Number(req.query.limit ?? 100), 500);
   const offset = Math.max(Number(req.query.offset ?? 0), 0);

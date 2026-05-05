@@ -1,19 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { createClient } from "@supabase/supabase-js";
-
-const SUPABASE_URL =
-  process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
-const SUPABASE_ANON_KEY =
-  process.env.SUPABASE_ANON_KEY ?? process.env.VITE_SUPABASE_ANON_KEY ?? "";
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
-
-const allowed = (process.env.ADMIN_EMAILS ?? "")
-  .split(",")
-  .map((e) => e.trim().toLowerCase())
-  .filter(Boolean);
+import { getSupabase, MissingEnvError } from "./clients";
 
 export type AdminUser = { id: string; email: string };
 
@@ -21,10 +7,21 @@ export async function requireAdmin(
   req: VercelRequest,
   res: VercelResponse,
 ): Promise<AdminUser | null> {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    res.status(500).json({ error: "Supabase env not configured" });
-    return null;
+  let supabase;
+  try {
+    supabase = getSupabase();
+  } catch (err) {
+    if (err instanceof MissingEnvError) {
+      res.status(500).json({ error: err.message });
+      return null;
+    }
+    throw err;
   }
+
+  const allowed = (process.env.ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
 
   const header = req.headers.authorization ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
