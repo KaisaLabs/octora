@@ -40,7 +40,11 @@ import {
 } from "@/lib/mixer";
 
 const API = import.meta.env.VITE_API_URL ?? "/api";
-const RPC_URL = "http://localhost:8899";
+// Default to devnet so the page works against deployed programs without
+// running a local validator. Override with VITE_RPC_URL=http://localhost:8899
+// when developing against a localnet.
+const RPC_URL =
+  import.meta.env.VITE_RPC_URL ?? "https://api.devnet.solana.com";
 
 interface StepState {
   status: "idle" | "loading" | "success" | "error";
@@ -67,12 +71,29 @@ interface TestPairConfig {
   baseFactor: number;
 }
 
+interface DevnetPool {
+  address: string;
+  name: string;
+  mintX: string;
+  mintY: string;
+  binStep: number;
+  currentPrice: number;
+  reserveXAmount: number;
+  reserveYAmount: number;
+  liquidity: string;
+  isVerified: boolean;
+}
+
 async function apiPost(path: string, body?: unknown) {
-  const res = await fetch(`${API}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  // Fastify with the JSON content-type parser rejects POSTs that declare
+  // application/json but ship an empty body (FST_ERR_CTP_EMPTY_JSON_BODY).
+  // Only set the header when we actually have a body to send.
+  const init: RequestInit = { method: "POST" };
+  if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(`${API}${path}`, init);
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
   return res.json();
 }
@@ -160,6 +181,11 @@ export function IntegratedTestPage() {
   const [initPositionStep, setInitPositionStep] = useState<StepState>({ status: "idle" });
   const [addLiquidityStep, setAddLiquidityStep] = useState<StepState>({ status: "idle" });
   const [withdrawCloseStep, setWithdrawCloseStep] = useState<StepState>({ status: "idle" });
+
+  // ── Pool source: fresh test pair vs existing devnet pool ──
+  const [poolSource, setPoolSource] = useState<"fresh" | "existing">("fresh");
+  const [devnetPools, setDevnetPools] = useState<DevnetPool[] | null>(null);
+  const [selectedPoolAddress, setSelectedPoolAddress] = useState<string>("");
 
   // ── Saved data ──
   const [commitment, setCommitment] = useState<Commitment | null>(null);
@@ -333,6 +359,27 @@ export function IntegratedTestPage() {
   // ═══════════════ Executor steps ═══════════════
 
   const setupPair = useCallback(async () => {
+    if (poolSource === "existing") {
+      if (!selectedPoolAddress) {
+        setSetupPairStep({ status: "error", message: "Pick a pool from the dropdown first." });
+        return;
+      }
+      setSetupPairStep({
+        status: "loading",
+        message: "Loading on-chain pool state + initialising bin arrays...",
+      });
+      try {
+        const config = (await apiPost("/executor/use-pool", {
+          lbPair: selectedPoolAddress,
+        })) as TestPairConfig;
+        setPairConfig(config);
+        setSetupPairStep({ status: "success", data: config });
+      } catch (err) {
+        setSetupPairStep({ status: "error", message: (err as Error).message });
+      }
+      return;
+    }
+
     setSetupPairStep({
       status: "loading",
       message: "Server creating mints + LB pair + bin arrays (~10s)...",
@@ -343,6 +390,22 @@ export function IntegratedTestPage() {
       setSetupPairStep({ status: "success", data: config });
     } catch (err) {
       setSetupPairStep({ status: "error", message: (err as Error).message });
+    }
+  }, [poolSource, selectedPoolAddress]);
+
+  const loadDevnetPools = useCallback(async () => {
+    try {
+      const { pools } = await apiGet("/executor/devnet-pools") as { pools: DevnetPool[] };
+      setDevnetPools(pools);
+      // Sensible default: first pool with non-zero reserves on both sides;
+      // otherwise the first pool. Keeps add_liquidity less likely to fail.
+      const liquid = pools.find((p) => p.reserveXAmount > 0 && p.reserveYAmount > 0);
+      setSelectedPoolAddress((liquid ?? pools[0])?.address ?? "");
+    } catch (err) {
+      setSetupPairStep({
+        status: "error",
+        message: `Failed to load devnet pools: ${(err as Error).message}`,
+      });
     }
   }, []);
 
@@ -508,23 +571,104 @@ export function IntegratedTestPage() {
         Phase 2 — Executor (DLMM via stealth)
       </div>
 
+      <div className="border border-border rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="font-medium">Pool source</h3>
+          <div className="flex gap-2 text-xs">
+            <button
+              onClick={() => setPoolSource("fresh")}
+              className={`px-3 py-1 rounded-md border ${
+                poolSource === "fresh"
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Create fresh
+            </button>
+            <button
+              onClick={() => {
+                setPoolSource("existing");
+                if (!devnetPools) void loadDevnetPools();
+              }}
+              className={`px-3 py-1 rounded-md border ${
+                poolSource === "existing"
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Pick devnet pool
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {poolSource === "fresh"
+            ? "Server creates two new SPL mints, a fresh LB pair, and the bin arrays — slow (~10s) but you control both sides."
+            : "Pick an existing pool from Meteora's devnet API. Init position works without funding; add_liquidity needs balance in both mints."}
+        </p>
+        {poolSource === "existing" && (
+          <div className="space-y-2">
+            {devnetPools === null ? (
+              <p className="text-xs text-muted-foreground">Loading pools…</p>
+            ) : devnetPools.length === 0 ? (
+              <p className="text-xs text-red-400">No pools returned by Meteora devnet API.</p>
+            ) : (
+              <select
+                value={selectedPoolAddress}
+                onChange={(e) => setSelectedPoolAddress(e.target.value)}
+                className="w-full bg-card border border-border rounded-md px-2 py-1.5 text-xs"
+              >
+                {devnetPools.map((p) => (
+                  <option key={p.address} value={p.address}>
+                    {p.name} • binStep {p.binStep} •{" "}
+                    {p.reserveXAmount > 0 && p.reserveYAmount > 0 ? "liquid" : "empty"} •{" "}
+                    {p.address.slice(0, 8)}…
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              onClick={loadDevnetPools}
+              className="text-xs text-primary hover:underline"
+            >
+              Refresh pool list
+            </button>
+          </div>
+        )}
+      </div>
+
       <StepCard
-        number={7} title="Setup Test LB Pair (server admin)"
-        description="Server creates 2 SPL mints + DLMM LB pair + bin arrays"
-        state={setupPairStep} onAction={setupPair} actionLabel="Setup Pair"
-        disabled={withdrawStep.status !== "success"}
+        number={7}
+        title={poolSource === "fresh" ? "Setup Test LB Pair (server admin)" : "Use Selected Devnet Pool"}
+        description={
+          poolSource === "fresh"
+            ? "Server creates 2 SPL mints + DLMM LB pair + bin arrays"
+            : "Reads on-chain pool state, initialises bin arrays around active bin"
+        }
+        state={setupPairStep} onAction={setupPair} actionLabel={poolSource === "fresh" ? "Setup Pair" : "Use Pool"}
+        disabled={withdrawStep.status !== "success" || (poolSource === "existing" && !selectedPoolAddress)}
       />
       <StepCard
-        number={8} title="Mint Test Tokens to Your Wallet"
-        description="1k of each test token, used as add_liquidity input"
+        number={8}
+        title="Mint Test Tokens to Your Wallet"
+        description={
+          poolSource === "fresh"
+            ? "1k of each test token, used as add_liquidity input"
+            : "Server is the mint authority only for fresh pairs. For an existing devnet pool, you'll need to fund the two mints yourself (or skip add_liquidity)."
+        }
         state={mintTokensStep} onAction={mintTokens} actionLabel="Mint"
-        disabled={!pairConfig}
+        disabled={!pairConfig || poolSource !== "fresh"}
       />
       <StepCard
         number={9} title="Init Position (stealth signs via executor)"
         description="Creates a DLMM position whose owner is the PositionAuthority PDA"
         state={initPositionStep} onAction={initPosition} actionLabel="Init Position"
-        disabled={!pairConfig || !stealthWallet || mintTokensStep.status !== "success"}
+        disabled={
+          !pairConfig ||
+          !stealthWallet ||
+          // For fresh pairs we wait for the mint step; for existing pools
+          // there's nothing to mint, so the pair config alone is enough.
+          (poolSource === "fresh" && mintTokensStep.status !== "success")
+        }
       />
       <StepCard
         number={10} title="Add Liquidity (your wallet + stealth co-sign)"

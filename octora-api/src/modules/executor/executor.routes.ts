@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { ExecutorService } from "./executor.service.js";
 import { createExecutorController } from "./executor.controller.js";
 
-const RPC_URL = process.env.SOLANA_RPC_URL || "http://localhost:8899";
+const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
 const EXECUTOR_PROGRAM_ID =
   process.env.OCTORA_EXECUTOR_PROGRAM_ID || "86zj6EvHxMywP4Bw4EyZ2VcAjLm1pfGsc6ZjsZbrWwwc";
 const RELAYER_KEYPAIR_PATH =
@@ -37,6 +37,8 @@ export async function registerExecutorRoutes(app: FastifyInstance) {
   app.post("/executor/add-liquidity-tx", { schema: { tags } }, controller.addLiquidityTx);
   app.post("/executor/withdraw-close-tx", { schema: { tags } }, controller.withdrawCloseTx);
   app.get("/executor/position-authority", { schema: { tags } }, controller.positionAuthority);
+  app.get("/executor/devnet-pools", { schema: { tags } }, controller.devnetPools);
+  app.post("/executor/use-pool", { schema: { tags } }, controller.usePool);
 }
 
 function loadKeypair(path: string): Keypair {

@@ -101,5 +101,50 @@ export function createExecutorController(executor: ExecutorService) {
       if (!result) return reply.status(404).send({ error: "PositionAuthority not initialised" });
       return reply.send(result);
     },
+
+    /**
+     * GET /executor/devnet-pools — proxies Meteora's devnet pool index so
+     * the browser can populate a "pick a pool" dropdown without dragging
+     * the SDK into the bundle. Returns a slimmed list (address, name,
+     * mints, bin_step, current_price, reserves) so payloads stay small.
+     */
+    async devnetPools(_req: FastifyRequest, reply: FastifyReply) {
+      const res = await fetch("https://dlmm-api.devnet.meteora.ag/pair/all");
+      if (!res.ok) {
+        return reply.status(502).send({ error: `Meteora devnet API ${res.status}` });
+      }
+      const all = (await res.json()) as Array<Record<string, unknown>>;
+      const slim = all.map((p) => ({
+        address: p.address,
+        name: p.name,
+        mintX: p.mint_x,
+        mintY: p.mint_y,
+        binStep: p.bin_step,
+        currentPrice: p.current_price,
+        reserveXAmount: p.reserve_x_amount,
+        reserveYAmount: p.reserve_y_amount,
+        liquidity: p.liquidity,
+        isVerified: p.is_verified,
+      }));
+      return reply.send({ pools: slim });
+    },
+
+    /** POST /executor/use-pool — body: { lbPair, width? } */
+    async usePool(
+      req: FastifyRequest<{ Body: { lbPair: string; width?: number } }>,
+      reply: FastifyReply,
+    ) {
+      try {
+        const config = await executor.useExistingPool({
+          lbPair: new PublicKey(req.body.lbPair),
+          width: req.body.width,
+        });
+        return reply.send(config);
+      } catch (err) {
+        return reply
+          .status(400)
+          .send({ error: err instanceof Error ? err.message : "use-pool failed" });
+      }
+    },
   };
 }

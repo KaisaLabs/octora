@@ -18,7 +18,8 @@ export function loadConfig(): AppConfig {
     databaseUrl: process.env.DATABASE_URL ?? "",
     frontendUrl: process.env.FRONTEND_URL ?? "*",
     useOnchainExecutor: process.env.OCTORA_USE_ONCHAIN_EXECUTOR === "true",
-    executorRpcUrl: process.env.OCTORA_EXECUTOR_RPC_URL ?? "http://127.0.0.1:8899",
+    executorRpcUrl:
+      process.env.OCTORA_EXECUTOR_RPC_URL ?? "https://api.devnet.solana.com",
     executorProgramId:
       process.env.OCTORA_EXECUTOR_PROGRAM_ID ??
       "86zj6EvHxMywP4Bw4EyZ2VcAjLm1pfGsc6ZjsZbrWwwc",

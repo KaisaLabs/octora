@@ -170,6 +170,69 @@ export class ExecutorService {
     };
   }
 
+  /**
+   * Use an EXISTING devnet LB pair (typically discovered via the Meteora
+   * devnet API). Reads on-chain state for tokenX/Y, picks a position range
+   * around the pool's current `activeId`, and initialises the two bin
+   * arrays our position will straddle if they don't already exist.
+   *
+   * Returns the same `TestPairConfig` shape `setupTestPair` does, so the
+   * rest of the flow doesn't have to care which path produced it.
+   */
+  async useExistingPool(args: {
+    lbPair: PublicKey;
+    /** Position width in bins. Defaults to 20. */
+    width?: number;
+  }): Promise<TestPairConfig> {
+    const width = args.width ?? 20;
+    const dlmm = await DLMM.create(this.connection, args.lbPair);
+
+    const tokenX = dlmm.lbPair.tokenXMint;
+    const tokenY = dlmm.lbPair.tokenYMint;
+    const activeBin = dlmm.lbPair.activeId;
+    const binStep = dlmm.lbPair.binStep;
+
+    // Centre the position on the pool's active bin so both bin arrays we
+    // initialise are likely to already exist (a hot pool keeps the
+    // active-bin's array warm).
+    const lowerBinId = activeBin - Math.floor(width / 2);
+    const upperBinId = lowerBinId + width - 1;
+
+    const lowerArrayIdx = binIdToBinArrayIndex(new BN(lowerBinId));
+    const upperArrayIdx = binIdToBinArrayIndex(new BN(upperBinId));
+    const uniqueArrayIdxs =
+      lowerArrayIdx.eq(upperArrayIdx) ? [lowerArrayIdx] : [lowerArrayIdx, upperArrayIdx];
+
+    const binArrayIxs = await dlmm.initializeBinArrays(uniqueArrayIdxs, this.relayer.publicKey);
+    if (binArrayIxs.length > 0) {
+      await this.provider.sendAndConfirm(
+        new Transaction().add(...binArrayIxs),
+        [this.relayer],
+      );
+    }
+
+    const [binArrayLower] = deriveBinArray(args.lbPair, lowerArrayIdx, DLMM_PROGRAM_ID);
+    const [binArrayUpper] = deriveBinArray(args.lbPair, upperArrayIdx, DLMM_PROGRAM_ID);
+
+    return {
+      tokenX: tokenX.toBase58(),
+      tokenY: tokenY.toBase58(),
+      lbPair: args.lbPair.toBase58(),
+      binArrayLower: binArrayLower.toBase58(),
+      binArrayUpper: binArrayUpper.toBase58(),
+      lowerBinId,
+      upperBinId,
+      width,
+      activeBin,
+      binStep,
+      // baseFactor isn't strictly needed once the pair exists, but we keep
+      // it on the config so the shape is identical to setupTestPair output.
+      // Real value isn't readable cheaply from the LB pair account alone;
+      // the consumer doesn't read it after pair creation, so 0 is safe.
+      baseFactor: 0,
+    };
+  }
+
   /** Mint test tokens to the given wallet's ATAs. Server signs with its mint authority. */
   async mintTestTokens(args: {
     owner: PublicKey;

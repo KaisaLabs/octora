@@ -3,7 +3,7 @@ import { MixerService } from "./mixer.service.js";
 import { createMixerController } from "./mixer.controller.js";
 import { makeRateLimiter } from "./rate-limit.js";
 
-const RPC_URL = process.env.SOLANA_RPC_URL || "http://localhost:8899";
+const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
 const DENOMINATION = BigInt(process.env.MIXER_DENOMINATION || "20000000"); // 0.02 SOL
 
 // Rate-limit ceilings — chosen to allow normal interactive use of the test

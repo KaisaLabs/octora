@@ -18,7 +18,9 @@ import {
 } from "@/lib/mixer";
 
 const API = import.meta.env.VITE_API_URL ?? "/api";
-const RPC_URL = "http://localhost:8899";
+// Default devnet — override with VITE_RPC_URL for localnet runs.
+const RPC_URL =
+  import.meta.env.VITE_RPC_URL ?? "https://api.devnet.solana.com";
 
 interface StepState {
   status: "idle" | "loading" | "success" | "error";
