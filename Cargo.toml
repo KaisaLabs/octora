@@ -1,5 +1,5 @@
 [workspace]
-members = ["programs/octora-mixer"]
+members = ["programs/octora-mixer", "programs/octora-executor"]
 resolver = "2"
 
 [profile.release]
