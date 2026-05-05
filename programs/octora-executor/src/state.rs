@@ -16,6 +16,12 @@ pub struct PositionAuthority {
     /// Meteora `Position` account owned by this PDA.
     pub position: Pubkey,
 
+    /// Where claim/withdraw outflows are allowed to land. Set at init and
+    /// immutable afterwards: every `claim_fees` and `withdraw_close` checks
+    /// that the destination ATAs (and rent receiver) resolve to this owner,
+    /// so a leaked stealth key still can't redirect funds elsewhere.
+    pub exit_recipient: Pubkey,
+
     /// PDA bump for `[POSITION_AUTHORITY_SEED, stealth_pubkey]`.
     pub bump: u8,
 }
@@ -25,5 +31,6 @@ impl PositionAuthority {
         + 32  // stealth_pubkey
         + 32  // lb_pair
         + 32  // position
+        + 32  // exit_recipient
         + 1;  // bump
 }

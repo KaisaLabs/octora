@@ -24,8 +24,9 @@ pub mod octora_executor {
         ctx: Context<'_, '_, '_, 'info, InitPosition<'info>>,
         lower_bin_id: i32,
         width: i32,
+        exit_recipient: Pubkey,
     ) -> Result<()> {
-        instructions::init_position::handler(ctx, lower_bin_id, width)
+        instructions::init_position::handler(ctx, lower_bin_id, width, exit_recipient)
     }
 
     /// Add liquidity to a previously-initialised DLMM position. The stealth
@@ -40,5 +41,26 @@ pub mod octora_executor {
         liquidity_params: Vec<u8>,
     ) -> Result<()> {
         instructions::add_liquidity::handler(ctx, liquidity_params)
+    }
+
+    /// Claim accrued swap fees on the position into ATAs whose owner is
+    /// pinned to `PositionAuthority.exit_recipient`.
+    pub fn claim_fees<'info>(
+        ctx: Context<'_, '_, '_, 'info, ClaimFees<'info>>,
+    ) -> Result<()> {
+        instructions::claim_fees::handler(ctx)
+    }
+
+    /// Remove `bps_to_remove` basis points of liquidity from the inclusive
+    /// bin range `[from_bin_id, to_bin_id]` and close the position. Tokens
+    /// flow to ATAs constrained to `exit_recipient`; the position rent
+    /// rebate goes to the same address.
+    pub fn withdraw_close<'info>(
+        ctx: Context<'_, '_, '_, 'info, WithdrawClose<'info>>,
+        from_bin_id: i32,
+        to_bin_id: i32,
+        bps_to_remove: u16,
+    ) -> Result<()> {
+        instructions::withdraw_close::handler(ctx, from_bin_id, to_bin_id, bps_to_remove)
     }
 }

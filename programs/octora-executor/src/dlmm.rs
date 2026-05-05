@@ -12,6 +12,23 @@
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{hash, instruction::Instruction, program::invoke_signed};
+use anchor_spl::token::spl_token::state::Account as SplTokenAccount;
+use anchor_lang::solana_program::program_pack::Pack;
+
+use crate::errors::ExecutorError;
+
+/// Verify that an SPL token account's `owner` matches `expected`. Used to
+/// pin claim/withdraw destinations to `PositionAuthority.exit_recipient`.
+pub fn require_token_account_owner(
+    token_account: &AccountInfo,
+    expected: &Pubkey,
+) -> Result<()> {
+    let data = token_account.try_borrow_data()?;
+    let parsed = SplTokenAccount::unpack(&data)
+        .map_err(|_| error!(ExecutorError::InvalidTokenAccount))?;
+    require_keys_eq!(parsed.owner, *expected, ExecutorError::ExitRecipientMismatch);
+    Ok(())
+}
 
 /// Compute an Anchor instruction discriminator: `sha256("global:<name>")[..8]`.
 pub fn anchor_discriminator(ix_name: &str) -> [u8; 8] {

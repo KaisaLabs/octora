@@ -52,6 +52,7 @@ pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, InitPosition<'info>>,
     lower_bin_id: i32,
     width: i32,
+    exit_recipient: Pubkey,
 ) -> Result<()> {
     require_keys_eq!(
         ctx.accounts.dlmm_program.key(),
@@ -78,6 +79,7 @@ pub fn handler<'info>(
     pa.stealth_pubkey = stealth_key;
     pa.lb_pair = lb_pair_account.key();
     pa.position = position_account.key();
+    pa.exit_recipient = exit_recipient;
     pa.bump = pa_bump;
 
     // Build the inner ix.

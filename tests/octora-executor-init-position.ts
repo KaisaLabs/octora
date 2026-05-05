@@ -94,18 +94,20 @@ describe("octora-executor :: init_position", () => {
   });
 
   it("creates PositionAuthority PDA and a DLMM-owned position via CPI", async () => {
-    // Args for DLMM `initialize_position`: (lower_bin_id: i32, width: i32).
-    // A small symmetric range is fine — we're testing the CPI plumbing,
-    // not strategy parameters.
+    // Args for our executor's `init_position`: (lower_bin_id: i32, width: i32,
+    // exit_recipient: Pubkey). We bind to the payer wallet here — Phase 2
+    // tests will exercise the exit_recipient enforcement on claim/withdraw.
     const lowerBinId = -10;
     const width = 20;
+    const exitRecipient = payer.publicKey;
 
     // Build the executor ix manually so we control `remaining_accounts`
     // ordering exactly as DLMM's `initialize_position` expects.
     const disc = await anchorDiscriminator("init_position");
-    const argsBuf = Buffer.alloc(8);
+    const argsBuf = Buffer.alloc(8 + 32);
     argsBuf.writeInt32LE(lowerBinId, 0);
     argsBuf.writeInt32LE(width, 4);
+    exitRecipient.toBuffer().copy(argsBuf, 8);
     const data = Buffer.concat([disc, argsBuf]);
 
     const dlmmAccounts: AccountMeta[] = [
@@ -148,6 +150,7 @@ describe("octora-executor :: init_position", () => {
     expect(pa.stealthPubkey.toBase58()).to.equal(stealth.publicKey.toBase58());
     expect(pa.lbPair.toBase58()).to.equal(LB_PAIR.toBase58());
     expect(pa.position.toBase58()).to.equal(positionKeypair.publicKey.toBase58());
+    expect(pa.exitRecipient.toBase58()).to.equal(exitRecipient.toBase58());
 
     // 2. The DLMM position account was created and is owned by DLMM.
     //    That's the smoke test for the CPI: if the CPI failed we'd never
@@ -166,9 +169,10 @@ describe("octora-executor :: init_position", () => {
     const secondPosition = Keypair.generate();
 
     const disc = await anchorDiscriminator("init_position");
-    const argsBuf = Buffer.alloc(8);
+    const argsBuf = Buffer.alloc(8 + 32);
     argsBuf.writeInt32LE(0, 0);
     argsBuf.writeInt32LE(10, 4);
+    payer.publicKey.toBuffer().copy(argsBuf, 8);
     const data = Buffer.concat([disc, argsBuf]);
 
     const dlmmAccounts: AccountMeta[] = [
