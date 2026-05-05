@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { FROM_ADDRESS, getResend, getSql, MissingEnvError } from "../_lib/clients";
-import { requireAdmin } from "../_lib/admin-auth";
+import { FROM_ADDRESS, getResend, getSql, MissingEnvError } from "../_lib/clients.js";
+import { requireAdmin } from "../_lib/admin-auth.js";
 
 type BlastBody = {
   subject?: string;

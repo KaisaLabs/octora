@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getSupabase, MissingEnvError } from "./clients";
+import { getSupabase, MissingEnvError } from "./clients.js";
 
 export type AdminUser = { id: string; email: string };
 
