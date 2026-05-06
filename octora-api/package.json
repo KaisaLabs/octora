@@ -6,6 +6,7 @@
   "packageManager": "pnpm@10.0.0",
   "imports": {
     "#app": "./src/app.js",
+<<<<<<< Updated upstream
     "#common/*": ["./src/common/*.js", "./src/common/*/index.js"],
     "#domain": "./src/domain/index.js",
     "#domain/*": ["./src/domain/*.js", "./src/domain/*/index.js"],
@@ -13,6 +14,15 @@
     "#infra/*": ["./src/infra/*.js", "./src/infra/*/index.js"],
     "#test-kit": "./src/test-kit/index.js",
     "#test-kit/*": ["./src/test-kit/*.js", "./src/test-kit/*/index.js"]
+=======
+    "#common/*": "./src/common/*.js",
+    "#domain": "./src/domain/index.js",
+    "#domain/*": "./src/domain/*.js",
+    "#modules/*": "./src/modules/*.js",
+    "#infra/*": "./src/infra/*.js",
+    "#test-kit": "./src/test-kit/index.js",
+    "#test-kit/*": "./src/test-kit/*.js"
+>>>>>>> Stashed changes
   },
   "scripts": {
     "dev": "tsx watch --env-file=.env src/index.ts | pino-pretty",

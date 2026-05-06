@@ -20,5 +20,5 @@
       "#test-kit/*": ["src/test-kit/*"]
     }
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "api/**/*.ts"]
 }
