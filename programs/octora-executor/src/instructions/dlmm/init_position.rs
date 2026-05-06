@@ -40,7 +40,7 @@ pub fn handler<'info>(
     require_dlmm_program(&ctx.accounts.dlmm_program)?;
 
     let remaining = ctx.remaining_accounts;
-    require!(remaining.len() >= 8, ExecutorError::AccountsTooShort);
+    require!(remaining.len() == 8, ExecutorError::AccountsTooShort);
 
     let position_account = &remaining[1];
     let lb_pair_account = &remaining[2];

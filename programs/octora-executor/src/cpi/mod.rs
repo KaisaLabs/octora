@@ -59,6 +59,28 @@ pub fn require_token_account_owner(token_account: &AccountInfo, expected: &Pubke
     Ok(())
 }
 
+pub fn require_token_account_mint(
+    token_account: &AccountInfo,
+    token_program: &AccountInfo,
+    expected_mint: &Pubkey,
+) -> Result<()> {
+    require_keys_eq!(
+        *token_account.owner,
+        *token_program.key,
+        ExecutorError::InvalidTokenProgram,
+    );
+
+    let data = token_account.try_borrow_data()?;
+    require!(data.len() >= 64, ExecutorError::InvalidTokenAccount);
+
+    let mint_bytes: [u8; 32] = data[0..32]
+        .try_into()
+        .map_err(|_| error!(ExecutorError::InvalidTokenAccount))?;
+    let mint = Pubkey::new_from_array(mint_bytes);
+    require_keys_eq!(mint, *expected_mint, ExecutorError::TokenMintMismatch);
+    Ok(())
+}
+
 // ── Shared helpers ──
 pub fn anchor_discriminator(ix_name: &str) -> [u8; 8] {
     let preimage = format!("global:{}", ix_name);

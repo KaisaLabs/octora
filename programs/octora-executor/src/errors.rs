@@ -67,4 +67,7 @@ pub enum ExecutorError {
 
     #[msg("Lock escrow account does not match PoolAuthority lock_escrow")]
     LockEscrowMismatch,
+
+    #[msg("SPL token account mint does not match the expected mint")]
+    TokenMintMismatch,
 }
