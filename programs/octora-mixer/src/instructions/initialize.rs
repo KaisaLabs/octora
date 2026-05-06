@@ -1,20 +1,26 @@
 use anchor_lang::prelude::*;
 use crate::constants::*;
+#[cfg(not(feature = "permissionless-init"))]
+use crate::errors::MixerError;
 use crate::state::MixerPool;
 
-// TODO(M-3 — pre-mainnet): `initialize` is currently permissionless. The
-// first caller for a given denomination becomes pool.authority forever
-// (and, after M-2, holds the pause key). Before mainnet, decide one of:
-//   (a) Pin to a single deployer pubkey:
-//         #[account(mut, address = ADMIN @ MixerError::Unauthorized)]
-//   (b) Pin to a multisig PDA.
-//   (c) Keep self-service but split the pause role into a separate
-//       global config account.
-// Leaving permissionless is acceptable on devnet only.
+// `initialize` is gated on `ADMIN_AUTHORITY` (see `constants.rs`). The first
+// caller for a given denomination becomes `pool.authority` forever and is
+// the only key that can flip the emergency `is_paused` flag, so leaving this
+// permissionless allows any front-runner to claim authority over every
+// denomination.
+//
+// For devnet/local-only testing, build with `--features permissionless-init`
+// to drop the address constraint. The default (mainnet) feature set keeps
+// the gate active.
 #[derive(Accounts)]
 #[instruction(denomination: u64)]
 pub struct Initialize<'info> {
-    #[account(mut)]
+    #[cfg_attr(
+        not(feature = "permissionless-init"),
+        account(mut, address = ADMIN_AUTHORITY @ MixerError::Unauthorized),
+    )]
+    #[cfg_attr(feature = "permissionless-init", account(mut))]
     pub authority: Signer<'info>,
 
     // Boxed because MixerPool is now ~1.6KB after adding filled_subtrees,

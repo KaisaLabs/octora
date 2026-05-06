@@ -48,7 +48,21 @@ export interface RelayerStatus {
 export interface RelayerConfig {
   /** Base fee in lamports charged per withdrawal. */
   baseFeelamports: bigint;
-  /** Hot wallet secret key (base58 or byte array path). */
+  /**
+   * Minimum acceptable fee bound in the proof.
+   *
+   * The on-chain program enforces `fee < denomination` but does NOT enforce a
+   * floor — without this guard the relayer can be made to pay gas with no
+   * compensation by submitting fee=0 proofs at scale. Set this to cover the
+   * relayer's worst-case priority fee plus a small margin.
+   */
+  minFeeLamports: bigint;
+  /**
+   * Hot wallet secret. Either:
+   *   - inline JSON byte array (`"[12,34,...,89]"`), or
+   *   - `file:<path>` to a JSON keypair file with mode 0600.
+   * Bare paths are no longer accepted (see solana-client.ts loadHotWallet).
+   */
   hotWalletSecret: string;
   /** RPC endpoint for submitting transactions. */
   rpcUrl: string;

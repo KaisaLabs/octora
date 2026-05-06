@@ -5,6 +5,7 @@ import type { RelayerConfig, WithdrawRequest } from "../types.js";
 
 const TEST_CONFIG: RelayerConfig = {
   baseFeelamports: 5000n,
+  minFeeLamports: 5000n,
   hotWalletSecret: "test-hot-wallet",
   rpcUrl: "http://localhost:8899",
   mixerProgramId: "MixerProgram111111111111111111111111111",

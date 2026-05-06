@@ -31,6 +31,13 @@ export class RelayerService {
   private pendingWithdrawals = 0;
   private client: MixerClient | null = null;
   private mixerPoolPDA: PublicKey | null = null;
+  /**
+   * Per-nullifier in-flight map. We serialize concurrent withdrawal requests
+   * for the same nullifier so two callers can't both pass the `isSpent` cache
+   * miss, both pay gas, and race to the on-chain `init` (only one wins, the
+   * other wastes gas — that's the H-2 attack).
+   */
+  private readonly inFlight = new Map<string, Promise<WithdrawResult>>();
 
   constructor(
     private readonly config: RelayerConfig,
@@ -58,6 +65,75 @@ export class RelayerService {
    * - Mark nullifier as spent
    */
   async processWithdrawal(request: WithdrawRequest): Promise<WithdrawResult> {
+    // Guards that don't need cross-request synchronization run first; after
+    // them we serialize on `nullifierHash` so concurrent submissions for the
+    // same nullifier can't both pay gas (H-2).
+
+    // 0. Sender-side guards before we even talk to the registry:
+
+    // 0a. The proof must be bound to *this* relayer's hot wallet. Without
+    // this check, anyone can submit a proof bound to Relayer A to Relayer
+    // B's API; B's hotWallet signs/pays gas, but on-chain rejects because
+    // `pubkey_to_field_hash(B) != relayer_field` — gas is spent for nothing.
+    // (H-1)
+    const guardResult = this.guardRequest(request);
+    if (guardResult) return guardResult;
+
+    // Serialize on the nullifier — second caller short-circuits to the
+    // first's result (success or failure) instead of racing on-chain.
+    const inflight = this.inFlight.get(request.nullifierHash);
+    if (inflight) return inflight;
+
+    const promise = this.doProcessWithdrawal(request);
+    this.inFlight.set(request.nullifierHash, promise);
+    try {
+      return await promise;
+    } finally {
+      this.inFlight.delete(request.nullifierHash);
+    }
+  }
+
+  /** Synchronous, sender-side checks that don't require RPC or proof verification. */
+  private guardRequest(request: WithdrawRequest): WithdrawResult | null {
+    const failure = (error: string): WithdrawResult => ({
+      success: false,
+      txSignature: null,
+      nullifierHash: request.nullifierHash,
+      recipient: request.recipient,
+      amountLamports: "0",
+      feeLamports: request.fee,
+      error,
+    });
+
+    // H-1: relayer-binding check. We compare base58 strings, so a mismatched
+    // case or extra padding fails closed.
+    if (this.client) {
+      const ours = this.client.hotWallet.publicKey.toBase58();
+      if (request.relayer !== ours) {
+        return failure(
+          "Proof relayer field does not match this relayer's hot wallet — refusing to pay gas for someone else's proof.",
+        );
+      }
+    }
+
+    // H-3: minimum fee. Reject before doing any expensive work.
+    let feeLamports: bigint;
+    try {
+      feeLamports = BigInt(request.fee);
+    } catch {
+      return failure(`Fee is not a valid integer: ${request.fee}`);
+    }
+    if (feeLamports < this.config.minFeeLamports) {
+      return failure(
+        `Fee ${feeLamports} lamports is below the relayer's minimum ${this.config.minFeeLamports}.`,
+      );
+    }
+
+    return null;
+  }
+
+  /** The actual withdrawal pipeline, run under the per-nullifier lock. */
+  private async doProcessWithdrawal(request: WithdrawRequest): Promise<WithdrawResult> {
     // 1. Pre-check: nullifier not already spent
     const alreadySpent = await this.nullifiers.isSpent(request.nullifierHash);
     if (alreadySpent) {
@@ -175,6 +251,13 @@ export class RelayerService {
 
   /** Validate a proof without submitting (dry-run for UX). */
   async validateProof(request: WithdrawRequest): Promise<{ valid: boolean; reason?: string }> {
+    // Same sender-side guards as processWithdrawal, so dry-run results
+    // accurately predict whether processWithdrawal would accept the request.
+    const guard = this.guardRequest(request);
+    if (guard) {
+      return { valid: false, reason: guard.error };
+    }
+
     const spent = await this.nullifiers.isSpent(request.nullifierHash);
     if (spent) {
       return { valid: false, reason: "Nullifier already spent." };

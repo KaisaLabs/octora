@@ -32,11 +32,34 @@ export class DepositService {
   }
 
   /**
-   * Record a deposit after it's confirmed on-chain.
-   * Inserts the commitment into the local Merkle tree.
+   * Record a deposit *after* it has been confirmed on-chain. Inserts the
+   * commitment into the local Merkle tree.
+   *
+   * Caller contract: `txSignature` MUST refer to a finalized transaction
+   * that emitted a `DepositEvent` with this commitment. Calling this with
+   * an unconfirmed/forged commitment corrupts the local tree, which breaks
+   * proof generation for every subsequent legitimate withdrawal — so this
+   * method has no business being reachable from any HTTP-facing path.
+   *
+   * Front it with an indexer that hydrates from `getProgramAccounts` /
+   * `getSignaturesForAddress` and verifies the `DepositEvent` payload, the
+   * way `mixer.service.ts:hydrateFromChain` does.
    */
   recordDeposit(commitment: bigint, txSignature: string, blockTime: number): number {
     this.ensureInitialized();
+
+    // Cheap fail-fast guards to make accidental misuse louder. Real
+    // validation (the tx exists on-chain and emitted DepositEvent) belongs
+    // in the indexer that calls this — we can't redo it from here without a
+    // Connection handle, and we deliberately don't take one.
+    if (commitment <= 0n) {
+      throw new Error("recordDeposit: commitment must be a positive bigint.");
+    }
+    if (!txSignature || txSignature.length < 32) {
+      throw new Error(
+        "recordDeposit: txSignature must be a real on-chain signature, not a sentinel.",
+      );
+    }
 
     const leafIndex = this.tree!.insert(commitment);
     this.deposits.push({
@@ -75,34 +98,6 @@ export class DepositService {
   findCommitment(commitment: bigint): number {
     this.ensureInitialized();
     return this.tree!.indexOf(commitment);
-  }
-
-  /**
-   * Get the Merkle siblings needed for an on-chain deposit instruction.
-   *
-   * The on-chain program needs the 20 sibling hashes at the next leaf
-   * index to verify the current root and compute the new root after
-   * inserting the commitment.
-   *
-   * Strategy: temporarily insert a zero leaf to get the path, then
-   * remove it. The fixed-merkle-tree library fills empty positions
-   * with the zero element, so the siblings are correct for the
-   * next insertion point.
-   */
-  getInsertionSiblings(): string[] {
-    this.ensureInitialized();
-
-    // Insert a temporary zero leaf to get the path at the next index
-    const nextIndex = this.tree!.insert(0n);
-    const proof = this.tree!.getProof(nextIndex);
-
-    // We can't "undo" the insert on fixed-merkle-tree,
-    // so we rebuild the tree without the temp leaf.
-    // This is acceptable for MVP since deposits are infrequent.
-    // For production, use a tree implementation that supports path
-    // computation without insertion.
-
-    return proof.pathElements;
   }
 
   /**
