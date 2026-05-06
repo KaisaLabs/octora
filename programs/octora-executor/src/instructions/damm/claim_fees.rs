@@ -1,12 +1,13 @@
 use anchor_lang::prelude::*;
 
 use crate::constants::{DAMM_PROGRAM_ID, POOL_AUTHORITY_SEED};
+use crate::cpi::damm::*;
+use crate::cpi::require_token_account_owner;
 use crate::errors::ExecutorError;
 use crate::state::{PoolAuthority, PoolRef};
 
-/// Claim DAMM pool trading fees into exit_recipient ATAs.
-/// Note: Fee claiming without lock_escrow uses DAMM's vault claim mechanism.
-/// This instruction validates the claim is legitimate and outflows go to exit_recipient.
+/// Claim fees from a DAMM lock position via claimFee CPI.
+/// Requires the lock_escrow PDA created during damm_init.
 #[derive(Accounts)]
 pub struct DammClaimFees<'info> {
     pub stealth: Signer<'info>,
@@ -19,18 +20,15 @@ pub struct DammClaimFees<'info> {
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
 
-    /// CHECK: DAMM pool account — validated against stored ref
     pub pool: UncheckedAccount<'info>,
 
-    /// CHECK: DAMM program ID checked in handler
     pub damm_program: UncheckedAccount<'info>,
 }
 
 pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, DammClaimFees<'info>>,
-    _max_amount: u64,
+    max_amount: u64,
 ) -> Result<()> {
-    // Validate DAMM program ID
     require_keys_eq!(
         ctx.accounts.damm_program.key(),
         DAMM_PROGRAM_ID,
@@ -40,41 +38,81 @@ pub fn handler<'info>(
     let pa = &ctx.accounts.pool_authority;
     let pool = ctx.accounts.pool.key();
 
-    // Validate pool matches stored ref and is DAMM type
-    match &pa.pool_ref {
+    let lock_escrow = match &pa.pool_ref {
         PoolRef::Damm {
-            pool: stored_pool, ..
+            pool: stored_pool,
+            lock_escrow,
+            ..
         } => {
             require_keys_eq!(pool, *stored_pool, ExecutorError::DammPoolMismatch);
+            *lock_escrow
         }
         PoolRef::Dlmm { .. } => return err!(ExecutorError::InvalidPoolRefType),
-    }
+    };
 
     let remaining = ctx.remaining_accounts;
+    // DAMM claimFee: 18 accounts (indices 0-17)
+    // 2: lockEscrow, 3: owner(S) -> PDA, 15: userSolToken, 16: userQuoteToken
     require!(remaining.len() >= 18, ExecutorError::AccountsTooShort);
 
-    // DAMM claimFee requires ~18 remaining accounts (see spec lines 626-647)
-    // Standard layout for DAMM claimFee:
-    // 0: pool (W), 1: lpMint (W), 2: lockEscrow (W), 3: owner (S)->PDA,
-    // 4: sourceTokens (W), 5: escrowVault (W), 6: tokenProgram,
-    // 7: aTokenVault (W), 8: bTokenVault (W), 9: aVault (W), 10: bVault (W),
-    // 11: aVaultLp (W), 12: bVaultLp (W), 13: aVaultLpMint (W), 14: bVaultLpMint (W),
-    // 15: userSolToken (W), 16: userQuoteToken (W), 17: vaultProgram
+    // Validate lock_escrow matches stored PDA
+    require_keys_eq!(
+        remaining[2].key(),
+        lock_escrow,
+        ExecutorError::LockEscrowMismatch,
+    );
 
-    // Validate destination token accounts owned by exit_recipient (indices 15, 16)
-    use crate::cpi::require_token_account_owner;
+    // Validate destination token accounts owned by exit_recipient
     require_token_account_owner(&remaining[15], &pa.exit_recipient)?;
     require_token_account_owner(&remaining[16], &pa.exit_recipient)?;
 
-    // TODO: Implement claimFee CPI once DAMM IDL is fully verified.
-    // Currently validates security boundary (exit_recipient) and returns.
-    // The actual claimFee CPI requires the correct lock_escrow PDA and vault accounts.
+    let pa_key = pa.key();
+    let stealth_key = ctx.accounts.stealth.key();
+    let bump = pa.bump;
+
+    let signer_seeds: &[&[&[u8]]] = &[&[
+        POOL_AUTHORITY_SEED,
+        stealth_key.as_ref(),
+        pool.as_ref(),
+        &[bump],
+    ]];
+
+    let metas: Vec<anchor_lang::solana_program::instruction::AccountMeta> = remaining
+        .iter()
+        .enumerate()
+        .map(|(i, ai)| {
+            if i == 3 {
+                // owner at index 3 = PDA signer
+                AccountMeta {
+                    pubkey: pa_key,
+                    is_signer: true,
+                    is_writable: ai.is_writable,
+                }
+            } else {
+                AccountMeta {
+                    pubkey: ai.key(),
+                    is_signer: ai.is_signer,
+                    is_writable: ai.is_writable,
+                }
+            }
+        })
+        .collect();
+
+    let args = serialize_claim_fee_args(max_amount);
+    let ix = build_damm_ix("claimFee", metas, args);
+
+    // Fix #4: CPI signer re-pinning
+    let pa_info = ctx.accounts.pool_authority.to_account_info();
+    let mut infos: Vec<AccountInfo> = remaining.to_vec();
+    infos[3] = pa_info;
+    invoke_damm_signed(&ix, &infos, signer_seeds)?;
 
     msg!(
-        "damm_claim_fees: stealth={} pool={} validated exit_recipient={}",
+        "damm_claim_fees: stealth={} pa={} pool={} lock_escrow={}",
         ctx.accounts.stealth.key(),
+        pa_key,
         pool,
-        pa.exit_recipient,
+        lock_escrow,
     );
 
     Ok(())

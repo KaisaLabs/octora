@@ -61,4 +61,7 @@ pub enum ExecutorError {
 
     #[msg("DAMM owner account does not match the PoolAuthority PDA")]
     DammSolOwnerMismatch,
+
+    #[msg("Lock escrow account does not match PoolAuthority lock_escrow")]
+    LockEscrowMismatch,
 }

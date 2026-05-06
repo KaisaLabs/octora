@@ -7,6 +7,7 @@ use crate::errors::ExecutorError;
 use crate::state::{PoolAuthority, PoolRef};
 
 /// Single-side SOL deposit into a DAMM pool via addBalanceLiquidity.
+/// LP tokens are minted to a PDA-owned ATA.
 #[derive(Accounts)]
 pub struct DammDeposit<'info> {
     pub stealth: Signer<'info>,
@@ -19,7 +20,6 @@ pub struct DammDeposit<'info> {
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
 
-    /// CHECK: DAMM program ID checked in handler
     pub damm_program: UncheckedAccount<'info>,
 
     pub pool: UncheckedAccount<'info>,
@@ -29,7 +29,6 @@ pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, DammDeposit<'info>>,
     pool_token_amount: u64,
     max_sol: u64,
-    max_token_b: u64,
 ) -> Result<()> {
     require_keys_eq!(
         ctx.accounts.damm_program.key(),
@@ -50,8 +49,8 @@ pub fn handler<'info>(
     }
 
     let remaining = ctx.remaining_accounts;
+    // addBalanceLiquidity: 16 accounts (indices 0-15), token_program at 15
     require!(remaining.len() >= 16, ExecutorError::AccountsTooShort);
-
     require_spl_token_program(&remaining[15])?;
 
     let pa_key = pa.key();
@@ -69,7 +68,8 @@ pub fn handler<'info>(
         .iter()
         .enumerate()
         .map(|(i, ai)| {
-            if i == 12 {
+            if i == 13 {
+                // user/sender at index 13 = PDA signer
                 AccountMeta {
                     pubkey: pa_key,
                     is_signer: true,
@@ -85,9 +85,15 @@ pub fn handler<'info>(
         })
         .collect();
 
-    let args = serialize_add_balance_liquidity_args(pool_token_amount, max_sol, max_token_b);
+    // Single-side SOL: max_quote = 0 (forced)
+    let args = serialize_add_balance_liquidity_args(pool_token_amount, max_sol, 0);
     let ix = build_damm_ix("addBalanceLiquidity", metas, args);
-    invoke_damm_signed(&ix, remaining, signer_seeds)?;
+
+    // Fix #4: CPI signer re-pinning
+    let pa_info = ctx.accounts.pool_authority.to_account_info();
+    let mut infos: Vec<AccountInfo> = remaining.to_vec();
+    infos[13] = pa_info;
+    invoke_damm_signed(&ix, &infos, signer_seeds)?;
 
     msg!(
         "damm_deposit: stealth={} pa={} pool={} pool_tokens={}",

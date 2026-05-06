@@ -7,7 +7,7 @@ use crate::errors::ExecutorError;
 use crate::state::{PoolAuthority, PoolRef};
 
 /// Remove liquidity from a DAMM pool via removeBalanceLiquidity.
-/// Tokens flow to exit_recipient ATAs (index 11/12 in remaining_accounts).
+/// Tokens flow to exit_recipient ATAs. PoolAuthority is closed.
 #[derive(Accounts)]
 pub struct DammWithdraw<'info> {
     #[account(mut)]
@@ -19,23 +19,19 @@ pub struct DammWithdraw<'info> {
         bump = pool_authority.bump,
         constraint = pool_authority.stealth_pubkey == stealth.key()
             @ ExecutorError::StealthMismatch,
+        close = stealth, // Fix #3: close PoolAuthority
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
 
-    /// CHECK: DAMM program
     pub damm_program: UncheckedAccount<'info>,
 
     pub pool: UncheckedAccount<'info>,
-
-    /// Destination for SOL (index 11 in remaining) — must be owned by exit_recipient
-    pub exit_recipient: UncheckedAccount<'info>,
 }
 
 pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, DammWithdraw<'info>>,
     pool_token_amount: u64,
     min_sol_out: u64,
-    min_token_b_out: u64,
 ) -> Result<()> {
     require_keys_eq!(
         ctx.accounts.damm_program.key(),
@@ -58,19 +54,13 @@ pub fn handler<'info>(
     let remaining = ctx.remaining_accounts;
     require!(remaining.len() >= 16, ExecutorError::AccountsTooShort);
 
-    let pa_key = pa.key();
-    let stealth_key = ctx.accounts.stealth.key();
-    let bump = pa.bump;
-
-    // Validate dest token accounts owned by exit_recipient (indices 11, 12)
+    // Fix #6: Validate destination token accounts owned by exit_recipient
     require_token_account_owner(&remaining[11], &pa.exit_recipient)?;
     require_token_account_owner(&remaining[12], &pa.exit_recipient)?;
 
-    require_keys_eq!(
-        ctx.accounts.exit_recipient.key(),
-        pa.exit_recipient,
-        ExecutorError::ExitRecipientMismatch,
-    );
+    let pa_key = pa.key();
+    let stealth_key = ctx.accounts.stealth.key();
+    let bump = pa.bump;
 
     let signer_seeds: &[&[&[u8]]] = &[&[
         POOL_AUTHORITY_SEED,
@@ -84,6 +74,7 @@ pub fn handler<'info>(
         .enumerate()
         .map(|(i, ai)| {
             if i == 13 {
+                // user/sender at index 13 = PDA signer
                 AccountMeta {
                     pubkey: pa_key,
                     is_signer: true,
@@ -99,10 +90,15 @@ pub fn handler<'info>(
         })
         .collect();
 
-    let args =
-        serialize_remove_balance_liquidity_args(pool_token_amount, min_sol_out, min_token_b_out);
+    // Single-side SOL: min_quote_out = 0 (forced)
+    let args = serialize_remove_balance_liquidity_args(pool_token_amount, min_sol_out, 0);
     let ix = build_damm_ix("removeBalanceLiquidity", metas, args);
-    invoke_damm_signed(&ix, remaining, signer_seeds)?;
+
+    // Fix #4: CPI signer re-pinning
+    let pa_info = ctx.accounts.pool_authority.to_account_info();
+    let mut infos: Vec<AccountInfo> = remaining.to_vec();
+    infos[13] = pa_info;
+    invoke_damm_signed(&ix, &infos, signer_seeds)?;
 
     msg!(
         "damm_withdraw: stealth={} pa={} pool={} pool_tokens={}",

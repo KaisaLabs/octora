@@ -59,24 +59,17 @@ pub mod octora_executor {
     pub fn damm_deposit<'info>(
         ctx: Context<'_, '_, '_, 'info, DammDeposit<'info>>,
         pool_token_amount: u64,
-        max_token_a: u64,
-        max_token_b: u64,
+        max_sol: u64,
     ) -> Result<()> {
-        instructions::damm::deposit::handler(ctx, pool_token_amount, max_token_a, max_token_b)
+        instructions::damm::deposit::handler(ctx, pool_token_amount, max_sol)
     }
 
     pub fn damm_withdraw<'info>(
         ctx: Context<'_, '_, '_, 'info, DammWithdraw<'info>>,
         pool_token_amount: u64,
-        min_token_a_out: u64,
-        min_token_b_out: u64,
+        min_sol_out: u64,
     ) -> Result<()> {
-        instructions::damm::withdraw::handler(
-            ctx,
-            pool_token_amount,
-            min_token_a_out,
-            min_token_b_out,
-        )
+        instructions::damm::withdraw::handler(ctx, pool_token_amount, min_sol_out)
     }
 
     pub fn damm_claim_fees<'info>(

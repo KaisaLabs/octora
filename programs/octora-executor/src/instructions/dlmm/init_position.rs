@@ -3,7 +3,7 @@ use anchor_lang::solana_program::instruction::AccountMeta;
 
 use crate::constants::POOL_AUTHORITY_SEED;
 use crate::cpi::dlmm::*;
-use crate::cpi::{require_system_program, require_rent_sysvar};
+use crate::cpi::{require_rent_sysvar, require_system_program};
 use crate::errors::ExecutorError;
 use crate::state::{PoolAuthority, PoolRef};
 

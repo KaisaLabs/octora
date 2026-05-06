@@ -24,9 +24,7 @@ pub struct DlmmClaimFees<'info> {
     pub dlmm_program: UncheckedAccount<'info>,
 }
 
-pub fn handler<'info>(
-    ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>,
-) -> Result<()> {
+pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>) -> Result<()> {
     require_dlmm_program(&ctx.accounts.dlmm_program)?;
 
     let pa = &ctx.accounts.pool_authority;
@@ -38,14 +36,26 @@ pub fn handler<'info>(
         _ => return Err(error!(ExecutorError::InvalidPoolRefType)),
     };
 
-    require_keys_eq!(remaining[0].key(), stored_lb_pair, ExecutorError::LbPairMismatch);
-    require_keys_eq!(remaining[1].key(), stored_position, ExecutorError::PositionMismatch);
+    require_keys_eq!(
+        remaining[0].key(),
+        stored_lb_pair,
+        ExecutorError::LbPairMismatch
+    );
+    require_keys_eq!(
+        remaining[1].key(),
+        stored_position,
+        ExecutorError::PositionMismatch
+    );
     require_token_account_owner(&remaining[7], &pa.exit_recipient)?;
     require_token_account_owner(&remaining[8], &pa.exit_recipient)?;
     require_spl_token_program(&remaining[11])?;
     require_dlmm_event_authority(&remaining[12])?;
     require_dlmm_program(&remaining[13])?;
-    require_keys_eq!(ctx.accounts.lb_pair.key(), stored_lb_pair, ExecutorError::LbPairMismatch);
+    require_keys_eq!(
+        ctx.accounts.lb_pair.key(),
+        stored_lb_pair,
+        ExecutorError::LbPairMismatch
+    );
 
     let pa_key = pa.key();
     let metas: Vec<AccountMeta> = remaining

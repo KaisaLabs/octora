@@ -34,7 +34,10 @@ pub fn handler<'info>(
     bps_to_remove: u16,
 ) -> Result<()> {
     require!(from_bin_id <= to_bin_id, ExecutorError::ArgOutOfRange);
-    require!(bps_to_remove > 0 && bps_to_remove <= 10_000, ExecutorError::ArgOutOfRange);
+    require!(
+        bps_to_remove > 0 && bps_to_remove <= 10_000,
+        ExecutorError::ArgOutOfRange
+    );
     require_dlmm_program(&ctx.accounts.dlmm_program)?;
 
     let pa = &ctx.accounts.pool_authority;
@@ -46,18 +49,42 @@ pub fn handler<'info>(
         _ => return Err(error!(ExecutorError::InvalidPoolRefType)),
     };
 
-    require_keys_eq!(remaining[0].key(), stored_position, ExecutorError::PositionMismatch);
-    require_keys_eq!(remaining[1].key(), stored_lb_pair, ExecutorError::LbPairMismatch);
+    require_keys_eq!(
+        remaining[0].key(),
+        stored_position,
+        ExecutorError::PositionMismatch
+    );
+    require_keys_eq!(
+        remaining[1].key(),
+        stored_lb_pair,
+        ExecutorError::LbPairMismatch
+    );
     require_token_account_owner(&remaining[3], &pa.exit_recipient)?;
     require_token_account_owner(&remaining[4], &pa.exit_recipient)?;
     require_spl_token_program(&remaining[12])?;
     require_spl_token_program(&remaining[13])?;
     require_dlmm_event_authority(&remaining[14])?;
     require_dlmm_program(&remaining[15])?;
-    require_keys_eq!(remaining[16].key(), pa.exit_recipient, ExecutorError::ExitRecipientMismatch);
-    require_keys_neq!(remaining[16].key(), remaining[0].key(), ExecutorError::PositionMismatch);
-    require_keys_neq!(remaining[16].key(), remaining[1].key(), ExecutorError::LbPairMismatch);
-    require_keys_eq!(ctx.accounts.lb_pair.key(), stored_lb_pair, ExecutorError::LbPairMismatch);
+    require_keys_eq!(
+        remaining[16].key(),
+        pa.exit_recipient,
+        ExecutorError::ExitRecipientMismatch
+    );
+    require_keys_neq!(
+        remaining[16].key(),
+        remaining[0].key(),
+        ExecutorError::PositionMismatch
+    );
+    require_keys_neq!(
+        remaining[16].key(),
+        remaining[1].key(),
+        ExecutorError::LbPairMismatch
+    );
+    require_keys_eq!(
+        ctx.accounts.lb_pair.key(),
+        stored_lb_pair,
+        ExecutorError::LbPairMismatch
+    );
 
     let pa_key = pa.key();
     let stealth_key = ctx.accounts.stealth.key();
@@ -117,7 +144,10 @@ pub fn handler<'info>(
 
     msg!(
         "dlmm_withdraw_close: stealth={} pa={} position={} bps={}",
-        stealth_key, pa_key, stored_position, bps_to_remove,
+        stealth_key,
+        pa_key,
+        stored_position,
+        bps_to_remove,
     );
 
     Ok(())

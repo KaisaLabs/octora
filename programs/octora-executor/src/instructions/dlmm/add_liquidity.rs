@@ -39,13 +39,25 @@ pub fn handler<'info>(
             lb_pair: stored_lb_pair,
             position,
         } => {
-            require_keys_eq!(remaining[0].key(), *position, ExecutorError::PositionMismatch);
-            require_keys_eq!(remaining[1].key(), *stored_lb_pair, ExecutorError::LbPairMismatch);
+            require_keys_eq!(
+                remaining[0].key(),
+                *position,
+                ExecutorError::PositionMismatch
+            );
+            require_keys_eq!(
+                remaining[1].key(),
+                *stored_lb_pair,
+                ExecutorError::LbPairMismatch
+            );
         }
         PoolRef::Damm { .. } => return err!(ExecutorError::InvalidPoolRefType),
     }
 
-    require_keys_eq!(remaining[1].key(), ctx.accounts.lb_pair.key(), ExecutorError::LbPairMismatch);
+    require_keys_eq!(
+        remaining[1].key(),
+        ctx.accounts.lb_pair.key(),
+        ExecutorError::LbPairMismatch
+    );
 
     require_spl_token_program(&remaining[12])?;
     require_spl_token_program(&remaining[13])?;

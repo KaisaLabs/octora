@@ -6,9 +6,7 @@ use anchor_lang::solana_program::instruction::AccountMeta;
 use crate::constants::{DAMM_PROGRAM_ID, LOCK_ESCROW_SEED};
 use crate::errors::ExecutorError;
 
-pub const VAULT_PROGRAM_ID: Pubkey = pubkey!("HWzXGcGHy4tcpYfaRDCyLNzXqBTv3E6BttpCH2vJxArv");
-
-/// Derive DAMM lock escrow PDA: [LOCK_ESCROW_SEED, pool, owner]
+/// Derive DAMM lock escrow PDA: [LOCK_ESCROW_SEED, pool, owner] under DAMM program.
 pub fn derive_lock_escrow(pool: &Pubkey, owner: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(
         &[LOCK_ESCROW_SEED, pool.as_ref(), owner.as_ref()],
@@ -20,7 +18,7 @@ pub fn require_damm_program(ai: &AccountInfo) -> Result<()> {
     require_keys_eq!(
         ai.key(),
         DAMM_PROGRAM_ID,
-        ExecutorError::DammProgramMismatch
+        ExecutorError::DammProgramMismatch,
     );
     Ok(())
 }
@@ -30,7 +28,13 @@ pub fn build_damm_ix(
     accounts: Vec<AccountMeta>,
     args_bytes: Vec<u8>,
 ) -> anchor_lang::solana_program::instruction::Instruction {
-    let discriminator = anchor_discriminator_for_damm(ix_name);
+    let discriminator = {
+        let preimage = format!("global:{}", ix_name);
+        let digest = anchor_lang::solana_program::hash::hash(preimage.as_bytes());
+        let mut out = [0u8; 8];
+        out.copy_from_slice(&digest.to_bytes()[..8]);
+        out
+    };
     let mut data = Vec::with_capacity(8 + args_bytes.len());
     data.extend_from_slice(&discriminator);
     data.extend_from_slice(&args_bytes);
@@ -51,13 +55,11 @@ pub fn invoke_damm_signed(
         .map_err(Into::into)
 }
 
-/// Compute DAMM instruction discriminator: sha256("global:<name>")[..8].
-fn anchor_discriminator_for_damm(ix_name: &str) -> [u8; 8] {
-    let preimage = format!("global:{}", ix_name);
-    let digest = anchor_lang::solana_program::hash::hash(preimage.as_bytes());
-    let mut out = [0u8; 8];
-    out.copy_from_slice(&digest.to_bytes()[..8]);
-    out
+/// Serialize lock args: (max_amount: u64)
+pub fn serialize_lock_args(max_amount: u64) -> Vec<u8> {
+    let mut args = Vec::with_capacity(8);
+    args.extend_from_slice(&max_amount.to_le_bytes());
+    args
 }
 
 /// Serialize addBalanceLiquidity args: (pool_token_amount: u64, max_token_a: u64, max_token_b: u64)
@@ -83,5 +85,12 @@ pub fn serialize_remove_balance_liquidity_args(
     args.extend_from_slice(&pool_token_amount.to_le_bytes());
     args.extend_from_slice(&min_token_a_out.to_le_bytes());
     args.extend_from_slice(&min_token_b_out.to_le_bytes());
+    args
+}
+
+/// Serialize claimFee args: (max_amount: u64)
+pub fn serialize_claim_fee_args(max_amount: u64) -> Vec<u8> {
+    let mut args = Vec::with_capacity(8);
+    args.extend_from_slice(&max_amount.to_le_bytes());
     args
 }
