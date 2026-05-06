@@ -14,7 +14,7 @@ import { expect } from "chai";
 
 // ─── Constants matching the on-chain executor ──────────────────────────
 
-const POSITION_AUTHORITY_SEED = Buffer.from("position-authority");
+const POOL_AUTHORITY_SEED = Buffer.from("pool-authority");
 
 // Mainnet IDs cloned into the local validator via Anchor.toml.
 const DLMM_PROGRAM_ID = new PublicKey(
@@ -29,20 +29,19 @@ const EVENT_AUTHORITY = new PublicKey(
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
-function derivePositionAuthority(
+function derivePoolAuthority(
   programId: PublicKey,
   stealth: PublicKey,
+  lbPair: PublicKey,
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
-    [POSITION_AUTHORITY_SEED, stealth.toBuffer()],
+    [POOL_AUTHORITY_SEED, stealth.toBuffer(), lbPair.toBuffer()],
     programId,
   );
 }
 
 /**
  * Anchor-style discriminator: `sha256("global:<ix>")[..8]`.
- * Mirrors what the executor program computes at runtime so tests can build
- * raw ixs that the on-chain handler will recognise.
  */
 async function anchorDiscriminator(ix: string): Promise<Buffer> {
   const { createHash } = await import("crypto");
@@ -69,142 +68,190 @@ async function fundAccount(
 // TESTS
 // ═══════════════════════════════════════════════════════════════════════
 
-describe("octora-executor :: init_position", () => {
+describe("octora-executor :: dlmm_init_position", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
   const program = anchor.workspace.octoraExecutor as Program;
   const programId = program.programId;
-  const payer = provider.wallet as anchor.Wallet;
 
-  // Each test gets a fresh stealth wallet so we don't collide on the
-  // PositionAuthority PDA across runs.
-  let stealth: Keypair;
-  let positionAuthority: PublicKey;
-  let positionKeypair: Keypair;
+  it("creates PoolAuthority PDA and a DLMM-owned position via CPI", async () => {
+    const stealth = Keypair.generate();
+    await fundAccount(provider, stealth.publicKey, 1_000_000_000);
 
-  before(async () => {
-    stealth = Keypair.generate();
-    [positionAuthority] = derivePositionAuthority(programId, stealth.publicKey);
-    positionKeypair = Keypair.generate();
+    const positionKp = Keypair.generate();
+    const exitRecipient = Keypair.generate().publicKey;
 
-    // Stealth wallet only needs to cover the rent for PositionAuthority
-    // (~0.0016 SOL). Payer covers the much larger DLMM Position account.
-    await fundAccount(provider, stealth.publicKey, 0.01 * anchor.web3.LAMPORTS_PER_SOL);
-  });
-
-  it("creates PositionAuthority PDA and a DLMM-owned position via CPI", async () => {
-    // Args for our executor's `init_position`: (lower_bin_id: i32, width: i32,
-    // exit_recipient: Pubkey). We bind to the payer wallet here — Phase 2
-    // tests will exercise the exit_recipient enforcement on claim/withdraw.
-    const lowerBinId = -10;
-    const width = 20;
-    const exitRecipient = payer.publicKey;
-
-    // Build the executor ix manually so we control `remaining_accounts`
-    // ordering exactly as DLMM's `initialize_position` expects.
-    const disc = await anchorDiscriminator("init_position");
-    const argsBuf = Buffer.alloc(8 + 32);
-    argsBuf.writeInt32LE(lowerBinId, 0);
-    argsBuf.writeInt32LE(width, 4);
-    exitRecipient.toBuffer().copy(argsBuf, 8);
-    const data = Buffer.concat([disc, argsBuf]);
-
-    const dlmmAccounts: AccountMeta[] = [
-      { pubkey: payer.publicKey, isSigner: true, isWritable: true },     // 0: payer
-      { pubkey: positionKeypair.publicKey, isSigner: true, isWritable: true }, // 1: position
-      { pubkey: LB_PAIR, isSigner: false, isWritable: false },            // 2: lb_pair
-      { pubkey: positionAuthority, isSigner: false, isWritable: false },  // 3: owner — re-pinned to PDA inside the program; pubkey here MUST match for AccountInfo lookup
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // 4: system_program
-      { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false }, // 5: rent
-      { pubkey: EVENT_AUTHORITY, isSigner: false, isWritable: false },    // 6: event_authority
-      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },    // 7: program
-    ];
-
-    const accounts: AccountMeta[] = [
-      { pubkey: stealth.publicKey, isSigner: true, isWritable: true },        // outer: stealth
-      { pubkey: positionAuthority, isSigner: false, isWritable: true },       // outer: position_authority
-      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },        // outer: dlmm_program
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },// outer: system_program
-      ...dlmmAccounts,
-    ];
-
-    const ix = new TransactionInstruction({
+    const [poolAuthority] = derivePoolAuthority(
       programId,
-      keys: accounts,
-      data,
-    });
-
-    const tx = new Transaction()
-      .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }))
-      .add(ix);
-
-    await provider.sendAndConfirm(tx, [stealth, positionKeypair]);
-
-    // ── Assertions ────────────────────────────────────────────────────
-
-    // 1. PositionAuthority PDA exists with the fields we set in the handler.
-    const pa = await (program.account as any).positionAuthority.fetch(
-      positionAuthority,
+      stealth.publicKey,
+      LB_PAIR,
     );
-    expect(pa.stealthPubkey.toBase58()).to.equal(stealth.publicKey.toBase58());
-    expect(pa.lbPair.toBase58()).to.equal(LB_PAIR.toBase58());
-    expect(pa.position.toBase58()).to.equal(positionKeypair.publicKey.toBase58());
-    expect(pa.exitRecipient.toBase58()).to.equal(exitRecipient.toBase58());
 
-    // 2. The DLMM position account was created and is owned by DLMM.
-    //    That's the smoke test for the CPI: if the CPI failed we'd never
-    //    have got here (sendAndConfirm would have thrown).
-    const positionInfo = await provider.connection.getAccountInfo(
-      positionKeypair.publicKey,
-    );
-    expect(positionInfo, "DLMM position account should exist").to.not.be.null;
-    expect(positionInfo!.owner.toBase58()).to.equal(DLMM_PROGRAM_ID.toBase58());
-  });
-
-  it("rejects a second init for the same stealth (PDA already exists)", async () => {
-    // Re-running with the same stealth tries to `init` the same PDA →
-    // Anchor returns an InitError. This guards against accidentally
-    // re-using a stealth wallet for two positions.
-    const secondPosition = Keypair.generate();
-
-    const disc = await anchorDiscriminator("init_position");
-    const argsBuf = Buffer.alloc(8 + 32);
-    argsBuf.writeInt32LE(0, 0);
-    argsBuf.writeInt32LE(10, 4);
-    payer.publicKey.toBuffer().copy(argsBuf, 8);
-    const data = Buffer.concat([disc, argsBuf]);
-
-    const dlmmAccounts: AccountMeta[] = [
-      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: secondPosition.publicKey, isSigner: true, isWritable: true },
+    // DLMM initialize_position accounts (see program comments for ordering)
+    const remainingAccounts: AccountMeta[] = [
+      { pubkey: provider.wallet.publicKey, isSigner: true, isWritable: true },
+      { pubkey: positionKp.publicKey, isSigner: true, isWritable: true },
       { pubkey: LB_PAIR, isSigner: false, isWritable: false },
-      { pubkey: positionAuthority, isSigner: false, isWritable: false },
+      { pubkey: poolAuthority, isSigner: true, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
       { pubkey: EVENT_AUTHORITY, isSigner: false, isWritable: false },
       { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },
     ];
 
-    const accounts: AccountMeta[] = [
-      { pubkey: stealth.publicKey, isSigner: true, isWritable: true },
-      { pubkey: positionAuthority, isSigner: false, isWritable: true },
-      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ...dlmmAccounts,
+    // Args: lower_bin_id (i32 LE) + width (i32 LE) + exit_recipient (32 bytes) = 40 bytes
+    const disc = await anchorDiscriminator("dlmm_init_position");
+    const args = Buffer.alloc(8 + 32);
+    args.writeInt32LE(-1165, 0); // ~$10.56 on SOL/USDC
+    args.writeInt32LE(1200, 4);
+    exitRecipient.toBuffer().copy(args, 8);
+
+    const keys: AccountMeta[] = [
+      { pubkey: stealth.publicKey, isSigner: true, isWritable: true },     // stealth
+      { pubkey: poolAuthority, isSigner: false, isWritable: true },        // pool_authority
+      { pubkey: LB_PAIR, isSigner: false, isWritable: false },             // lb_pair
+      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },     // dlmm_program
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
+      ...remainingAccounts,
     ];
 
-    const ix = new TransactionInstruction({ programId, keys: accounts, data });
-    const tx = new Transaction()
-      .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }))
-      .add(ix);
+    const ix = new TransactionInstruction({
+      programId,
+      keys,
+      data: Buffer.concat([disc, args]),
+    });
 
-    let threw = false;
+    await provider.sendAndConfirm(
+      new Transaction().add(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+        ix,
+      ),
+      [stealth, positionKp],
+    );
+
+    // Verify the PoolAuthority account was created and has the right fields.
+    // The program uses `PoolRef::Dlmm` discriminant internally, so fields
+    // should be serialized as: stealth_pubkey (32) + exit_recipient (32) + 
+    // pool_ref (1 tag + 32 lb_pair + 32 position) + bump (1)
+    const connection2 = provider.connection;
+    const paData = await connection2.getAccountInfo(poolAuthority);
+    expect(paData).to.not.be.null;
+
+    // The data layout is Anchor discriminator (8 bytes) + struct fields
+    const data = paData!.data;
+    // Skip Anchor discriminator (first 8 bytes)
+    const stealthPubkey = new PublicKey(data.subarray(8, 40));
+    const exitRecipientParsed = new PublicKey(data.subarray(40, 72));
+    const poolRefTag = data[72]; // 0 = Dlmm
+    const storedLbPair = new PublicKey(data.subarray(73, 105));
+    const storedPosition = new PublicKey(data.subarray(105, 137));
+
+    expect(stealthPubkey.equals(stealth.publicKey)).to.be.true;
+    expect(exitRecipientParsed.equals(exitRecipient)).to.be.true;
+    expect(poolRefTag).to.equal(0); // Dlmm variant
+    expect(storedLbPair.equals(LB_PAIR)).to.be.true;
+    expect(storedPosition.equals(positionKp.publicKey)).to.be.true;
+  });
+
+  it("rejects a second init for the same stealth + lb_pair (PDA already in use)", async () => {
+    const stealth = Keypair.generate();
+    await fundAccount(provider, stealth.publicKey, 1_000_000_000);
+
+    const positionKp = Keypair.generate();
+    const exitRecipient = Keypair.generate().publicKey;
+
+    const [poolAuthority] = derivePoolAuthority(
+      programId,
+      stealth.publicKey,
+      LB_PAIR,
+    );
+
+    const remainingAccounts: AccountMeta[] = [
+      { pubkey: provider.wallet.publicKey, isSigner: true, isWritable: true },
+      { pubkey: positionKp.publicKey, isSigner: true, isWritable: true },
+      { pubkey: LB_PAIR, isSigner: false, isWritable: false },
+      { pubkey: poolAuthority, isSigner: true, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+      { pubkey: EVENT_AUTHORITY, isSigner: false, isWritable: false },
+      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },
+    ];
+
+    const args = Buffer.alloc(8 + 32);
+    args.writeInt32LE(-1165, 0);
+    args.writeInt32LE(1200, 4);
+    exitRecipient.toBuffer().copy(args, 8);
+
+    const keys: AccountMeta[] = [
+      { pubkey: stealth.publicKey, isSigner: true, isWritable: true },
+      { pubkey: poolAuthority, isSigner: false, isWritable: true },
+      { pubkey: LB_PAIR, isSigner: false, isWritable: false },
+      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ...remainingAccounts,
+    ];
+
+    const ix = new TransactionInstruction({
+      programId,
+      keys,
+      data: Buffer.concat([await anchorDiscriminator("dlmm_init_position"), args]),
+    });
+
+    // First init should succeed
+    await provider.sendAndConfirm(
+      new Transaction().add(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+        ix,
+      ),
+      [stealth, positionKp],
+    );
+
+    // Second init with same stealth + lb_pair should fail (PDA already exists)
+    const positionKp2 = Keypair.generate();
+    const remainingAccounts2: AccountMeta[] = [
+      { pubkey: provider.wallet.publicKey, isSigner: true, isWritable: true },
+      { pubkey: positionKp2.publicKey, isSigner: true, isWritable: true },
+      { pubkey: LB_PAIR, isSigner: false, isWritable: false },
+      { pubkey: poolAuthority, isSigner: true, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+      { pubkey: EVENT_AUTHORITY, isSigner: false, isWritable: false },
+      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },
+    ];
+
+    const args2 = Buffer.alloc(8 + 32);
+    args2.writeInt32LE(-1165, 0);
+    args2.writeInt32LE(1200, 4);
+    exitRecipient.toBuffer().copy(args2, 8);
+
+    const keys2: AccountMeta[] = [
+      { pubkey: stealth.publicKey, isSigner: true, isWritable: true },
+      { pubkey: poolAuthority, isSigner: false, isWritable: true },
+      { pubkey: LB_PAIR, isSigner: false, isWritable: false },
+      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ...remainingAccounts2,
+    ];
+
+    const ix2 = new TransactionInstruction({
+      programId,
+      keys: keys2,
+      data: Buffer.concat([await anchorDiscriminator("dlmm_init_position"), args2]),
+    });
+
     try {
-      await provider.sendAndConfirm(tx, [stealth, secondPosition]);
-    } catch (err) {
-      threw = true;
+      await provider.sendAndConfirm(
+        new Transaction().add(
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+          ix2,
+        ),
+        [stealth, positionKp2],
+      );
+      expect.fail("Expected init to fail");
+    } catch (err: any) {
+      const log = err.logs?.join("\n") ?? "";
+      expect(log).to.include("already in use");
     }
-    expect(threw, "second init for the same stealth must fail").to.equal(true);
   });
 });
