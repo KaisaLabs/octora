@@ -103,7 +103,8 @@
   },
   "pnpm": {
     "overrides": {
-      "underscore@<1.13.8": "^1.13.8"
+      "underscore@<1.13.8": "^1.13.8",
+      "@tootallnate/once@<3.0.1": "^3.0.1"
     }
   }
 }
