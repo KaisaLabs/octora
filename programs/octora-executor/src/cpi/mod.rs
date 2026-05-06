@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{
-    hash, instruction::Instruction, program::invoke_signed, system_program, sysvar,
+    instruction::Instruction, program::invoke_signed, system_program, sysvar,
 };
 
 pub mod damm;
@@ -58,7 +58,7 @@ pub fn require_token_account_owner(token_account: &AccountInfo, expected: &Pubke
 // ── Shared helpers ──
 pub fn anchor_discriminator(ix_name: &str) -> [u8; 8] {
     let preimage = format!("global:{}", ix_name);
-    let digest = hash::hash(preimage.as_bytes());
+    let digest = solana_sha256_hasher::hash(preimage.as_bytes());
     let mut out = [0u8; 8];
     out.copy_from_slice(&digest.to_bytes()[..8]);
     out

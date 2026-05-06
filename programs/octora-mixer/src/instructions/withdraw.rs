@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::poseidon::{hashv, Endianness, Parameters};
+use solana_poseidon::{hashv, Endianness, Parameters};
 use crate::constants::*;
 use crate::errors::MixerError;
 use crate::events::WithdrawEvent;

@@ -30,7 +30,7 @@ pub fn build_damm_ix(
 ) -> anchor_lang::solana_program::instruction::Instruction {
     let discriminator = {
         let preimage = format!("global:{}", ix_name);
-        let digest = anchor_lang::solana_program::hash::hash(preimage.as_bytes());
+        let digest = solana_sha256_hasher::hash(preimage.as_bytes());
         let mut out = [0u8; 8];
         out.copy_from_slice(&digest.to_bytes()[..8]);
         out
