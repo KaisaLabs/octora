@@ -92,6 +92,23 @@ export const getVolumeHistorySchema = {
   },
 } as const
 
+export const getPoolBinsSchema = {
+  params: {
+    type: 'object',
+    required: ['address'] as const,
+    properties: {
+      address: { type: 'string', minLength: 32 },
+    },
+  },
+  querystring: {
+    type: 'object',
+    properties: {
+      network: { type: 'string', enum: ['mainnet', 'devnet'], default: 'mainnet' },
+      count: { type: 'integer', minimum: 7, maximum: 201, default: 61 },
+    },
+  },
+} as const
+
 export const getProtocolMetricsSchema = {
   querystring: networkQuery,
 } as const

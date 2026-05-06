@@ -21,7 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { BinLiquidityChart } from "@/components/octora/lp/BinLiquidityChart";
 import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
 import { PositionStatusPill } from "@/components/octora/lp/PositionStatusPill";
-import { synthesizeBins } from "@/lib/bins";
+import { usePoolBins } from "@/hooks/usePoolBins";
 
 type SortKey = "tvl" | "apr" | "volume";
 type ProtocolFilter = "all" | "DLMM" | "DAMM";
@@ -413,8 +413,7 @@ function PoolDetail({ pool, presetShape, onBack }: { pool: Pool; presetShape?: D
 /* ---------------- Deposit ---------------- */
 
 function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: DistributionShape }) {
-  const bins = useMemo<LiquidityBin[]>(() => synthesizeBins(pool, { count: 61 }), [pool]);
-  const activeBinId = bins[Math.floor(bins.length / 2)]?.binId ?? 0;
+  const { bins, activeBinId, isLoading: binsLoading, isFallback } = usePoolBins(pool, 61);
 
   const [depositUsd, setDepositUsd] = useState(2500);
   const [shape, setShape] = useState<DistributionShape>(presetShape ?? "curve");
@@ -427,7 +426,7 @@ function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: Distrib
     upper: activeBinId + 8,
   }));
 
-  // Re-center range when pool changes.
+  // Re-center range when active bin changes (pool change or first real fetch).
   useEffect(() => {
     setRange({ lower: activeBinId - 8, upper: activeBinId + 8 });
   }, [activeBinId]);
@@ -485,7 +484,10 @@ function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: Distrib
               {pool.tokenA}/{pool.tokenB}
             </span>
           </div>
-          <PositionStatusPill inRange size="sm" label="Active in range" />
+          <div className="flex items-center gap-2">
+            <BinSourceBadge loading={binsLoading} fallback={isFallback} />
+            <PositionStatusPill inRange size="sm" label="Active in range" />
+          </div>
         </div>
 
         <BinLiquidityChart
@@ -819,6 +821,37 @@ function ClaimTile({ label, value, sub }: { label: string; value: string; sub: s
       <p className="mt-2 text-lg font-semibold text-foreground sm:text-xl">{value}</p>
       <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
     </div>
+  );
+}
+
+function BinSourceBadge({ loading, fallback }: { loading: boolean; fallback: boolean }) {
+  if (loading) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-secondary/60 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground/60" />
+        Loading bins
+      </span>
+    );
+  }
+  if (fallback) {
+    return (
+      <span
+        title="Live bin data unavailable; showing modeled distribution."
+        className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-amber-300"
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+        Modeled
+      </span>
+    );
+  }
+  return (
+    <span
+      title="Live bin liquidity from on-chain DLMM."
+      className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-primary"
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_6px_hsl(160_84%_55%)]" />
+      On-chain
+    </span>
   );
 }
 

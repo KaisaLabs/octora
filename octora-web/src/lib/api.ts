@@ -104,6 +104,35 @@ export async function listPools(opts: {
   return data.data
 }
 
+export interface PoolBinsResponse {
+  address: string
+  network: 'mainnet' | 'devnet'
+  activeBinId: number
+  binStep: number
+  bins: Array<{
+    binId: number
+    price: number
+    liquidity: number
+    xAmount: string
+    yAmount: string
+  }>
+}
+
+export async function getPoolBins(
+  address: string,
+  opts: { network?: 'mainnet' | 'devnet'; count?: number } = {}
+): Promise<PoolBinsResponse> {
+  const params = new URLSearchParams()
+  if (opts.network) params.set('network', opts.network)
+  if (opts.count) params.set('count', String(opts.count))
+
+  const res = await fetch(`${API_BASE}/dlmm/pools/${address}/bins?${params.toString()}`)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch bins: ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function getPoolDetail(
   address: string,
   network: 'mainnet' | 'devnet' = 'mainnet'

@@ -1,3 +1,5 @@
+import { Connection, PublicKey } from '@solana/web3.js'
+import DLMM from '@meteora-ag/dlmm'
 import type {
   PoolSummary,
   PoolDetail,
@@ -6,6 +8,8 @@ import type {
   VolumeHistoryBucket,
   ProtocolMetrics,
   PaginatedResponse,
+  PoolBins,
+  LiquidityBin,
 } from './dlmm.types'
 
 const API_BASE = {
@@ -237,6 +241,112 @@ export async function getVolumeHistory(
     timestamp: b.timestamp,
     volume: b.volume,
   }))
+}
+
+// --- On-chain bin reading via @meteora-ag/dlmm ---
+
+const RPC_URL: Record<Network, string> = {
+  mainnet:
+    process.env.OCTORA_DLMM_RPC_URL_MAINNET ??
+    process.env.OCTORA_EXECUTOR_RPC_URL ??
+    'https://api.mainnet-beta.solana.com',
+  devnet:
+    process.env.OCTORA_DLMM_RPC_URL_DEVNET ??
+    process.env.OCTORA_EXECUTOR_RPC_URL ??
+    'https://api.devnet.solana.com',
+}
+
+const connections: Partial<Record<Network, Connection>> = {}
+function getConnection(network: Network): Connection {
+  let conn = connections[network]
+  if (!conn) {
+    conn = new Connection(RPC_URL[network], 'confirmed')
+    connections[network] = conn
+  }
+  return conn
+}
+
+interface CachedDlmm {
+  instance: any
+  createdAt: number
+}
+
+const DLMM_CACHE_TTL_MS = 30_000
+const dlmmCache = new Map<string, CachedDlmm>()
+
+async function getDlmmInstance(address: string, network: Network) {
+  const key = `${network}:${address}`
+  const cached = dlmmCache.get(key)
+  if (cached && Date.now() - cached.createdAt < DLMM_CACHE_TTL_MS) {
+    return cached.instance
+  }
+  const conn = getConnection(network)
+  // The Meteora SDK's static `create` returns a DLMM instance bound to the LB pair.
+  const instance = await (DLMM as any).create(conn, new PublicKey(address))
+  dlmmCache.set(key, { instance, createdAt: Date.now() })
+  return instance
+}
+
+export async function getPoolBins(
+  address: string,
+  network: Network,
+  opts: { count?: number } = {},
+): Promise<PoolBins> {
+  const count = Math.max(7, Math.min(opts.count ?? 61, 201))
+  const half = Math.floor(count / 2)
+
+  let dlmm: any
+  try {
+    dlmm = await getDlmmInstance(address, network)
+  } catch (err: any) {
+    throw new MeteoraApiError(404, `DLMM pool not found: ${err?.message ?? String(err)}`)
+  }
+
+  const { activeBin, bins } = (await dlmm.getBinsAroundActiveBin(half, half)) as {
+    activeBin: number
+    bins: Array<{ binId: number; price: string; xAmount: any; yAmount: any }>
+  }
+
+  const tokenXDecimals: number = dlmm.tokenX?.mint?.decimals ?? dlmm.tokenX?.decimals ?? 0
+  const tokenYDecimals: number = dlmm.tokenY?.mint?.decimals ?? dlmm.tokenY?.decimals ?? 0
+  const binStep: number = dlmm.lbPair?.binStep ?? 0
+
+  const out: LiquidityBin[] = bins.map((b) => {
+    const price = Number(b.price)
+    const x = decimalize(b.xAmount, tokenXDecimals)
+    const y = decimalize(b.yAmount, tokenYDecimals)
+    // Liquidity expressed in tokenY units: y + x * price.
+    const liquidity = y + (Number.isFinite(price) ? x * price : 0)
+    return {
+      binId: b.binId,
+      price,
+      liquidity,
+      xAmount: bnToString(b.xAmount),
+      yAmount: bnToString(b.yAmount),
+    }
+  })
+
+  return {
+    address,
+    network,
+    activeBinId: activeBin,
+    binStep,
+    bins: out,
+  }
+}
+
+function decimalize(raw: any, decimals: number): number {
+  if (raw == null) return 0
+  // BN.js or BigInt-ish; toString avoids precision loss before division.
+  const s = typeof raw === 'string' ? raw : raw.toString?.() ?? String(raw)
+  const n = Number(s)
+  if (!Number.isFinite(n)) return 0
+  return n / Math.pow(10, decimals || 0)
+}
+
+function bnToString(raw: any): string {
+  if (raw == null) return '0'
+  return typeof raw === 'string' ? raw : raw.toString?.() ?? String(raw)
 }
 
 export async function getProtocolMetrics(network: Network): Promise<ProtocolMetrics> {

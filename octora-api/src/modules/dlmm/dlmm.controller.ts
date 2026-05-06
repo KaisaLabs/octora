@@ -9,6 +9,7 @@ import {
   getOhlcv,
   getVolumeHistory,
   getProtocolMetrics,
+  getPoolBins,
   MeteoraApiError,
 } from './dlmm.service'
 
@@ -39,6 +40,10 @@ interface TimeRangeQuery extends NetworkQuery {
   startTime?: number
   endTime?: number
   resolution?: string
+}
+
+interface BinsQuery extends NetworkQuery {
+  count?: number
 }
 
 function handleError(err: unknown, reply: FastifyReply) {
@@ -104,6 +109,19 @@ export async function getVolumeHistoryHandler(
   const { network = 'mainnet', startTime, endTime, resolution } = request.query
   const buckets = await getVolumeHistory(request.params.address, network, { startTime, endTime, resolution })
   return reply.send({ data: buckets })
+}
+
+export async function getPoolBinsHandler(
+  request: FastifyRequest<{ Params: AddressParams; Querystring: BinsQuery }>,
+  reply: FastifyReply
+) {
+  try {
+    const { network = 'mainnet', count } = request.query
+    const result = await getPoolBins(request.params.address, network, { count })
+    return reply.send(result)
+  } catch (err) {
+    return handleError(err, reply)
+  }
 }
 
 export async function getProtocolMetricsHandler(

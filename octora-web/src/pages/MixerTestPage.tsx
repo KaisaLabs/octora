@@ -378,7 +378,7 @@ export function MixerTestPage() {
           <h1 className="text-2xl font-bold">Mixer Test</h1>
           <p className="text-muted-foreground">Connect your wallet to start</p>
           <button
-            onClick={connect}
+            onClick={() => connect()}
             className="px-6 py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90"
           >
             Connect Wallet

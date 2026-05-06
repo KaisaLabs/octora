@@ -7,6 +7,7 @@ import {
   getGroupHandler,
   getOhlcvHandler,
   getVolumeHistoryHandler,
+  getPoolBinsHandler,
   getProtocolMetricsHandler,
 } from './dlmm.controller'
 import {
@@ -16,6 +17,7 @@ import {
   getGroupSchema,
   getOhlcvSchema,
   getVolumeHistorySchema,
+  getPoolBinsSchema,
   getProtocolMetricsSchema,
 } from './dlmm.schema'
 
@@ -26,6 +28,7 @@ export async function registerDlmmRoutes(app: FastifyInstance) {
   app.get('/dlmm/pools/groups', { schema: { ...listGroupsSchema, tags } }, listGroupsHandler)
   app.get('/dlmm/pools/groups/:mintPair', { schema: { ...getGroupSchema, tags } }, getGroupHandler)
   app.get('/dlmm/pools/:address', { schema: { ...getPoolSchema, tags } }, getPoolHandler)
+  app.get('/dlmm/pools/:address/bins', { schema: { ...getPoolBinsSchema, tags } }, getPoolBinsHandler)
   app.get('/dlmm/pools/:address/ohlcv', { schema: { ...getOhlcvSchema, tags } }, getOhlcvHandler)
   app.get('/dlmm/pools/:address/volume/history', { schema: { ...getVolumeHistorySchema, tags } }, getVolumeHistoryHandler)
   app.get('/dlmm/stats', { schema: { ...getProtocolMetricsSchema, tags } }, getProtocolMetricsHandler)

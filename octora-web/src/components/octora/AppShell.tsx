@@ -1,9 +1,10 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Activity, BriefcaseBusiness, Coins, Compass, Loader2, LogOut, Sparkles, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useSolana } from "@/providers/SolanaProvider";
+import { useSolana, type WalletProviderId } from "@/providers/SolanaProvider";
 import { portfolioPositions } from "@/data/octora";
+import { WalletConnectDialog } from "./lp/WalletConnectDialog";
 import { GlowBackground } from "./GlowBackground";
 import { FloatingParticles } from "./FloatingParticles";
 
@@ -33,12 +34,24 @@ const tabs = [
 export function AppShell() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const { wallet, connect, disconnect, balance } = useSolana();
+  const { wallet, connect, disconnect, balance, providers } = useSolana();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pendingId, setPendingId] = useState<WalletProviderId | null>(null);
 
   const claimable = useMemo(
     () => portfolioPositions.reduce((s, p) => s + parseUsd(p.claimable), 0),
     [],
   );
+
+  const handlePick = async (id: WalletProviderId) => {
+    setPendingId(id);
+    try {
+      await connect(id);
+      setPickerOpen(false);
+    } finally {
+      setPendingId(null);
+    }
+  };
 
   const isActive = (to: string) => {
     if (to === "/") return pathname === "/";
@@ -100,7 +113,7 @@ export function AppShell() {
                 variant="hero"
                 size="sm"
                 className="rounded-full"
-                onClick={connect}
+                onClick={() => setPickerOpen(true)}
               >
                 <Wallet className="h-4 w-4" />
                 <span className="hidden sm:inline">Connect</span>
@@ -177,6 +190,17 @@ export function AppShell() {
           })}
         </div>
       </nav>
+
+      <WalletConnectDialog
+        open={pickerOpen}
+        onOpenChange={(o) => {
+          if (!wallet.connecting) setPickerOpen(o);
+        }}
+        providers={providers}
+        connecting={wallet.connecting}
+        pendingId={pendingId}
+        onSelect={handlePick}
+      />
     </div>
   );
 }

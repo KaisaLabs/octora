@@ -74,3 +74,21 @@ export interface PaginatedResponse<T> {
   currentPage: number
   pageSize: number
 }
+
+export interface LiquidityBin {
+  binId: number
+  /** Price denominated in tokenY per tokenX, scaled per Meteora SDK. */
+  price: number
+  /** Aggregate liquidity in the bin, in USD-ish units (xAmount + yAmount converted via current price). */
+  liquidity: number
+  xAmount: string
+  yAmount: string
+}
+
+export interface PoolBins {
+  address: string
+  network: 'mainnet' | 'devnet'
+  activeBinId: number
+  binStep: number
+  bins: LiquidityBin[]
+}
