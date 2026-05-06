@@ -11,11 +11,69 @@
 //! one place per ix and easy to update when their IDL changes.
 
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{hash, instruction::Instruction, program::invoke_signed};
+use anchor_lang::solana_program::{
+    hash,
+    instruction::Instruction,
+    program::invoke_signed,
+    system_program,
+    sysvar,
+};
 use anchor_spl::token::spl_token::state::Account as SplTokenAccount;
 use anchor_lang::solana_program::program_pack::Pack;
 
+use crate::constants::DLMM_PROGRAM_ID;
 use crate::errors::ExecutorError;
+
+/// Canonical SPL Token program ID. Hardcoded so a forwarded `token_program`
+/// account cannot be silently substituted with an attacker-controlled program.
+pub const SPL_TOKEN_PROGRAM_ID: Pubkey =
+    pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+
+/// Canonical Token-2022 program ID. Same rationale as `SPL_TOKEN_PROGRAM_ID`.
+pub const SPL_TOKEN_2022_PROGRAM_ID: Pubkey =
+    pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+
+/// Reject anything other than the SPL Token or Token-2022 program. DLMM
+/// invokes the forwarded token_program internally; without this guard a
+/// caller could swap in a program that signs with our PDA's authority on
+/// behalf of DLMM's internal CPIs.
+pub fn require_spl_token_program(ai: &AccountInfo) -> Result<()> {
+    let k = ai.key();
+    require!(
+        k == SPL_TOKEN_PROGRAM_ID || k == SPL_TOKEN_2022_PROGRAM_ID,
+        ExecutorError::InvalidTokenProgram,
+    );
+    Ok(())
+}
+
+/// Reject anything other than the System program at the given slot.
+pub fn require_system_program(ai: &AccountInfo) -> Result<()> {
+    require_keys_eq!(ai.key(), system_program::ID, ExecutorError::InvalidSysAccount);
+    Ok(())
+}
+
+/// Reject anything other than the Rent sysvar at the given slot.
+pub fn require_rent_sysvar(ai: &AccountInfo) -> Result<()> {
+    require_keys_eq!(ai.key(), sysvar::rent::ID, ExecutorError::InvalidSysAccount);
+    Ok(())
+}
+
+/// Cached derivation of DLMM's `event_authority` PDA — `[b"__event_authority"]`
+/// under `DLMM_PROGRAM_ID`. We re-derive on each call (find_program_address
+/// isn't const). Costs a few k CU per ix; in exchange we get a hard canary
+/// that fires the moment DLMM's IDL drifts.
+pub fn require_dlmm_event_authority(ai: &AccountInfo) -> Result<()> {
+    let (expected, _bump) =
+        Pubkey::find_program_address(&[b"__event_authority"], &DLMM_PROGRAM_ID);
+    require_keys_eq!(ai.key(), expected, ExecutorError::EventAuthorityMismatch);
+    Ok(())
+}
+
+/// Reject anything other than the DLMM program at the trailing program slot.
+pub fn require_dlmm_program(ai: &AccountInfo) -> Result<()> {
+    require_keys_eq!(ai.key(), DLMM_PROGRAM_ID, ExecutorError::DlmmProgramMismatch);
+    Ok(())
+}
 
 /// Verify that an SPL token account's `owner` matches `expected`. Used to
 /// pin claim/withdraw destinations to `PositionAuthority.exit_recipient`.

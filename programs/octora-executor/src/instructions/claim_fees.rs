@@ -2,7 +2,10 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::AccountMeta;
 
 use crate::constants::*;
-use crate::dlmm::{build_dlmm_ix, invoke_dlmm_signed, require_token_account_owner};
+use crate::dlmm::{
+    build_dlmm_ix, invoke_dlmm_signed, require_dlmm_event_authority, require_dlmm_program,
+    require_spl_token_program, require_token_account_owner,
+};
 use crate::errors::ExecutorError;
 use crate::state::PositionAuthority;
 
@@ -58,29 +61,21 @@ pub fn handler<'info>(
 
     let pa = &ctx.accounts.position_authority;
     let remaining = ctx.remaining_accounts;
+    require!(remaining.len() >= 14, ExecutorError::AccountsTooShort);
 
     // Cross-check the forwarded accounts that PositionAuthority pins.
-    let lb_pair_ai = remaining
-        .first()
-        .ok_or(error!(ExecutorError::LbPairMismatch))?;
-    require_keys_eq!(lb_pair_ai.key(), pa.lb_pair, ExecutorError::LbPairMismatch);
-
-    let position_ai = remaining
-        .get(1)
-        .ok_or(error!(ExecutorError::PositionMismatch))?;
-    require_keys_eq!(position_ai.key(), pa.position, ExecutorError::PositionMismatch);
+    require_keys_eq!(remaining[0].key(), pa.lb_pair, ExecutorError::LbPairMismatch);
+    require_keys_eq!(remaining[1].key(), pa.position, ExecutorError::PositionMismatch);
 
     // Pin destination ATAs to exit_recipient. Even with the stealth key,
     // an attacker can't substitute their own ATA here.
-    let user_token_x = remaining
-        .get(7)
-        .ok_or(error!(ExecutorError::ExitRecipientMismatch))?;
-    require_token_account_owner(user_token_x, &pa.exit_recipient)?;
+    require_token_account_owner(&remaining[7], &pa.exit_recipient)?;
+    require_token_account_owner(&remaining[8], &pa.exit_recipient)?;
 
-    let user_token_y = remaining
-        .get(8)
-        .ok_or(error!(ExecutorError::ExitRecipientMismatch))?;
-    require_token_account_owner(user_token_y, &pa.exit_recipient)?;
+    // Pin token program + IDL-drift canary at the trailing slots.
+    require_spl_token_program(&remaining[11])?;
+    require_dlmm_event_authority(&remaining[12])?;
+    require_dlmm_program(&remaining[13])?;
 
     // Pin sender (idx 4) to our PDA. The pubkey override is what makes the
     // `invoke_signed` call act as the PDA, not the caller's choice.

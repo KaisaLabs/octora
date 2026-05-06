@@ -19,4 +19,19 @@ pub enum ExecutorError {
 
     #[msg("Failed to deserialize SPL token account")]
     InvalidTokenAccount,
+
+    #[msg("Forwarded token_program is not SPL Token or Token-2022")]
+    InvalidTokenProgram,
+
+    #[msg("Forwarded system_program / rent sysvar mismatch")]
+    InvalidSysAccount,
+
+    #[msg("DLMM event_authority PDA mismatch — possible IDL drift")]
+    EventAuthorityMismatch,
+
+    #[msg("Argument out of range (bin id ordering or basis points)")]
+    ArgOutOfRange,
+
+    #[msg("Forwarded remaining_accounts list is too short for this instruction")]
+    AccountsTooShort,
 }

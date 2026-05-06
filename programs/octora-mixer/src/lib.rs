@@ -39,4 +39,10 @@ pub mod octora_mixer {
     ) -> Result<()> {
         instructions::withdraw::handler(ctx, proof_data, public_inputs)
     }
+
+    /// Authority-gated pause toggle. Blocks both deposit and withdraw
+    /// while `is_paused == true`. Only `pool.authority` can call this.
+    pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
+        instructions::set_paused::handler(ctx, paused)
+    }
 }

@@ -68,6 +68,19 @@ pub fn handler(
     let relayer_field: [u8; 32] = public_inputs[96..128].try_into().unwrap();
     let fee_field: [u8; 32] = public_inputs[128..160].try_into().unwrap();
 
+    // Reject any public input >= BN254 scalar field order.
+    //
+    // groth16-solana 0.2.x does not enforce range on public inputs, so
+    // without this check a verifying proof could be re-submitted with
+    // public_inputs that are equivalent mod r but byte-distinct. The
+    // nullifier PDA seeds use raw bytes, so equivalent-mod-r encodings
+    // would produce different PDAs — i.e. nullifier replay.
+    require_lt_field_order(&root)?;
+    require_lt_field_order(&nullifier_hash)?;
+    require_lt_field_order(&recipient_field)?;
+    require_lt_field_order(&relayer_field)?;
+    require_lt_field_order(&fee_field)?;
+
     // Extract fee (big-endian 32 bytes → u64 from last 8 bytes).
     // The circuit binds the full field element, so reject any proof whose fee
     // doesn't fit in u64 — otherwise the upper 24 bytes are silently dropped
@@ -88,6 +101,22 @@ pub fn handler(
 
     // Verify the root is in history
     require!(ctx.accounts.mixer_pool.is_known_root(&root), MixerError::RootNotFound);
+
+    // Reject recipient/relayer aliasing the pool. Aliasing is harmless to
+    // the protocol (the user just burns their deposit) but is almost
+    // always a client mistake — fail loudly rather than silently consume
+    // the deposit.
+    let pool_key = ctx.accounts.mixer_pool.key();
+    require_keys_neq!(
+        ctx.accounts.recipient.key(),
+        pool_key,
+        MixerError::RecipientAliasesPool,
+    );
+    require_keys_neq!(
+        ctx.accounts.relayer.key(),
+        pool_key,
+        MixerError::RecipientAliasesPool,
+    );
 
     // Verify recipient account matches the proof's public input.
     //
@@ -162,6 +191,22 @@ pub fn handler(
 ///
 /// Off-chain (browser, relayer, integration tests) use the same
 /// `Poseidon(hi, lo)` over circomlibjs, so the values match byte-for-byte.
+/// Reject a 32-byte big-endian value that is not a canonical BN254
+/// scalar field element (i.e. >= r). Big-endian byte-wise compare against
+/// `BN254_FIELD_ORDER`.
+fn require_lt_field_order(x: &[u8; 32]) -> Result<()> {
+    use core::cmp::Ordering;
+    for (a, b) in x.iter().zip(BN254_FIELD_ORDER.iter()) {
+        match a.cmp(b) {
+            Ordering::Less => return Ok(()),
+            Ordering::Greater => return err!(MixerError::PublicInputOutOfRange),
+            Ordering::Equal => continue,
+        }
+    }
+    // x == r — also out of range.
+    err!(MixerError::PublicInputOutOfRange)
+}
+
 fn pubkey_to_field_hash(pubkey: &Pubkey) -> Result<[u8; 32]> {
     let bytes = pubkey.to_bytes();
 

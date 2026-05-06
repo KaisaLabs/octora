@@ -2,7 +2,10 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::AccountMeta;
 
 use crate::constants::*;
-use crate::dlmm::{build_dlmm_ix, invoke_dlmm_signed};
+use crate::dlmm::{
+    build_dlmm_ix, invoke_dlmm_signed, require_dlmm_event_authority, require_dlmm_program,
+    require_rent_sysvar, require_system_program,
+};
 use crate::errors::ExecutorError;
 use crate::state::PositionAuthority;
 
@@ -62,12 +65,17 @@ pub fn handler<'info>(
 
     // Forwarded DLMM accounts (see ix-level docs above for ordering).
     let remaining = ctx.remaining_accounts;
-    let position_account = remaining
-        .get(1)
-        .ok_or(error!(ExecutorError::PositionMismatch))?;
-    let lb_pair_account = remaining
-        .get(2)
-        .ok_or(error!(ExecutorError::LbPairMismatch))?;
+    require!(remaining.len() >= 8, ExecutorError::AccountsTooShort);
+
+    let position_account = &remaining[1];
+    let lb_pair_account = &remaining[2];
+
+    // Defense-in-depth: pin the well-known program/sysvar slots so a caller
+    // cannot substitute fakes that DLMM might forward into its own CPIs.
+    require_system_program(&remaining[4])?;
+    require_rent_sysvar(&remaining[5])?;
+    require_dlmm_event_authority(&remaining[6])?;
+    require_dlmm_program(&remaining[7])?;
 
     // Cache PDA bookkeeping before we hand the AccountInfos to invoke_signed.
     let stealth_key = ctx.accounts.stealth.key();

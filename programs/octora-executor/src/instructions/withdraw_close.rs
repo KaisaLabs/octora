@@ -2,7 +2,10 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::AccountMeta;
 
 use crate::constants::*;
-use crate::dlmm::{build_dlmm_ix, invoke_dlmm_signed, require_token_account_owner};
+use crate::dlmm::{
+    build_dlmm_ix, invoke_dlmm_signed, require_dlmm_event_authority, require_dlmm_program,
+    require_spl_token_program, require_token_account_owner,
+};
 use crate::errors::ExecutorError;
 use crate::state::PositionAuthority;
 
@@ -66,6 +69,14 @@ pub fn handler<'info>(
     to_bin_id: i32,
     bps_to_remove: u16,
 ) -> Result<()> {
+    // Argument range checks. DLMM rejects nonsense internally, but failing
+    // here gives a clearer error and skips a wasted CPI.
+    require!(from_bin_id <= to_bin_id, ExecutorError::ArgOutOfRange);
+    require!(
+        bps_to_remove > 0 && bps_to_remove <= 10_000,
+        ExecutorError::ArgOutOfRange,
+    );
+
     require_keys_eq!(
         ctx.accounts.dlmm_program.key(),
         DLMM_PROGRAM_ID,
@@ -77,18 +88,22 @@ pub fn handler<'info>(
 
     // Slot 16 is the close-only rent receiver; demand the full union up
     // front so we don't fail mid-CPI with a less helpful error.
-    require!(remaining.len() >= 17, ExecutorError::PositionMismatch);
+    require!(remaining.len() >= 17, ExecutorError::AccountsTooShort);
 
     // ── Cross-checks against PA state ──────────────────────────────────
 
-    let position_ai = &remaining[0];
-    require_keys_eq!(position_ai.key(), pa.position, ExecutorError::PositionMismatch);
-
-    let lb_pair_ai = &remaining[1];
-    require_keys_eq!(lb_pair_ai.key(), pa.lb_pair, ExecutorError::LbPairMismatch);
+    require_keys_eq!(remaining[0].key(), pa.position, ExecutorError::PositionMismatch);
+    require_keys_eq!(remaining[1].key(), pa.lb_pair, ExecutorError::LbPairMismatch);
 
     require_token_account_owner(&remaining[3], &pa.exit_recipient)?;
     require_token_account_owner(&remaining[4], &pa.exit_recipient)?;
+
+    // Pin token programs (idx 12, 13) and IDL-drift canary (idx 14) +
+    // DLMM program identity (idx 15).
+    require_spl_token_program(&remaining[12])?;
+    require_spl_token_program(&remaining[13])?;
+    require_dlmm_event_authority(&remaining[14])?;
+    require_dlmm_program(&remaining[15])?;
 
     // rent_receiver must equal exit_recipient. close_position credits the
     // position account's rent rebate to this address, so it's effectively
@@ -97,6 +112,19 @@ pub fn handler<'info>(
         remaining[16].key(),
         pa.exit_recipient,
         ExecutorError::ExitRecipientMismatch,
+    );
+
+    // And rent_receiver must not alias the writable accounts above. Cheap
+    // sanity check; closes a contrived aliasing surface.
+    require_keys_neq!(
+        remaining[16].key(),
+        remaining[0].key(),
+        ExecutorError::PositionMismatch,
+    );
+    require_keys_neq!(
+        remaining[16].key(),
+        remaining[1].key(),
+        ExecutorError::LbPairMismatch,
     );
 
     let pa_key = pa.key();

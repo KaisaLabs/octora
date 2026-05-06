@@ -37,4 +37,13 @@ pub enum MixerError {
 
     #[msg("Poseidon hash syscall failed during Merkle tree update")]
     PoseidonHashFailed,
+
+    #[msg("Public input is not a canonical BN254 field element (>= r)")]
+    PublicInputOutOfRange,
+
+    #[msg("Recipient or relayer must not alias the mixer pool")]
+    RecipientAliasesPool,
+
+    #[msg("Denomination must be greater than zero")]
+    InvalidDenomination,
 }

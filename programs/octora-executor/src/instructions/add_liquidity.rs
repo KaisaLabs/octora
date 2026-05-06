@@ -2,7 +2,10 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::AccountMeta;
 
 use crate::constants::*;
-use crate::dlmm::{build_dlmm_ix, invoke_dlmm_signed};
+use crate::dlmm::{
+    build_dlmm_ix, invoke_dlmm_signed, require_dlmm_event_authority, require_dlmm_program,
+    require_spl_token_program,
+};
 use crate::errors::ExecutorError;
 use crate::state::PositionAuthority;
 
@@ -81,19 +84,22 @@ pub fn handler<'info>(
 
     let pa = &ctx.accounts.position_authority;
     let remaining = ctx.remaining_accounts;
+    require!(remaining.len() >= 16, ExecutorError::AccountsTooShort);
 
     // Sanity check: forwarded position + lb_pair must match what we registered
     // in init_position. Without this, a caller could swap in someone else's
     // position and have our PDA sign for it.
-    let position_ai = remaining
-        .first()
-        .ok_or(error!(ExecutorError::PositionMismatch))?;
-    require_keys_eq!(position_ai.key(), pa.position, ExecutorError::PositionMismatch);
+    require_keys_eq!(remaining[0].key(), pa.position, ExecutorError::PositionMismatch);
+    require_keys_eq!(remaining[1].key(), pa.lb_pair, ExecutorError::LbPairMismatch);
 
-    let lb_pair_ai = remaining
-        .get(1)
-        .ok_or(error!(ExecutorError::LbPairMismatch))?;
-    require_keys_eq!(lb_pair_ai.key(), pa.lb_pair, ExecutorError::LbPairMismatch);
+    // Pin token programs (idx 12, 13) so DLMM's internal CPIs can't be
+    // hijacked by a caller-supplied fake token program signing as our PDA.
+    require_spl_token_program(&remaining[12])?;
+    require_spl_token_program(&remaining[13])?;
+
+    // IDL-drift canary + program identity at the trailing slots.
+    require_dlmm_event_authority(&remaining[14])?;
+    require_dlmm_program(&remaining[15])?;
 
     // Pin sender (idx 11) to our PDA, marked as signer.
     let pa_key = pa.key();
