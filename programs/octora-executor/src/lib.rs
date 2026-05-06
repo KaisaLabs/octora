@@ -46,36 +46,4 @@ pub mod octora_executor {
     ) -> Result<()> {
         instructions::dlmm::withdraw_close::handler(ctx, from_bin_id, to_bin_id, bps_to_remove)
     }
-
-    // ═══ DAMM Instructions ═══
-
-    pub fn damm_init<'info>(
-        ctx: Context<'_, '_, '_, 'info, DammInit<'info>>,
-        exit_recipient: Pubkey,
-    ) -> Result<()> {
-        instructions::damm::init::handler(ctx, exit_recipient)
-    }
-
-    pub fn damm_deposit<'info>(
-        ctx: Context<'_, '_, '_, 'info, DammDeposit<'info>>,
-        pool_token_amount: u64,
-        max_sol: u64,
-    ) -> Result<()> {
-        instructions::damm::deposit::handler(ctx, pool_token_amount, max_sol)
-    }
-
-    pub fn damm_withdraw<'info>(
-        ctx: Context<'_, '_, '_, 'info, DammWithdraw<'info>>,
-        pool_token_amount: u64,
-        min_sol_out: u64,
-    ) -> Result<()> {
-        instructions::damm::withdraw::handler(ctx, pool_token_amount, min_sol_out)
-    }
-
-    pub fn damm_claim_fees<'info>(
-        ctx: Context<'_, '_, '_, 'info, DammClaimFees<'info>>,
-        max_amount: u64,
-    ) -> Result<()> {
-        instructions::damm::claim_fees::handler(ctx, max_amount)
-    }
 }

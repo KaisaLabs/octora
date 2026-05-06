@@ -22,8 +22,10 @@ pub struct DlmmWithdrawClose<'info> {
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
 
+    /// CHECK: validated in handler against stored PoolAuthority lb_pair.
     pub lb_pair: UncheckedAccount<'info>,
 
+    /// CHECK: validated in handler against canonical DLMM program ID.
     pub dlmm_program: UncheckedAccount<'info>,
 }
 
