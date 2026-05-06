@@ -5,8 +5,11 @@ import {
   Coins,
   Copy,
   Flame,
+  Gem,
   Minus,
+  Rocket,
   Search,
+  ShieldCheck,
 } from "lucide-react";
 
 import type { DistributionShape, LiquidityBin, Pool } from "@/components/octora/types";
@@ -22,6 +25,41 @@ import { synthesizeBins } from "@/lib/bins";
 
 type SortKey = "tvl" | "apr" | "volume";
 type ProtocolFilter = "all" | "DLMM" | "DAMM";
+type Strategy = {
+  id: "stable" | "trending" | "blue-chip";
+  title: string;
+  blurb: string;
+  icon: React.ComponentType<{ className?: string }>;
+  shape: DistributionShape;
+  matchTokens: string[];
+};
+
+const STRATEGIES: Strategy[] = [
+  {
+    id: "stable",
+    title: "Stable yield",
+    blurb: "Tight curve, USDC pairs.",
+    icon: ShieldCheck,
+    shape: "curve",
+    matchTokens: ["USDC", "USDT", "USD"],
+  },
+  {
+    id: "trending",
+    title: "Trending memecoin",
+    blurb: "Wide spot, high volatility.",
+    icon: Rocket,
+    shape: "spot",
+    matchTokens: ["WIF", "BONK", "POPCAT", "MEW"],
+  },
+  {
+    id: "blue-chip",
+    title: "Blue-chip range",
+    blurb: "Bid-ask edges on majors.",
+    icon: Gem,
+    shape: "bid-ask",
+    matchTokens: ["SOL", "JUP", "JTO", "PYTH"],
+  },
+];
 
 const parseUsd = (v: string | number) => {
   if (typeof v === "number") return v;
@@ -47,12 +85,20 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
   const [query, setQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortKey>("tvl");
   const [protocolFilter, setProtocolFilter] = useState<ProtocolFilter>("all");
+  const [strategyId, setStrategyId] = useState<Strategy["id"] | null>(null);
   const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null);
+
+  const activeStrategy = useMemo(() => STRATEGIES.find((s) => s.id === strategyId) ?? null, [strategyId]);
 
   const filteredPools = useMemo(() => {
     const q = query.trim().toLowerCase();
     let list = pools.filter((p) => {
       if (protocolFilter !== "all" && !p.protocol.includes(protocolFilter)) return false;
+      if (activeStrategy) {
+        const tokens = [p.tokenA, p.tokenB].map((t) => t.toUpperCase());
+        const wanted = activeStrategy.matchTokens.map((t) => t.toUpperCase());
+        if (!tokens.some((t) => wanted.includes(t))) return false;
+      }
       if (!q) return true;
       return [p.name, p.pair, p.protocol, p.tokenA, p.tokenB, p.address, ...(p.tags ?? [])]
         .join(" ")
@@ -66,7 +112,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
       return parseUsd(b.volume24h) - parseUsd(a.volume24h);
     });
     return list;
-  }, [pools, query, sortBy, protocolFilter]);
+  }, [pools, query, sortBy, protocolFilter, activeStrategy]);
 
   const selectedPool = useMemo(
     () => pools.find((p) => p.id === selectedPoolId) ?? null,
@@ -86,7 +132,9 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
   }
 
   return (
-    <>
+    <div className="space-y-5">
+      <FeaturedStrategies activeId={strategyId} onSelect={setStrategyId} />
+
       <section className="panel-shell rounded-2xl p-4 sm:p-6">
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -94,8 +142,21 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
               <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
                 Discover pools
               </h2>
-              <p className="mt-1 text-sm text-muted-foreground">Search a pair or paste a contract address.</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {activeStrategy
+                  ? `Filtered to ${activeStrategy.title.toLowerCase()} candidates.`
+                  : "Search a pair or paste a contract address."}
+              </p>
             </div>
+            {activeStrategy && (
+              <button
+                type="button"
+                onClick={() => setStrategyId(null)}
+                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Clear strategy
+              </button>
+            )}
           </div>
 
           <label className="relative block">
@@ -195,16 +256,79 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
       {/* Pool Detail Sheet */}
       <Sheet open={!!selectedPool} onOpenChange={(open) => !open && setSelectedPoolId(null)}>
         <SheetContent side="bottom" className="max-h-[90vh] overflow-y-auto rounded-t-2xl border-t border-border bg-background p-0 sm:max-h-[85vh]">
-          {selectedPool && <PoolDetail pool={selectedPool} onBack={() => setSelectedPoolId(null)} />}
+          {selectedPool && (
+            <PoolDetail pool={selectedPool} presetShape={activeStrategy?.shape} onBack={() => setSelectedPoolId(null)} />
+          )}
         </SheetContent>
       </Sheet>
-    </>
+    </div>
+  );
+}
+
+function FeaturedStrategies({
+  activeId,
+  onSelect,
+}: {
+  activeId: Strategy["id"] | null;
+  onSelect: (id: Strategy["id"] | null) => void;
+}) {
+  return (
+    <section className="panel-shell rounded-2xl p-4 sm:p-5">
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Featured</p>
+          <h3 className="mt-1 font-display text-lg font-semibold tracking-tight text-foreground">
+            Curated LP playbooks
+          </h3>
+        </div>
+        <p className="hidden text-xs text-muted-foreground sm:block">
+          Tap one to filter pools and preset the deposit shape.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {STRATEGIES.map((s) => {
+          const Icon = s.icon;
+          const active = activeId === s.id;
+          return (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => onSelect(active ? null : s.id)}
+              className={`group flex items-center gap-3 rounded-xl border p-4 text-left transition-all ${
+                active
+                  ? "border-primary/50 bg-primary/5 shadow-[0_0_0_1px_hsl(160_84%_45%_/_0.25)]"
+                  : "border-border bg-card hover:border-primary/30 hover:bg-surface-elevated/40"
+              }`}
+            >
+              <span
+                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border ${
+                  active ? "border-primary/40 bg-primary/10 text-primary" : "border-border bg-secondary/60 text-foreground/80"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-foreground">{s.title}</p>
+                <p className="mt-0.5 truncate text-xs text-muted-foreground">{s.blurb}</p>
+              </div>
+              <span
+                className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] ${
+                  active ? "border-primary/40 bg-primary/10 text-primary" : "border-border bg-secondary/60 text-muted-foreground"
+                }`}
+              >
+                {s.shape}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
 /* ---------------- Pool detail ---------------- */
 
-function PoolDetail({ pool, onBack }: { pool: Pool; onBack: () => void }) {
+function PoolDetail({ pool, presetShape, onBack }: { pool: Pool; presetShape?: DistributionShape; onBack: () => void }) {
   const [detailTab, setDetailTab] = useState("deposit");
 
   return (
@@ -273,7 +397,7 @@ function PoolDetail({ pool, onBack }: { pool: Pool; onBack: () => void }) {
         </TabsList>
 
         <TabsContent value="deposit" className="mt-4">
-          <DepositPanel pool={pool} />
+          <DepositPanel pool={pool} presetShape={presetShape} />
         </TabsContent>
         <TabsContent value="claim" className="mt-4">
           <ClaimPanel pool={pool} />
@@ -288,12 +412,16 @@ function PoolDetail({ pool, onBack }: { pool: Pool; onBack: () => void }) {
 
 /* ---------------- Deposit ---------------- */
 
-function DepositPanel({ pool }: { pool: Pool }) {
+function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: DistributionShape }) {
   const bins = useMemo<LiquidityBin[]>(() => synthesizeBins(pool, { count: 61 }), [pool]);
   const activeBinId = bins[Math.floor(bins.length / 2)]?.binId ?? 0;
 
   const [depositUsd, setDepositUsd] = useState(2500);
-  const [shape, setShape] = useState<DistributionShape>("curve");
+  const [shape, setShape] = useState<DistributionShape>(presetShape ?? "curve");
+
+  useEffect(() => {
+    if (presetShape) setShape(presetShape);
+  }, [presetShape]);
   const [range, setRange] = useState<{ lower: number; upper: number }>(() => ({
     lower: activeBinId - 8,
     upper: activeBinId + 8,

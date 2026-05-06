@@ -1,9 +1,23 @@
-import { Link, Outlet, useLocation } from "react-router-dom";
-import { Activity, BriefcaseBusiness, Compass, Loader2, LogOut, Sparkles, Wallet } from "lucide-react";
+import { useMemo } from "react";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Activity, BriefcaseBusiness, Coins, Compass, Loader2, LogOut, Sparkles, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSolana } from "@/providers/SolanaProvider";
+import { portfolioPositions } from "@/data/octora";
 import { GlowBackground } from "./GlowBackground";
 import { FloatingParticles } from "./FloatingParticles";
+
+const parseUsd = (v: string | undefined): number => {
+  if (!v) return 0;
+  const n = parseFloat(v.replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+};
+
+function fmtUsdCompact(n: number): string {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 10_000) return `$${(n / 1000).toFixed(1)}K`;
+  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
 
 function shortenAddress(addr: string): string {
   if (addr.length <= 8) return addr;
@@ -18,7 +32,13 @@ const tabs = [
 
 export function AppShell() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const { wallet, connect, disconnect, balance } = useSolana();
+
+  const claimable = useMemo(
+    () => portfolioPositions.reduce((s, p) => s + parseUsd(p.claimable), 0),
+    [],
+  );
 
   const isActive = (to: string) => {
     if (to === "/") return pathname === "/";
@@ -58,6 +78,23 @@ export function AppShell() {
 
           {/* Wallet */}
           <div className="flex items-center gap-2">
+            {wallet.connected && claimable > 0 && (
+              <button
+                type="button"
+                onClick={() => navigate("/portfolio")}
+                title={`${fmtUsdCompact(claimable)} claimable across positions`}
+                className="hidden items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 sm:inline-flex"
+              >
+                <span aria-hidden className="relative flex h-1.5 w-1.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60" />
+                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+                </span>
+                <Coins className="h-3.5 w-3.5" />
+                <span className="font-mono tabular-nums">{fmtUsdCompact(claimable)}</span>
+                <span className="text-primary/70">claimable</span>
+              </button>
+            )}
+
             {!wallet.connected && !wallet.connecting && (
               <Button
                 variant="hero"

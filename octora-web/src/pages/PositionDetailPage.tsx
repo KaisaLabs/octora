@@ -10,6 +10,7 @@ import { BinLiquidityChart } from "@/components/octora/lp/BinLiquidityChart";
 import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
 import { PositionStatusPill } from "@/components/octora/lp/PositionStatusPill";
 import { PnLBreakdownChart } from "@/components/octora/lp/PnLBreakdownChart";
+import { Reveal } from "@/components/octora/lp/Reveal";
 import { projectUserShape } from "@/lib/bins";
 import { generatePositionPnLSeries } from "@/lib/pnl";
 
@@ -87,6 +88,7 @@ export function PositionDetailPage({ positions }: Props) {
       </button>
 
       {/* Header */}
+      <Reveal delay={0}>
       <section className="panel-shell rounded-2xl p-5 sm:p-6">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-3">
@@ -127,8 +129,10 @@ export function PositionDetailPage({ positions }: Props) {
           </div>
         </div>
       </section>
+      </Reveal>
 
       {/* Bin chart + claim summary */}
+      <Reveal delay={80}>
       <section className="panel-shell rounded-2xl p-5 sm:p-6">
         <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
           <div className="rounded-2xl border border-border/70 bg-card/60 p-3 sm:p-5">
@@ -157,12 +161,17 @@ export function PositionDetailPage({ positions }: Props) {
           <ClaimSummary position={position} />
         </div>
       </section>
+      </Reveal>
 
       {/* P&L breakdown */}
-      <PnLBreakdownChart series={series} totalHours={series.length - 1} />
+      <Reveal delay={160}>
+        <PnLBreakdownChart series={series} totalHours={series.length - 1} />
+      </Reveal>
 
       {/* Action drawer */}
-      <ActionDrawer position={position} bins={bins} initialLower={lower} initialUpper={upper} center={center} />
+      <Reveal delay={240}>
+        <ActionDrawer position={position} bins={bins} initialLower={lower} initialUpper={upper} center={center} />
+      </Reveal>
     </div>
   );
 }

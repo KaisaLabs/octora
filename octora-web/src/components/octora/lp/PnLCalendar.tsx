@@ -1,5 +1,18 @@
 import { useMemo, useState } from "react";
-import { BarChart3, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, LineChart, Share2 } from "lucide-react";
+import { BarChart3, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, LineChart as LineIcon, Share2 } from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import type { DailyPnL } from "@/lib/pnl";
 
 interface Props {
@@ -80,7 +93,7 @@ export function PnLCalendar({ daily, today, unit = "USD" }: Props) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-1 rounded-full border border-border bg-background/40 p-1">
           <ViewIcon active={view === "line"} onClick={() => setView("line")} aria-label="Line chart">
-            <LineChart className="h-4 w-4" />
+            <LineIcon className="h-4 w-4" />
           </ViewIcon>
           <ViewIcon active={view === "bar"} onClick={() => setView("bar")} aria-label="Bar chart">
             <BarChart3 className="h-4 w-4" />
@@ -149,7 +162,9 @@ export function PnLCalendar({ daily, today, unit = "USD" }: Props) {
         </div>
       </div>
 
-      {view === "calendar" ? (
+      {view === "line" || view === "bar" ? (
+        <ChartView view={view} daily={daily} period={period} today={today} />
+      ) : view === "calendar" ? (
         <div className="flex-1">
           {/* Weekday header */}
           <div className="grid grid-cols-7 gap-1 border-b border-border/60 pb-2">
@@ -179,11 +194,139 @@ export function PnLCalendar({ daily, today, unit = "USD" }: Props) {
             })}
           </div>
         </div>
-      ) : (
-        <ChartPlaceholder view={view} />
-      )}
+      ) : null}
     </div>
   );
+}
+
+function ChartView({
+  view,
+  daily,
+  period,
+  today,
+}: {
+  view: "line" | "bar";
+  daily: DailyPnL[];
+  period: Period;
+  today: Date;
+}) {
+  const data = useMemo(() => {
+    const days = period === "7D" ? 7 : period === "30D" ? 30 : period === "90D" ? 90 : 9999;
+    const cutoff = new Date(today);
+    cutoff.setDate(today.getDate() - (days - 1));
+    const cutoffIso = isoLocal(cutoff);
+    const sliced = daily.filter((d) => d.date >= cutoffIso).sort((a, b) => a.date.localeCompare(b.date));
+    let cum = 0;
+    return sliced.map((d) => {
+      cum += d.pnlUsd;
+      return {
+        date: d.date,
+        label: shortDateLabel(d.date),
+        pnl: d.pnlUsd,
+        cumulative: cum,
+      };
+    });
+  }, [daily, period, today]);
+
+  return (
+    <div className="h-72 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        {view === "line" ? (
+          <AreaChart data={data} margin={{ top: 10, right: 8, bottom: 0, left: -16 }}>
+            <defs>
+              <linearGradient id="cum-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="hsl(160 84% 55%)" stopOpacity={0.45} />
+                <stop offset="100%" stopColor="hsl(160 84% 55%)" stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="hsl(155 20% 14%)" strokeDasharray="3 4" vertical={false} />
+            <XAxis
+              dataKey="label"
+              stroke="hsl(152 20% 55%)"
+              fontSize={10}
+              tickLine={false}
+              axisLine={false}
+              minTickGap={32}
+            />
+            <YAxis
+              stroke="hsl(152 20% 55%)"
+              fontSize={10}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(v) => compactUsd(v)}
+              width={48}
+            />
+            <ReferenceLine y={0} stroke="hsl(155 20% 22%)" strokeDasharray="2 3" />
+            <Tooltip
+              cursor={{ stroke: "hsl(160 84% 39% / 0.35)", strokeWidth: 1 }}
+              contentStyle={tooltipStyle}
+              formatter={(v: number) => [signed(v, (n) => fmtUsd(n)), "Cumulative"]}
+            />
+            <Area
+              type="monotone"
+              dataKey="cumulative"
+              stroke="hsl(160 84% 55%)"
+              strokeWidth={1.75}
+              fill="url(#cum-grad)"
+            />
+          </AreaChart>
+        ) : (
+          <BarChart data={data} margin={{ top: 10, right: 8, bottom: 0, left: -16 }}>
+            <CartesianGrid stroke="hsl(155 20% 14%)" strokeDasharray="3 4" vertical={false} />
+            <XAxis
+              dataKey="label"
+              stroke="hsl(152 20% 55%)"
+              fontSize={10}
+              tickLine={false}
+              axisLine={false}
+              minTickGap={32}
+            />
+            <YAxis
+              stroke="hsl(152 20% 55%)"
+              fontSize={10}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(v) => compactUsd(v)}
+              width={48}
+            />
+            <ReferenceLine y={0} stroke="hsl(155 20% 22%)" strokeDasharray="2 3" />
+            <Tooltip
+              cursor={{ fill: "hsl(160 84% 39% / 0.06)" }}
+              contentStyle={tooltipStyle}
+              formatter={(v: number) => [signed(v, (n) => fmtUsd(n)), "Daily"]}
+            />
+            <Bar dataKey="pnl" radius={[2, 2, 0, 0]}>
+              {data.map((d, i) => (
+                <Cell key={i} fill={d.pnl >= 0 ? "hsl(160 84% 50%)" : "hsl(0 72% 51%)"} />
+              ))}
+            </Bar>
+          </BarChart>
+        )}
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+const tooltipStyle: React.CSSProperties = {
+  background: "hsl(155 30% 6%)",
+  border: "1px solid hsl(155 20% 16%)",
+  borderRadius: 10,
+  fontSize: 12,
+  fontFamily: "Geist Mono, ui-monospace, monospace",
+};
+
+function compactUsd(n: number): string {
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "−" : "";
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}K`;
+  return `${sign}$${abs.toFixed(0)}`;
+}
+
+function shortDateLabel(iso: string): string {
+  // iso = YYYY-MM-DD
+  const [, m, d] = iso.split("-");
+  return `${Number(m)}/${Number(d)}`;
 }
 
 interface MonthCell {
@@ -347,13 +490,3 @@ function PeriodSelect({ value, onChange }: { value: Period; onChange: (p: Period
   );
 }
 
-function ChartPlaceholder({ view }: { view: "line" | "bar" }) {
-  return (
-    <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/30 p-8 text-center">
-      <div className="space-y-1">
-        <p className="text-sm text-foreground">{view === "line" ? "Line chart" : "Bar chart"} coming up</p>
-        <p className="text-xs text-muted-foreground">Wire to recharts in the next pass.</p>
-      </div>
-    </div>
-  );
-}

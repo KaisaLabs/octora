@@ -56,11 +56,17 @@ export type PortfolioPosition = {
   openedAt?: string;
 };
 
+export type ActivityKind = "deposit" | "withdraw" | "claim" | "rebalance";
+
 export type PortfolioActivity = {
   id: string;
   action: string;
+  kind: ActivityKind;
   poolName: string;
   value: string;
+  /** ISO timestamp; if omitted, falls back to `time`. */
+  timestamp?: string;
   time: string;
   privacy: string;
+  txSignature?: string;
 };
