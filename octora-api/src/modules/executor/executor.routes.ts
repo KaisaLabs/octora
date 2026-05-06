@@ -36,7 +36,7 @@ export async function registerExecutorRoutes(app: FastifyInstance) {
   app.post("/executor/init-position-tx", { schema: { tags } }, controller.initPositionTx);
   app.post("/executor/add-liquidity-tx", { schema: { tags } }, controller.addLiquidityTx);
   app.post("/executor/withdraw-close-tx", { schema: { tags } }, controller.withdrawCloseTx);
-  app.get("/executor/position-authority", { schema: { tags } }, controller.positionAuthority);
+  app.get("/executor/pool-authority", { schema: { tags } }, controller.positionAuthority);
   app.get("/executor/devnet-pools", { schema: { tags } }, controller.devnetPools);
   app.post("/executor/use-pool", { schema: { tags } }, controller.usePool);
 }

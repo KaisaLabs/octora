@@ -9,7 +9,7 @@ export { MockMeteoraExecutor, createMockMeteoraExecutor } from "./mock-meteora.e
 
 export {
   OctoraExecutorClient,
-  POSITION_AUTHORITY_SEED,
+  POOL_AUTHORITY_SEED,
   DLMM_PROGRAM_ID,
   DLMM_EVENT_AUTHORITY,
   TOKEN_PROGRAM_ID,

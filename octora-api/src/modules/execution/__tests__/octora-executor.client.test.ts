@@ -15,7 +15,7 @@ import {
   DLMM_EVENT_AUTHORITY,
   DLMM_PROGRAM_ID,
   OctoraExecutorClient,
-  POSITION_AUTHORITY_SEED,
+  POOL_AUTHORITY_SEED,
 } from "../clients/octora-executor.client.js";
 
 const PROGRAM_ID = new PublicKey("86zj6EvHxMywP4Bw4EyZ2VcAjLm1pfGsc6ZjsZbrWwwc");
@@ -42,7 +42,7 @@ describe("OctoraExecutorClient", () => {
     const [pda, bump] = client.derivePositionAuthority(stealth);
 
     const [expected, expectedBump] = PublicKey.findProgramAddressSync(
-      [POSITION_AUTHORITY_SEED, stealth.toBuffer()],
+      [POOL_AUTHORITY_SEED, stealth.toBuffer()],
       PROGRAM_ID,
     );
     expect(pda.toBase58()).toBe(expected.toBase58());

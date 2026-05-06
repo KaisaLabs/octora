@@ -92,8 +92,8 @@ export function createExecutorController(executor: ExecutorService) {
       return reply.send(result);
     },
 
-    /** GET /executor/position-authority?stealth=... */
-    async positionAuthority(
+    /** GET /executor/pool-authority?stealth=... */
+    async poolAuthority(
       req: FastifyRequest<{ Querystring: { stealth: string } }>,
       reply: FastifyReply,
     ) {
