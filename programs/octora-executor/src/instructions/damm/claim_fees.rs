@@ -2,12 +2,11 @@ use anchor_lang::prelude::*;
 
 use crate::constants::{DAMM_PROGRAM_ID, POOL_AUTHORITY_SEED};
 use crate::cpi::damm::*;
-use crate::cpi::require_token_account_owner;
+use crate::cpi::{require_spl_token_program, require_token_account_owner};
 use crate::errors::ExecutorError;
 use crate::state::{PoolAuthority, PoolRef};
 
-/// Claim fees from a DAMM lock position via claimFee CPI.
-/// Requires the lock_escrow PDA created during damm_init.
+/// Claim fees from DAMM lock escrow via claimFee CPI.
 #[derive(Accounts)]
 pub struct DammClaimFees<'info> {
     pub stealth: Signer<'info>,
@@ -38,35 +37,47 @@ pub fn handler<'info>(
     let pa = &ctx.accounts.pool_authority;
     let pool = ctx.accounts.pool.key();
 
-    let lock_escrow = match &pa.pool_ref {
+    let (stored_pool, stored_lp_mint, stored_lock_escrow) = match &pa.pool_ref {
         PoolRef::Damm {
-            pool: stored_pool,
+            pool: p,
+            lp_mint,
             lock_escrow,
-            ..
-        } => {
-            require_keys_eq!(pool, *stored_pool, ExecutorError::DammPoolMismatch);
-            *lock_escrow
-        }
+        } => (*p, *lp_mint, *lock_escrow),
         PoolRef::Dlmm { .. } => return err!(ExecutorError::InvalidPoolRefType),
     };
+    require_keys_eq!(pool, stored_pool, ExecutorError::DammPoolMismatch);
 
     let remaining = ctx.remaining_accounts;
-    // DAMM claimFee: 18 accounts (indices 0-17)
-    // 2: lockEscrow, 3: owner(S) -> PDA, 15: userSolToken, 16: userQuoteToken
     require!(remaining.len() >= 18, ExecutorError::AccountsTooShort);
 
-    // Validate lock_escrow matches stored PDA
+    // Validate CPI forwarded pool + lp_mint against stored state
+    require_keys_eq!(
+        remaining[0].key(),
+        stored_pool,
+        ExecutorError::DammPoolMismatch,
+    );
+    require_keys_eq!(
+        remaining[1].key(),
+        stored_lp_mint,
+        ExecutorError::DammLpMintMismatch,
+    );
+
+    // Validate lock escrow
     require_keys_eq!(
         remaining[2].key(),
-        lock_escrow,
+        stored_lock_escrow,
         ExecutorError::LockEscrowMismatch,
     );
 
-    // Validate destination token accounts owned by exit_recipient
+    // Validate destination token accounts (indices 15, 16)
     require_token_account_owner(&remaining[15], &pa.exit_recipient)?;
     require_token_account_owner(&remaining[16], &pa.exit_recipient)?;
 
+    // Validate token program (index 6)
+    require_spl_token_program(&remaining[6])?;
+
     let pa_key = pa.key();
+    let pa_info = ctx.accounts.pool_authority.to_account_info();
     let stealth_key = ctx.accounts.stealth.key();
     let bump = pa.bump;
 
@@ -82,7 +93,6 @@ pub fn handler<'info>(
         .enumerate()
         .map(|(i, ai)| {
             if i == 3 {
-                // owner at index 3 = PDA signer
                 AccountMeta {
                     pubkey: pa_key,
                     is_signer: true,
@@ -101,8 +111,6 @@ pub fn handler<'info>(
     let args = serialize_claim_fee_args(max_amount);
     let ix = build_damm_ix("claimFee", metas, args);
 
-    // Fix #4: CPI signer re-pinning
-    let pa_info = ctx.accounts.pool_authority.to_account_info();
     let mut infos: Vec<AccountInfo> = remaining.to_vec();
     infos[3] = pa_info;
     invoke_damm_signed(&ix, &infos, signer_seeds)?;
@@ -112,7 +120,7 @@ pub fn handler<'info>(
         ctx.accounts.stealth.key(),
         pa_key,
         pool,
-        lock_escrow,
+        stored_lock_escrow,
     );
 
     Ok(())

@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::constants::{DAMM_PROGRAM_ID, POOL_AUTHORITY_SEED};
 use crate::cpi::damm::*;
-use crate::cpi::require_token_account_owner;
+use crate::cpi::{require_spl_token_program, require_token_account_owner};
 use crate::errors::ExecutorError;
 use crate::state::{PoolAuthority, PoolRef};
 
@@ -42,19 +42,28 @@ pub fn handler<'info>(
     let pa = &ctx.accounts.pool_authority;
     let pool = ctx.accounts.pool.key();
 
-    match &pa.pool_ref {
-        PoolRef::Damm {
-            pool: stored_pool, ..
-        } => {
-            require_keys_eq!(pool, *stored_pool, ExecutorError::DammPoolMismatch);
-        }
+    let (stored_pool, stored_lp_mint) = match &pa.pool_ref {
+        PoolRef::Damm { pool, lp_mint, .. } => (*pool, *lp_mint),
         PoolRef::Dlmm { .. } => return err!(ExecutorError::InvalidPoolRefType),
-    }
+    };
+    require_keys_eq!(pool, stored_pool, ExecutorError::DammPoolMismatch);
 
     let remaining = ctx.remaining_accounts;
     require!(remaining.len() >= 16, ExecutorError::AccountsTooShort);
 
-    // Fix #6: Validate destination token accounts owned by exit_recipient
+    require_keys_eq!(
+        remaining[0].key(),
+        stored_pool,
+        ExecutorError::DammPoolMismatch
+    );
+    require_keys_eq!(
+        remaining[1].key(),
+        stored_lp_mint,
+        ExecutorError::DammLpMintMismatch
+    );
+    require_spl_token_program(&remaining[15])?;
+
+    // Validate destination token accounts owned by exit_recipient
     require_token_account_owner(&remaining[11], &pa.exit_recipient)?;
     require_token_account_owner(&remaining[12], &pa.exit_recipient)?;
 

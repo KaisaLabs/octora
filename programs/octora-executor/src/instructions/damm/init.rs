@@ -5,9 +5,8 @@ use crate::cpi::damm::*;
 use crate::errors::ExecutorError;
 use crate::state::{PoolAuthority, PoolRef};
 
-/// Initialize a DAMM position: create PoolAuthority + lock escrow via CPI.
-/// The lock escrow is created with 0 initial amount; actual LP tokens
-/// are locked during damm_deposit.
+/// Initialize a DAMM position: create PoolAuthority + lock escrow via DAMM CPI.
+/// Uses DAMM's `createLockEscrow` instruction to create the escrow account.
 #[derive(Accounts)]
 pub struct DammInit<'info> {
     #[account(mut)]
@@ -22,10 +21,10 @@ pub struct DammInit<'info> {
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
 
-    /// DAMM pool that will hold the position liquidity
+    /// DAMM pool account
     pub pool: UncheckedAccount<'info>,
 
-    /// The LP mint for this DAMM pool
+    /// LP mint for this DAMM pool
     pub lp_mint: UncheckedAccount<'info>,
 
     pub damm_program: UncheckedAccount<'info>,
@@ -49,10 +48,10 @@ pub fn handler<'info>(
     let stealth_key = ctx.accounts.stealth.key();
     let bump = ctx.bumps.pool_authority;
 
-    // Derive lock_escrow PDA under DAMM program
+    // Derive lock_escrow PDA
     let (lock_escrow, _escrow_bump) = derive_lock_escrow(&pool, &pa_key);
 
-    // Store state in PoolAuthority
+    // Store state
     let pa = &mut ctx.accounts.pool_authority;
     pa.stealth_pubkey = stealth_key;
     pa.exit_recipient = exit_recipient;
@@ -63,46 +62,58 @@ pub fn handler<'info>(
     };
     pa.bump = bump;
 
-    // CPI to DAMM's `lock` instruction to create the lock escrow (amount = 0)
+    // CPI to DAMM's `createLockEscrow`.
+    // IDL accounts: pool, lockEscrow, owner, lpMint, payer, systemProgram.
     let remaining = ctx.remaining_accounts;
-    require!(remaining.len() >= 17, ExecutorError::AccountsTooShort);
+    require!(remaining.len() >= 6, ExecutorError::AccountsTooShort);
 
-    let signer_seeds: &[&[&[u8]]] = &[&[
-        POOL_AUTHORITY_SEED,
-        stealth_key.as_ref(),
-        pool.as_ref(),
-        &[bump],
-    ]];
+    require_keys_eq!(remaining[0].key(), pool, ExecutorError::DammPoolMismatch);
+    require_keys_eq!(
+        remaining[1].key(),
+        lock_escrow,
+        ExecutorError::LockEscrowMismatch
+    );
+    require_keys_eq!(
+        remaining[2].key(),
+        pa_key,
+        ExecutorError::DammSolOwnerMismatch
+    );
+    require_keys_eq!(
+        remaining[3].key(),
+        lp_mint,
+        ExecutorError::DammLpMintMismatch
+    );
+    require_keys_eq!(
+        remaining[4].key(),
+        stealth_key,
+        ExecutorError::StealthMismatch
+    );
+    require_keys_eq!(
+        remaining[5].key(),
+        ctx.accounts.system_program.key(),
+        ExecutorError::InvalidSysAccount
+    );
 
-    let metas: Vec<anchor_lang::solana_program::instruction::AccountMeta> = remaining
+    let create_accounts = &remaining[..6];
+    let mut metas: Vec<anchor_lang::solana_program::instruction::AccountMeta> = create_accounts
         .iter()
-        .enumerate()
-        .map(|(i, ai)| {
-            if i == 3 {
-                // index 3 = owner = PDA signer
-                AccountMeta {
-                    pubkey: pa_key,
-                    is_signer: true,
-                    is_writable: ai.is_writable,
-                }
-            } else {
-                AccountMeta {
-                    pubkey: ai.key(),
-                    is_signer: ai.is_signer,
-                    is_writable: ai.is_writable,
-                }
-            }
+        .map(|ai| AccountMeta {
+            pubkey: ai.key(),
+            is_signer: ai.is_signer,
+            is_writable: ai.is_writable,
         })
         .collect();
+    metas[2] = AccountMeta {
+        pubkey: pa_key,
+        is_signer: false,
+        is_writable: false,
+    };
 
-    let args = serialize_lock_args(0); // 0 amount = create escrow only
-    let ix = build_damm_ix("lock", metas, args);
+    let ix = build_damm_ix("createLockEscrow", metas, Vec::new());
 
-    // Fix #4: CPI signer re-pinning
-    let pa_info = ctx.accounts.pool_authority.to_account_info();
-    let mut infos: Vec<AccountInfo> = remaining.to_vec();
-    infos[3] = pa_info;
-    invoke_damm_signed(&ix, &infos, signer_seeds)?;
+    let mut infos: Vec<AccountInfo> = create_accounts.to_vec();
+    infos[2] = ctx.accounts.pool_authority.to_account_info();
+    invoke_damm_signed(&ix, &infos, &[])?;
 
     msg!(
         "damm_init: stealth={} pa={} pool={} lp_mint={} lock_escrow={}",

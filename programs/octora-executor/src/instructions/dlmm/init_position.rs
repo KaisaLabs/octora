@@ -21,6 +21,7 @@ pub struct DlmmInitPosition<'info> {
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
 
+    /// LB pair this position joins — must equal the forwarded lb_pair in remaining_accounts[2]
     pub lb_pair: UncheckedAccount<'info>,
 
     pub dlmm_program: UncheckedAccount<'info>,
@@ -34,6 +35,7 @@ pub fn handler<'info>(
     width: i32,
     exit_recipient: Pubkey,
 ) -> Result<()> {
+    // ── DLMM program ID validation ──
     require_dlmm_program(&ctx.accounts.dlmm_program)?;
 
     let remaining = ctx.remaining_accounts;
@@ -42,6 +44,16 @@ pub fn handler<'info>(
     let position_account = &remaining[1];
     let lb_pair_account = &remaining[2];
 
+    // ── Explicit LB pair validation ──
+    // The named account (ctx.accounts.lb_pair) must match the forwarded
+    // lb_pair in remaining_accounts[2] to prevent account substitution.
+    require_keys_eq!(
+        ctx.accounts.lb_pair.key(),
+        lb_pair_account.key(),
+        ExecutorError::LbPairMismatch,
+    );
+
+    // ── System / rent / event authority / DLMM program validation ──
     require_system_program(&remaining[4])?;
     require_rent_sysvar(&remaining[5])?;
     require_dlmm_event_authority(&remaining[6])?;
@@ -60,6 +72,7 @@ pub fn handler<'info>(
     };
     pa.bump = pa_bump;
 
+    // ── Build DLMM initialize_position CPI ──
     let mut args = Vec::with_capacity(8);
     args.extend_from_slice(&lower_bin_id.to_le_bytes());
     args.extend_from_slice(&width.to_le_bytes());
@@ -94,7 +107,7 @@ pub fn handler<'info>(
         &[pa_bump],
     ];
 
-    // Fix #4: CPI signer re-pinning — include PDA AccountInfo in the signer slot
+    // CPI signer re-pinning: include PDA AccountInfo
     let pa_info = ctx.accounts.pool_authority.to_account_info();
     let mut infos: Vec<AccountInfo> = remaining.to_vec();
     infos[3] = pa_info;
