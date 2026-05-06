@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { ArrowUpRight, Coins, Settings2 } from "lucide-react";
 import type { LiquidityBin, PortfolioPosition } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,8 @@ function buildPositionBins(p: PortfolioPosition): LiquidityBin[] {
 }
 
 export function PositionCard({ position, onManage, onClaim }: Props) {
+  const navigate = useNavigate();
+  const handleManage = onManage ?? (() => navigate(`/position/${position.id}`));
   const bins = useMemo(() => buildPositionBins(position), [position]);
   const center = position.activeBinId ?? 0;
   const lower = position.rangeLowerBin ?? center - 8;
@@ -101,7 +104,7 @@ export function PositionCard({ position, onManage, onClaim }: Props) {
             >
               Claim
             </Button>
-            <Button size="sm" variant="subtle" onClick={onManage} className="rounded-full">
+            <Button size="sm" variant="subtle" onClick={handleManage} className="rounded-full">
               <Settings2 className="h-3.5 w-3.5" />
               Manage
               <ArrowUpRight className="h-3.5 w-3.5" />

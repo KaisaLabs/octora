@@ -8,6 +8,7 @@ import { SolanaProvider } from "@/providers/SolanaProvider";
 import { AppShell } from "@/components/octora/AppShell";
 import { PoolsPage } from "@/pages/PoolsPage";
 import { PortfolioPage } from "@/pages/PortfolioPage";
+import { PositionDetailPage } from "@/pages/PositionDetailPage";
 import { ActivityPage } from "@/pages/ActivityPage";
 import NotFound from "./pages/NotFound.tsx";
 
@@ -66,6 +67,7 @@ function AppRoutes() {
       <Route element={<AppShell />}>
         <Route index element={<PoolsPage pools={pools} loading={loading} error={error} />} />
         <Route path="portfolio" element={<PortfolioPage positions={portfolioPositions} />} />
+        <Route path="position/:id" element={<PositionDetailPage positions={portfolioPositions} />} />
         <Route path="activity" element={<ActivityPage activity={portfolioActivity} />} />
       </Route>
       <Route
