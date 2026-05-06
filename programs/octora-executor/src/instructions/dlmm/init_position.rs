@@ -45,6 +45,10 @@ pub fn handler<'info>(
     let position_account = &remaining[1];
     let lb_pair_account = &remaining[2];
 
+    require!(
+        position_account.is_signer,
+        ExecutorError::MissingPositionSigner,
+    );
     require_keys_eq!(
         ctx.accounts.lb_pair.key(),
         lb_pair_account.key(),

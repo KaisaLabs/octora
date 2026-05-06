@@ -1,12 +1,11 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{
-    hash, instruction::Instruction, program::invoke_signed, system_program, sysvar,
+    instruction::Instruction, program::invoke_signed, system_program, sysvar,
 };
+use sha2::{Digest, Sha256};
 
-pub mod damm;
 pub mod dlmm;
 
-pub use damm::*;
 pub use dlmm::*;
 
 use crate::errors::ExecutorError;
@@ -41,15 +40,20 @@ pub fn require_rent_sysvar(ai: &AccountInfo) -> Result<()> {
 }
 
 /// Validate SPL token account owner matches expected.
-/// Uses sized deserialization compatible with both SPL Token and Token-2022.
+/// Supports both SPL Token and Token-2022 accounts.
 pub fn require_token_account_owner(token_account: &AccountInfo, expected: &Pubkey) -> Result<()> {
-    let data = token_account.try_borrow_data()?;
-    require!(data.len() >= 165, ExecutorError::InvalidTokenAccount);
+    require!(
+        token_account.owner == &SPL_TOKEN_PROGRAM_ID
+            || token_account.owner == &SPL_TOKEN_2022_PROGRAM_ID,
+        ExecutorError::InvalidTokenProgram,
+    );
 
-    // owner is at bytes 32-64 in the SplTokenAccount layout (common for both
-    // SPL Token and Token-2022).  Read raw bytes to avoid Pack::unpack issues
-    // with extension accounts.
-    let owner_bytes: [u8; 32] = data[32..64].try_into().unwrap();
+    let data = token_account.try_borrow_data()?;
+    require!(data.len() >= 64, ExecutorError::InvalidTokenAccount);
+
+    let owner_bytes: [u8; 32] = data[32..64]
+        .try_into()
+        .map_err(|_| error!(ExecutorError::InvalidTokenAccount))?;
     let owner = Pubkey::new_from_array(owner_bytes);
     require_keys_eq!(owner, *expected, ExecutorError::ExitRecipientMismatch);
     Ok(())
@@ -58,9 +62,9 @@ pub fn require_token_account_owner(token_account: &AccountInfo, expected: &Pubke
 // ── Shared helpers ──
 pub fn anchor_discriminator(ix_name: &str) -> [u8; 8] {
     let preimage = format!("global:{}", ix_name);
-    let digest = hash::hash(preimage.as_bytes());
+    let digest = Sha256::digest(preimage.as_bytes());
     let mut out = [0u8; 8];
-    out.copy_from_slice(&digest.to_bytes()[..8]);
+    out.copy_from_slice(&digest[..8]);
     out
 }
 

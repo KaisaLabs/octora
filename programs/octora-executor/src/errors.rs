@@ -44,6 +44,9 @@ pub enum ExecutorError {
     #[msg("Forwarded remaining_accounts list is too short for this instruction")]
     AccountsTooShort,
 
+    #[msg("DLMM position account must sign initialization")]
+    MissingPositionSigner,
+
     #[msg("PoolAuthority pool ref type does not match instruction expected type")]
     InvalidPoolRefType,
 
