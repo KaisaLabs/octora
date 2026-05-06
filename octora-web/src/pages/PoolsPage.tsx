@@ -1,20 +1,24 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
   Coins,
-  Compass,
   Copy,
   Flame,
   Minus,
   Search,
 } from "lucide-react";
 
-import type { Pool } from "@/components/octora/types";
+import type { DistributionShape, LiquidityBin, Pool } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { BinLiquidityChart } from "@/components/octora/lp/BinLiquidityChart";
+import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
+import { PositionStatusPill } from "@/components/octora/lp/PositionStatusPill";
+import { synthesizeBins } from "@/lib/bins";
 
 type SortKey = "tvl" | "apr" | "volume";
 type ProtocolFilter = "all" | "DLMM" | "DAMM";
@@ -70,11 +74,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
   );
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <p className="text-muted-foreground">Loading pools...</p>
-      </div>
-    );
+    return <PoolsSkeleton />;
   }
 
   if (error) {
@@ -91,7 +91,9 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-xl font-semibold text-foreground sm:text-2xl">Discover pools</h2>
+              <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+                Discover pools
+              </h2>
               <p className="mt-1 text-sm text-muted-foreground">Search a pair or paste a contract address.</p>
             </div>
           </div>
@@ -232,7 +234,9 @@ function PoolDetail({ pool, onBack }: { pool: Pool; onBack: () => void }) {
                 </span>
               ))}
             </div>
-            <h2 className="text-2xl font-semibold text-foreground sm:text-3xl">{pool.name}</h2>
+            <h2 className="font-display text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+              {pool.name}
+            </h2>
             <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
               <span className="font-mono text-xs">{pool.address}</span>
               <button type="button" className="inline-flex items-center gap-1 text-foreground transition-colors hover:text-primary">
@@ -285,34 +289,112 @@ function PoolDetail({ pool, onBack }: { pool: Pool; onBack: () => void }) {
 /* ---------------- Deposit ---------------- */
 
 function DepositPanel({ pool }: { pool: Pool }) {
+  const bins = useMemo<LiquidityBin[]>(() => synthesizeBins(pool, { count: 61 }), [pool]);
+  const activeBinId = bins[Math.floor(bins.length / 2)]?.binId ?? 0;
+
   const [depositUsd, setDepositUsd] = useState(2500);
-  const [mode, setMode] = useState<"balanced" | "spot" | "curve">("balanced");
+  const [shape, setShape] = useState<DistributionShape>("curve");
+  const [range, setRange] = useState<{ lower: number; upper: number }>(() => ({
+    lower: activeBinId - 8,
+    upper: activeBinId + 8,
+  }));
+
+  // Re-center range when pool changes.
+  useEffect(() => {
+    setRange({ lower: activeBinId - 8, upper: activeBinId + 8 });
+  }, [activeBinId]);
+
+  const lowerPrice = bins.find((b) => b.binId === range.lower)?.price ?? 0;
+  const upperPrice = bins.find((b) => b.binId === range.upper)?.price ?? 0;
+  const activePrice = bins.find((b) => b.binId === activeBinId)?.price ?? 0;
+
+  const lowerPct = activePrice ? ((lowerPrice - activePrice) / activePrice) * 100 : 0;
+  const upperPct = activePrice ? ((upperPrice - activePrice) / activePrice) * 100 : 0;
+  const binsCovered = Math.max(0, range.upper - range.lower + 1);
 
   const projection = useMemo(() => {
     const entryFee = depositUsd * (pool.feeBps / 10000);
-    const estimatedDaily = (depositUsd * (parseFloat(pool.apr) / 100)) / 365;
+    // Concentration multiplier: narrower range → higher fee share per dollar.
+    // Crude proxy: full bin window in pool ≈ 60 bins.
+    const concentration = Math.max(1, 60 / Math.max(binsCovered, 1));
+    const baseDaily = (depositUsd * (parseFloat(pool.apr) / 100)) / 365;
+    const estimatedDaily = baseDaily * Math.min(concentration, 6);
     const monthlyRange = estimatedDaily * 30;
-    const tokenAAmount = (depositUsd * pool.allocation.tokenA) / 100;
-    const tokenBAmount = (depositUsd * pool.allocation.tokenB) / 100;
-    return { entryFee, estimatedDaily, monthlyRange, tokenAAmount, tokenBAmount };
-  }, [depositUsd, pool]);
+    return { entryFee, estimatedDaily, monthlyRange, concentration };
+  }, [depositUsd, pool, binsCovered]);
 
   return (
     <section className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Strategy</p>
-          <h3 className="mt-1 text-xl font-semibold text-foreground sm:text-2xl">Configure position</h3>
+          <h3 className="mt-1 font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+            Shape your liquidity
+          </h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Drag the handles to set your range. Pick a shape to spread liquidity.
+          </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <ModeButton active={mode === "balanced"} onClick={() => setMode("balanced")} label="Balanced" />
-          <ModeButton active={mode === "spot"} onClick={() => setMode("spot")} label="Spot heavy" />
-          <ModeButton active={mode === "curve"} onClick={() => setMode("curve")} label="Wide curve" />
+        <div className="flex items-center gap-2 self-start text-xs text-muted-foreground">
+          <span className="rounded-full border border-border bg-secondary/60 px-2.5 py-1 font-mono">
+            Bin step {pool.binStep || "—"}
+          </span>
+          <span className="rounded-full border border-border bg-secondary/60 px-2.5 py-1 font-mono">
+            {binsCovered} bins
+          </span>
         </div>
       </div>
 
+      {/* Bin chart */}
+      <div className="rounded-2xl border border-border/70 bg-card/60 p-3 sm:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-baseline gap-3">
+            <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Active price</span>
+            <span className="font-mono text-base text-foreground tabular-nums">
+              {formatPrice(activePrice)}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {pool.tokenA}/{pool.tokenB}
+            </span>
+          </div>
+          <PositionStatusPill inRange size="sm" label="Active in range" />
+        </div>
+
+        <BinLiquidityChart
+          bins={bins}
+          activeBinId={activeBinId}
+          range={range}
+          shape={shape}
+          depositUsd={depositUsd}
+          onRangeChange={setRange}
+          height={240}
+        />
+
+        <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
+          <RangeReadout
+            label="Min price"
+            price={lowerPrice}
+            pct={lowerPct}
+            onAdjust={(d) => setRange((r) => ({ lower: r.lower + d, upper: r.upper }))}
+          />
+          <RangeReadout label="Active" price={activePrice} pct={0} center />
+          <RangeReadout
+            label="Max price"
+            price={upperPrice}
+            pct={upperPct}
+            onAdjust={(d) => setRange((r) => ({ lower: r.lower, upper: r.upper + d }))}
+          />
+        </div>
+      </div>
+
+      {/* Distribution + amount */}
       <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
         <div className="space-y-5">
+          <div>
+            <p className="mb-2 text-xs uppercase tracking-[0.2em] text-muted-foreground">Distribution</p>
+            <DistributionPreset value={shape} onChange={setShape} />
+          </div>
+
           <label className="block space-y-2">
             <span className="text-sm text-muted-foreground">Deposit (USD)</span>
             <Input
@@ -321,7 +403,7 @@ function DepositPanel({ pool }: { pool: Pool }) {
               step={100}
               value={depositUsd}
               onChange={(e) => setDepositUsd(Number(e.target.value))}
-              className="h-12 rounded-xl border-border bg-background text-base"
+              className="h-12 rounded-xl border-border bg-background font-mono text-base tabular-nums"
             />
             <div className="flex flex-wrap gap-2 pt-1">
               {[500, 1000, 5000, 10000].map((v) => (
@@ -340,34 +422,28 @@ function DepositPanel({ pool }: { pool: Pool }) {
           <div className="grid gap-3 sm:grid-cols-2">
             <StrategyTile
               title={`${pool.tokenA} allocation`}
-              value={`$${projection.tokenAAmount.toFixed(0)}`}
+              value={`$${((depositUsd * pool.allocation.tokenA) / 100).toFixed(0)}`}
               helper={`${pool.allocation.tokenA}%`}
             />
             <StrategyTile
               title={`${pool.tokenB} allocation`}
-              value={`$${projection.tokenBAmount.toFixed(0)}`}
+              value={`$${((depositUsd * pool.allocation.tokenB) / 100).toFixed(0)}`}
               helper={`${pool.allocation.tokenB}%`}
             />
           </div>
-
-          <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-medium text-foreground">Range</p>
-              <Compass className="h-4 w-4 text-primary" />
-            </div>
-            <div className="mt-4 grid gap-2 sm:grid-cols-3">
-              <RangeBand label="Lower" value={mode === "curve" ? "-9.0%" : mode === "spot" ? "-2.0%" : "-4.5%"} />
-              <RangeBand label="Center" value="Mid price" />
-              <RangeBand label="Upper" value={mode === "curve" ? "+12.0%" : mode === "spot" ? "+2.5%" : "+5.2%"} />
-            </div>
-          </div>
         </div>
 
-        <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="rounded-2xl border border-border bg-card p-4 sm:p-5">
           <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Summary</p>
           <div className="mt-4 space-y-3.5">
+            <OutcomeRow label="Bins entered" value={`${binsCovered}`} />
+            <OutcomeRow
+              label="Capital efficiency"
+              value={`${projection.concentration.toFixed(1)}x`}
+              accent
+            />
             <OutcomeRow label="Entry fee" value={`$${projection.entryFee.toFixed(2)}`} />
-            <OutcomeRow label="Daily fees est." value={`$${projection.estimatedDaily.toFixed(2)}`} />
+            <OutcomeRow label="Est. daily fees" value={`$${projection.estimatedDaily.toFixed(2)}`} />
             <OutcomeRow label="30d est." value={`$${projection.monthlyRange.toFixed(2)}`} />
             <OutcomeRow label="Execution" value="Private relay" />
           </div>
@@ -379,6 +455,84 @@ function DepositPanel({ pool }: { pool: Pool }) {
             Routed via Vanish + MagicBlock. Origin wallet stays hidden.
           </p>
         </div>
+      </div>
+    </section>
+  );
+}
+
+function formatPrice(p: number): string {
+  if (!Number.isFinite(p) || p === 0) return "—";
+  if (p >= 1000) return p.toFixed(2);
+  if (p >= 1) return p.toFixed(4);
+  if (p >= 0.01) return p.toFixed(5);
+  return p.toExponential(3);
+}
+
+function RangeReadout({
+  label,
+  price,
+  pct,
+  center,
+  onAdjust,
+}: {
+  label: string;
+  price: number;
+  pct: number;
+  center?: boolean;
+  onAdjust?: (delta: number) => void;
+}) {
+  return (
+    <div
+      className={`rounded-xl border ${
+        center ? "border-amber-500/30 bg-amber-500/5" : "border-border bg-secondary/40"
+      } px-3 py-2.5`}
+    >
+      <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+        <span>{label}</span>
+        {onAdjust && (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => onAdjust(-1)}
+              className="rounded border border-border bg-card px-1.5 leading-none text-foreground/70 transition-colors hover:text-foreground"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              onClick={() => onAdjust(1)}
+              className="rounded border border-border bg-card px-1.5 leading-none text-foreground/70 transition-colors hover:text-foreground"
+            >
+              +
+            </button>
+          </div>
+        )}
+      </div>
+      <p className="mt-1.5 font-mono text-sm text-foreground tabular-nums">{formatPrice(price)}</p>
+      <p className={`mt-0.5 text-[11px] tabular-nums ${center ? "text-amber-400" : pct >= 0 ? "text-primary" : "text-muted-foreground"}`}>
+        {center ? "Mid price" : `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`}
+      </p>
+    </div>
+  );
+}
+
+function PoolsSkeleton() {
+  return (
+    <section className="panel-shell space-y-6 rounded-2xl p-4 sm:p-6">
+      <div className="space-y-3">
+        <Skeleton className="h-6 w-40" />
+        <Skeleton className="h-4 w-64" />
+        <Skeleton className="h-12 w-full rounded-xl" />
+        <div className="flex flex-wrap gap-2">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-7 w-16 rounded-full" />
+          ))}
+        </div>
+      </div>
+      <div className="space-y-2">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <Skeleton key={i} className="h-16 w-full rounded-xl" />
+        ))}
       </div>
     </section>
   );
@@ -506,20 +660,6 @@ function InfoCard({ label, value, helper }: { label: string; value: string; help
   );
 }
 
-function ModeButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full border px-3.5 py-1.5 text-xs transition-colors duration-200 sm:text-sm ${
-        active ? "border-primary/40 bg-surface-elevated text-foreground" : "border-border bg-card text-muted-foreground hover:text-foreground"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
 function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
@@ -554,20 +694,13 @@ function ClaimTile({ label, value, sub }: { label: string; value: string; sub: s
   );
 }
 
-function RangeBand({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-secondary/50 px-3 py-2.5">
-      <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
-      <p className="mt-1 text-sm font-medium text-foreground">{value}</p>
-    </div>
-  );
-}
-
-function OutcomeRow({ label, value }: { label: string; value: string }) {
+function OutcomeRow({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border/80 pb-3 last:border-b-0 last:pb-0">
       <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="text-sm font-medium text-foreground">{value}</span>
+      <span className={`font-mono text-sm font-medium tabular-nums ${accent ? "text-primary" : "text-foreground"}`}>
+        {value}
+      </span>
     </div>
   );
 }

@@ -34,7 +34,7 @@ export function AppShell() {
       <header className="sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur-xl">
         <div className="container flex min-h-14 items-center justify-between gap-3 py-2.5 sm:min-h-16 sm:py-3">
           <Link to="/" className="flex items-center gap-2">
-            <span className="text-base font-semibold tracking-tight text-foreground sm:text-lg">
+            <span className="font-display text-lg font-semibold tracking-tight text-foreground sm:text-xl">
               Octora
             </span>
           </Link>

@@ -1,3 +1,9 @@
+export type LiquidityBin = {
+  binId: number;
+  price: number;
+  liquidity: number;
+};
+
 export type Pool = {
   id: string;
   name: string;
@@ -14,14 +20,19 @@ export type Pool = {
   depth: string;
   risk: string;
   feeBps: number;
+  binStep: number;
   binRange: string;
   priceRange: string;
+  activeBinId: number;
+  activePrice: number;
   allocation: {
     tokenA: number;
     tokenB: number;
   };
   tags: string[];
 };
+
+export type DistributionShape = "spot" | "curve" | "bid-ask";
 
 export type PortfolioPosition = {
   id: string;
@@ -32,6 +43,17 @@ export type PortfolioPosition = {
   feesEarned: string;
   apr: string;
   status: string;
+  /** Bin id boundaries of the LP range. */
+  rangeLowerBin?: number;
+  rangeUpperBin?: number;
+  activeBinId?: number;
+  binStep?: number;
+  shape?: DistributionShape;
+  inRange?: boolean;
+  claimable?: string;
+  pnl?: string;
+  pnlDirection?: "up" | "down" | "flat";
+  openedAt?: string;
 };
 
 export type PortfolioActivity = {

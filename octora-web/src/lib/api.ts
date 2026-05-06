@@ -70,8 +70,11 @@ export function mapPoolSummary(summary: PoolSummary): Pool {
     depth: summary.binStep <= 50 ? "Tight" : summary.binStep <= 200 ? "Medium" : "Wide",
     risk: summary.apr > 30 ? "Active" : "Balanced",
     feeBps: summary.feeBps,
+    binStep: summary.binStep,
     binRange: summary.binStep ? `±${summary.binStep} bins` : "Dynamic",
     priceRange: "Live pricing",
+    activeBinId: 0,
+    activePrice: 0,
     allocation: { tokenA: 50, tokenB: 50 },
     tags: summary.binStep <= 100 ? ["Tight bands", "Active"] : ["Wide coverage", "Passive"],
   };
