@@ -385,14 +385,15 @@ pub struct DammInit<'info> {
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
     
-    /// DAMM pool account
+    /// DAMM pool account (SOL-quote pair)
     pub pool: AccountInfo<'info>,
     
-    /// LP mint of the pool (read from pool state)
+    /// LP mint of the pool
     /// CHECK: validated against pool.lpMint
     pub lp_mint: AccountInfo<'info>,
     
     /// Lock escrow PDA: [b"lock_escrow", pool, pool_authority]
+    /// Created via CPI to DAMM's `lock` instruction
     #[account(
         init,
         payer = stealth,
@@ -409,25 +410,24 @@ pub struct DammInit<'info> {
 
 **Handler logic:**
 1. Validate `damm_program` matches `DAMM_PROGRAM_ID`
-2. Derive lock escrow PDA
+2. CPI to DAMM's `lock` instruction to create lock_escrow
+   - Amount: 0 (no LP tokens yet — will lock during deposit)
 3. Store `PoolRef::Damm { pool, lp_mint, lock_escrow }`
-4. Initialize `LockEscrow` state (delegated to DAMM via CPI if required)
-
-**Note:** DAMM `lock` instruction creates the lock escrow. We CPI to it here.
 
 ---
 
 #### `damm_deposit`
 
-**Purpose:** Add balanced liquidity via DAMM `addBalanceLiquidity`.
+**Purpose:** Add single-side liquidity (SOL) via DAMM `addBalanceLiquidity`.
+
+**Note:** Single-side deposit means user provides SOL only. DAMM handles the quote token side internally.
 
 **Entry:**
 ```rust
 pub fn damm_deposit(
     ctx: Context<DammDeposit>,
     pool_token_amount: u64,      // LP tokens to mint
-    max_token_a: u64,            // Max token A to deposit
-    max_token_b: u64,            // Max token B to deposit
+    max_sol: u64,                // Max SOL to deposit (slippage protection)
 ) -> Result<()>;
 ```
 
@@ -455,19 +455,19 @@ pub struct DammDeposit<'info> {
 |-------|---------|----------|--------|-------|
 | 0 | pool | ✓ | | |
 | 1 | lpMint | ✓ | | |
-| 2 | userPoolLp | ✓ | | PDA-owned ATA |
+| 2 | userPoolLp | ✓ | | PDA-owned ATA (receives LP tokens) |
 | 3 | aVaultLpMint | ✓ | | |
 | 4 | bVaultLpMint | ✓ | | |
-| 5 | userAToken | ✓ | | Source (PDA-owned) |
+| 5 | userSolToken | ✓ | | Source (PDA-owned SOL ATA or WSOL) |
 | 6 | bVaultLp | ✓ | | |
 | 7 | aVault | ✓ | | |
 | 8 | bVault | ✓ | | |
 | 9 | aTokenVault | ✓ | | |
 | 10 | bTokenVault | ✓ | | |
-| 11 | userBToken | ✓ | | Source (PDA-owned) |
+| 11 | userQuoteToken | ✓ | | Source (PDA-owned quote token) |
 | 12 | user | | ✓ | Re-pinned to PDA |
 | 13 | vaultProgram | | | |
-| 14 | tokenProgram | | | Validated as SPL Token |
+| 14 | tokenProgram | | | Validated as SPL Token or Token-2022 |
 
 **Validation:**
 - `pool_authority.pool_ref` is `PoolRef::Damm`
@@ -477,22 +477,28 @@ pub struct DammDeposit<'info> {
 
 **CPI:**
 - Build `addBalanceLiquidity` instruction
-- Serialize args: `(pool_token_amount: u64, max_token_a: u64, max_token_b: u64)`
+- Serialize args: `(pool_token_amount: u64, max_sol: u64, max_quote: u64)`
+  - `max_quote` = 0 for single-side (DAMM handles internally)
 - Invoke with PDA signer seeds
+
+**Post-CPI:**
+- LP tokens now in PDA-owned ATA
+- LP tokens should be locked via `lock` instruction to earn fees
+  - CPI to DAMM `lock` with LP token amount
 
 ---
 
 #### `damm_withdraw`
 
-**Purpose:** Remove balanced liquidity via DAMM `removeBalanceLiquidity` + close PoolAuthority.
+**Purpose:** Remove liquidity via DAMM `removeBalanceLiquidity`, close lock escrow, and close PoolAuthority.
 
 **Entry:**
 ```rust
 pub fn damm_withdraw(
     ctx: Context<DammWithdraw>,
     pool_token_amount: u64,      // LP tokens to burn
-    min_token_a_out: u64,        // Min token A to receive
-    min_token_b_out: u64,        // Min token B to receive
+    min_sol_out: u64,           // Min SOL to receive
+    min_quote_out: u64,         // Min quote to receive
 ) -> Result<()>;
 ```
 
@@ -512,18 +518,32 @@ pub struct DammWithdraw<'info> {
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
     
+    /// Lock escrow — closed during this instruction
+    /// Rent rebate goes to exit_recipient
+    #[account(
+        mut,
+        seeds = [LOCK_ESCROW_SEED, pool.key().as_ref(), pool_authority.key().as_ref()],
+        bump,
+        close = exit_recipient,
+    )]
+    pub lock_escrow: AccountInfo<'info>,
+    
+    /// Must match pool_authority.exit_recipient
+    /// CHECK: validated in handler
+    pub exit_recipient: AccountInfo<'info>,
+    
     pub pool: AccountInfo<'info>,
     pub damm_program: UncheckedAccount<'info>,
 }
 ```
 
-**Remaining accounts (14 for `removeBalanceLiquidity`):**
+**Remaining accounts (15 for `removeBalanceLiquidity`):**
 
 | Index | Account | Writable | Signer | Notes |
 |-------|---------|----------|--------|-------|
 | 0 | pool | ✓ | | |
 | 1 | lpMint | ✓ | | |
-| 2 | userPoolLp | ✓ | | PDA-owned ATA |
+| 2 | userPoolLp | ✓ | | PDA-owned ATA (LP tokens burned) |
 | 3 | aVaultLp | ✓ | | |
 | 4 | bVaultLp | ✓ | | |
 | 5 | aVault | ✓ | | |
@@ -532,25 +552,44 @@ pub struct DammWithdraw<'info> {
 | 8 | bVaultLpMint | ✓ | | |
 | 9 | aTokenVault | ✓ | | |
 | 10 | bTokenVault | ✓ | | |
-| 11 | userAToken | ✓ | | Dest — owner = exit_recipient |
-| 12 | userBToken | ✓ | | Dest — owner = exit_recipient |
+| 11 | userSolToken | ✓ | | Dest — owner = exit_recipient |
+| 12 | userQuoteToken | ✓ | | Dest — owner = exit_recipient |
 | 13 | user | | ✓ | Re-pinned to PDA |
 | 14 | vaultProgram | | | |
 | 15 | tokenProgram | | | |
 
 **Validation:**
-- `userAToken` and `userBToken` owners equal `exit_recipient`
-- `tokenProgram` is canonical
+- `userSolToken` and `userQuoteToken` owners equal `exit_recipient`
+- `tokenProgram` is canonical SPL Token or Token-2022
 - Forwarded `pool` matches stored value
+- `lock_escrow` matches `PoolRef::Damm.lock_escrow`
 
-**CPI:**
-- Build `removeBalanceLiquidity` instruction
-- Serialize args: `(pool_token_amount: u64, min_token_a_out: u64, min_token_b_out: u64)`
-- Invoke with PDA signer seeds
+**CPI Sequence:**
+
+**Step 1: Claim pending fees (if any)**
+```rust
+// CPI to claimFee to clear pending fees before closing lock escrow
+// Only if there are pending fees in lock_escrow
+```
+
+**Step 2: Remove liquidity**
+```rust
+// Build removeBalanceLiquidity instruction
+// Serialize args: (pool_token_amount: u64, min_sol_out: u64, min_quote_out: u64)
+// Invoke with PDA signer seeds
+```
+
+**Step 3: Close lock escrow (implicit)**
+```rust
+// Handled by Anchor close constraint
+// Rent rebate goes to exit_recipient
+```
 
 **Post-CPI:**
-- PoolAuthority closed automatically via `close = stealth`
-- Lock escrow remains (can be closed separately if needed)
+- LP tokens burned
+- SOL + quote tokens sent to exit_recipient ATAs
+- lock_escrow closed (rent to exit_recipient)
+- PoolAuthority closed (rent to stealth)
 
 ---
 
@@ -592,9 +631,9 @@ pub struct DammClaimFees<'info> {
 | 1 | lpMint | ✓ | | |
 | 2 | lockEscrow | ✓ | | From PoolRef::Damm |
 | 3 | owner | | ✓ | Re-pinned to PDA |
-| 4 | sourceTokens | ✓ | | LP tokens |
+| 4 | sourceTokens | ✓ | | LP tokens (locked) |
 | 5 | escrowVault | ✓ | | |
-| 6 | tokenProgram | | | |
+| 6 | tokenProgram | | | SPL Token or Token-2022 |
 | 7 | aTokenVault | ✓ | | |
 | 8 | bTokenVault | ✓ | | |
 | 9 | aVault | ✓ | | |
@@ -603,14 +642,14 @@ pub struct DammClaimFees<'info> {
 | 12 | bVaultLp | ✓ | | |
 | 13 | aVaultLpMint | ✓ | | |
 | 14 | bVaultLpMint | ✓ | | |
-| 15 | userAToken | ✓ | | Dest — owner = exit_recipient |
-| 16 | userBToken | ✓ | | Dest — owner = exit_recipient |
+| 15 | userSolToken | ✓ | | Dest — owner = exit_recipient |
+| 16 | userQuoteToken | ✓ | | Dest — owner = exit_recipient |
 | 17 | vaultProgram | | | |
 
 **Validation:**
 - Forwarded `lockEscrow` matches `PoolRef::Damm.lock_escrow`
-- `userAToken` and `userBToken` owners equal `exit_recipient`
-- `tokenProgram` is canonical
+- `userSolToken` and `userQuoteToken` owners equal `exit_recipient`
+- `tokenProgram` is canonical SPL Token or Token-2022
 
 **CPI:**
 - Build `claimFee` instruction
@@ -772,13 +811,50 @@ address = "..."  # DAMM pool account
 
 ---
 
-## Open Questions
+## Design Decisions
 
-1. **Lock escrow creation flow** — DAMM's `lock` instruction creates the lock escrow. Need to confirm if we CPI to `lock` during `damm_init` with 0 amount, or if we create the escrow account separately first.
+### 1. Single-Side LP Only (SOL)
 
-2. **Token-2022 support** — DAMM vault interactions with Token-2022 need verification. The vault program may have specific requirements.
+The executor supports **single-side liquidity provision only** with SOL as the base asset. This simplifies the deposit/withdraw flows:
 
-3. **Lock escrow closure** — When closing PoolAuthority, should we also close the lock escrow? Currently left open.
+- **Deposit:** User provides SOL only → DAMM handles conversion
+- **Withdraw:** User receives SOL only
+- **Pool type:** SOL paired with quote tokens (USDC, etc.)
+
+**Rationale:** Single-side is simpler for users and matches the privacy use case — user only needs SOL to provide liquidity, not balanced pairs.
+
+### 2. Token-2022 Support (Required)
+
+Both SPL Token and Token-2022 programs must be supported:
+
+```rust
+pub fn require_spl_token_program(ai: &AccountInfo) -> Result<()> {
+    let k = ai.key();
+    require!(
+        k == SPL_TOKEN_PROGRAM_ID || k == SPL_TOKEN_2022_PROGRAM_ID,
+        ExecutorError::InvalidTokenProgram,
+    );
+    Ok(()
+}
+```
+
+This validation applies to all token program slots in DLMM and DAMM CPIs.
+
+### 3. Lock Escrow Closure (Required)
+
+`lock_escrow` must be closed during `damm_withdraw`:
+
+- Clean state, no orphaned accounts
+- Rent rebate goes to `exit_recipient`
+- Requires claiming any pending fees first
+
+**Withdraw flow:**
+```
+1. claimFee (if pending fees)
+2. removeBalanceLiquidity (burn LP tokens)
+3. Close lock_escrow → rent to exit_recipient
+4. Close PoolAuthority → rent to stealth
+```
 
 ---
 
