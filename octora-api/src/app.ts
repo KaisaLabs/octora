@@ -14,6 +14,7 @@ import { createPrismaWaitlistRepository, type WaitlistRepository } from '#module
 import { registerWaitlistRoutes } from '#modules/waitlist/waitlist.routes'
 import { registerMixerRoutes } from '#modules/mixer/mixer.routes'
 import { registerExecutorRoutes } from '#modules/executor/executor.routes'
+import { registerRelayerRoutes } from '#modules/relayer/relayer.routes'
 import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
 
 export interface AppRepositories {
@@ -79,6 +80,12 @@ export async function createApp(options: CreateAppOptions = {}) {
   app.register(registerWaitlistRoutes, { waitlistRepo: repos.waitlistRepo })
   app.register(registerMixerRoutes)
   app.register(registerExecutorRoutes)
+
+  // Mixer relayer is opt-in: only mount when explicitly enabled, since it
+  // holds a hot wallet. The factory does the wiring; here we just gate it.
+  if (config.mixerRelayer) {
+    await registerRelayerRoutes(app, config.mixerRelayer)
+  }
 
   return app
 }

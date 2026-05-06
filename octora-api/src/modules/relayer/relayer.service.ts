@@ -14,7 +14,24 @@ import {
   deriveNullifierPDA,
   type MixerClient,
 } from "./solana-client.js";
-import type { RelayerConfig, RelayerStatus, WithdrawRequest, WithdrawResult } from "./types.js";
+import type {
+  RelayerConfig,
+  RelayerHealth,
+  RelayerHealthIssue,
+  RelayerStatus,
+  WithdrawRequest,
+  WithdrawResult,
+} from "./types.js";
+
+/**
+ * Health-check thresholds. Tuned for the assumption that a relayer
+ * processes O(10s) withdrawals/day in early production; bump these as
+ * traffic ramps up.
+ */
+/** Page when hot wallet has fewer than this many withdrawals' worth of fees left. */
+const LOW_BALANCE_THRESHOLD_WITHDRAWALS = 50;
+/** Page when this many concurrent withdrawals share an in-flight slot. */
+const QUEUE_BACKED_THRESHOLD = 25;
 
 /**
  * Relayer Service — the core engine that:
@@ -246,6 +263,49 @@ export class RelayerService {
       pendingWithdrawals: this.pendingWithdrawals,
       totalProcessed: this.totalProcessed,
       nullifierCount: await this.nullifiers.count(),
+    };
+  }
+
+  /**
+   * Monitoring-shaped health snapshot. Designed to be polled by external
+   * alerting (Grafana, Datadog, Pingdom). The `healthy` flag flips false
+   * when any of the failure conditions in `LOW_BALANCE_*` /
+   * `QUEUE_BACKED_*` thresholds trip — see `relayer.routes.ts` which
+   * maps `healthy === false` to HTTP 503.
+   */
+  async health(): Promise<RelayerHealth> {
+    const issues: RelayerHealthIssue[] = [];
+
+    if (!this.client || !this.mixerPoolPDA) {
+      issues.push("client_uninitialized");
+    }
+
+    const balanceLamports = await this.getHotWalletBalance();
+    const balanceBn = balanceLamports === "0" ? 0n : BigInt(balanceLamports);
+    const minFee = this.config.minFeeLamports;
+    // Below ~10 minFees = "you have a day-or-two worth of gas left".
+    // Operators should top up before this fires; the alert is the floor.
+    const withdrawalsBudget = minFee > 0n ? Number(balanceBn / minFee) : 0;
+    if (withdrawalsBudget < LOW_BALANCE_THRESHOLD_WITHDRAWALS) {
+      issues.push("low_balance");
+    }
+
+    if (this.inFlight.size >= QUEUE_BACKED_THRESHOLD) {
+      issues.push("queue_backed_up");
+    }
+
+    return {
+      healthy: issues.length === 0,
+      issues,
+      publicKey: this.getHotWalletPublicKey(),
+      balanceLamports,
+      withdrawalsBudget,
+      pendingWithdrawals: this.pendingWithdrawals,
+      inFlightNullifiers: this.inFlight.size,
+      totalProcessed: this.totalProcessed,
+      nullifierCount: await this.nullifiers.count(),
+      minFeeLamports: minFee.toString(),
+      poolDenomination: this.config.poolDenomination.toString(),
     };
   }
 
