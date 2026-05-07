@@ -5,6 +5,7 @@ import { Gem, Loader2, Rocket, Search, ShieldCheck, SlidersHorizontal, X } from 
 
 import type { DistributionShape, Pool } from "@/components/octora/types";
 import { listPools, mapPoolSummary } from "@/lib/api";
+import { DEFAULT_CLUSTER } from "@/lib/solana/config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -40,6 +41,9 @@ interface FilterState {
   hideLowTvl: boolean;
 }
 
+// On devnet most pools sit well below $1K TVL, so the "Hide low TVL" guard
+// would empty the table by default. Disable it there; mainnet still gets the
+// spam-filter on by default.
 const DEFAULT_FILTERS: FilterState = {
   poolAgeHours: { ...EMPTY_RANGE },
   volume: { ...EMPTY_RANGE },
@@ -47,7 +51,7 @@ const DEFAULT_FILTERS: FilterState = {
   feeTvlPct: { ...EMPTY_RANGE },
   tvl: { ...EMPTY_RANGE },
   binStep: { ...EMPTY_RANGE },
-  hideLowTvl: true,
+  hideLowTvl: DEFAULT_CLUSTER === "mainnet",
 };
 
 function rangeNum(s: string): number | null {
@@ -69,7 +73,7 @@ function countActiveFilters(f: FilterState): number {
   for (const k of ["poolAgeHours", "volume", "fees", "feeTvlPct", "tvl", "binStep"] as const) {
     if (f[k].min || f[k].max) c++;
   }
-  if (!f.hideLowTvl) c++;
+  if (f.hideLowTvl !== DEFAULT_FILTERS.hideLowTvl) c++;
   return c;
 }
 type Strategy = {

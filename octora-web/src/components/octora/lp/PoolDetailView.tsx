@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BinLiquidityChart } from "@/components/octora/lp/BinLiquidityChart";
 import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
 import { PositionStatusPill } from "@/components/octora/lp/PositionStatusPill";
+import { PrivateDepositModal } from "@/components/octora/lp/PrivateDepositModal";
 import { usePoolBins } from "@/hooks/usePoolBins";
 
 interface Props {
@@ -105,6 +106,7 @@ function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: Distrib
 
   const [depositUsd, setDepositUsd] = useState(2500);
   const [shape, setShape] = useState<DistributionShape>(presetShape ?? "curve");
+  const [depositOpen, setDepositOpen] = useState(false);
 
   useEffect(() => {
     if (presetShape) setShape(presetShape);
@@ -255,15 +257,30 @@ function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: Distrib
             <OutcomeRow label="30d est." value={`$${projection.monthlyRange.toFixed(2)}`} />
             <OutcomeRow label="Execution" value="Private relay" />
           </div>
-          <Button variant="hero" size="lg" className="mt-5 w-full justify-center rounded-xl">
+          <Button
+            variant="hero"
+            size="lg"
+            className="mt-5 w-full justify-center rounded-xl"
+            onClick={() => setDepositOpen(true)}
+            disabled={depositUsd <= 0 || range.upper < range.lower}
+          >
             Deposit privately
             <ArrowRight />
           </Button>
           <p className="mt-3 text-xs leading-5 text-muted-foreground">
-            Routed via Vanish + MagicBlock. Origin wallet stays hidden.
+            Routed via Octora's private relayer. Origin wallet stays hidden.
           </p>
         </div>
       </div>
+
+      <PrivateDepositModal
+        open={depositOpen}
+        onOpenChange={setDepositOpen}
+        pool={pool}
+        depositUsd={depositUsd}
+        shape={shape}
+        range={range}
+      />
     </section>
   );
 }

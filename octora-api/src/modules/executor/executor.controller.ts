@@ -92,13 +92,19 @@ export function createExecutorController(executor: ExecutorService) {
       return reply.send(result);
     },
 
-    /** GET /executor/pool-authority?stealth=... */
+    /** GET /executor/pool-authority?stealth=...&lbPair=... */
     async poolAuthority(
-      req: FastifyRequest<{ Querystring: { stealth: string } }>,
+      req: FastifyRequest<{ Querystring: { stealth: string; lbPair: string } }>,
       reply: FastifyReply,
     ) {
-      const result = await executor.fetchPositionAuthority(new PublicKey(req.query.stealth));
-      if (!result) return reply.status(404).send({ error: "PositionAuthority not initialised" });
+      if (!req.query.lbPair) {
+        return reply.status(400).send({ error: "lbPair query param is required" });
+      }
+      const result = await executor.fetchPositionAuthority(
+        new PublicKey(req.query.stealth),
+        new PublicKey(req.query.lbPair),
+      );
+      if (!result) return reply.status(404).send({ error: "PoolAuthority not initialised" });
       return reply.send(result);
     },
 
@@ -129,15 +135,18 @@ export function createExecutorController(executor: ExecutorService) {
       return reply.send({ pools: slim });
     },
 
-    /** POST /executor/use-pool — body: { lbPair, width? } */
+    /** POST /executor/use-pool — body: { lbPair, width?, lowerBinId? } */
     async usePool(
-      req: FastifyRequest<{ Body: { lbPair: string; width?: number } }>,
+      req: FastifyRequest<{
+        Body: { lbPair: string; width?: number; lowerBinId?: number };
+      }>,
       reply: FastifyReply,
     ) {
       try {
         const config = await executor.useExistingPool({
           lbPair: new PublicKey(req.body.lbPair),
           width: req.body.width,
+          lowerBinId: req.body.lowerBinId,
         });
         return reply.send(config);
       } catch (err) {

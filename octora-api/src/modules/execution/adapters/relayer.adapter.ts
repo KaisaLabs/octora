@@ -19,7 +19,9 @@ import type {
  * so the user's main wallet never touches Meteora directly.
  */
 export class RelayerAdapter implements PrivacyAdapter {
-  constructor(private readonly relayer: RelayerService) {}
+  // RelayerService is only needed for the proof-submitting exit path; the
+  // funding path is bookkeeping-only since the browser holds the stealth seed.
+  constructor(private readonly relayer?: RelayerService) {}
 
   capabilities(): PrivacyCapabilities {
     return {
@@ -31,21 +33,19 @@ export class RelayerAdapter implements PrivacyAdapter {
   }
 
   async prepareFunding(input: PrepareFundingInput): Promise<PrivacyReceipt> {
-    // Generate a fresh stealth wallet that will receive the mixer withdrawal
-    const stealthWallet = generateStealthWallet();
-
-    // The actual withdrawal from mixer → stealth wallet happens when the user
-    // submits their ZK proof via the relayer endpoint.
-    // At this stage we prepare the receipt and record the stealth address.
+    // Wallet-derived seed flow: the browser holds the stealth keypair and
+    // sends only the pubkey. Fall back to server-side generation if the
+    // caller didn't supply one (legacy/test paths).
+    const stealthPubkey = input.stealthPubkey ?? generateStealthWallet().publicKey;
 
     return {
       receiptId: `relayer-funding-${input.positionId}-${Date.now()}`,
       adapter: "relayer",
       action: "prepare_funding",
       positionId: input.positionId,
-      podId: stealthWallet.publicKey, // podId = stealth address in relayer mode
+      podId: stealthPubkey,
       status: "prepared",
-      summary: `Stealth wallet ${stealthWallet.publicKey.slice(0, 8)}... prepared for position ${input.positionId}. Awaiting ZK proof submission.`,
+      summary: `Stealth wallet ${stealthPubkey.slice(0, 8)}... prepared for position ${input.positionId}.`,
       createdAtIso: new Date().toISOString(),
     };
   }

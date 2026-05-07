@@ -49,6 +49,14 @@ const BIN_STEP = 10;
 const BASE_FACTOR = 10000;
 const ACTIVE_BIN = 0;
 
+/**
+ * Lamports the relayer drops on the stealth wallet inside `dlmm_init_position`
+ * so it can pay rent for its own PoolAuthority PDA. Sized comfortably above
+ * the observed PoolAuthority rent (~2.074M lamports) to leave headroom for
+ * any small PDA fees the on-chain handler might bill the stealth for.
+ */
+const STEALTH_INIT_FUNDING_LAMPORTS = 5_000_000;
+
 export interface TestPairConfig {
   tokenX: string;
   tokenY: string;
@@ -183,6 +191,12 @@ export class ExecutorService {
     lbPair: PublicKey;
     /** Position width in bins. Defaults to 20. */
     width?: number;
+    /**
+     * Explicit lower bin id. When omitted, the position is centred on the
+     * pool's active bin (the test-page default). The deposit UX passes a
+     * user-selected lower bin from the BinLiquidityChart.
+     */
+    lowerBinId?: number;
   }): Promise<TestPairConfig> {
     const width = args.width ?? 20;
     const dlmm = await DLMM.create(this.connection, args.lbPair);
@@ -192,10 +206,8 @@ export class ExecutorService {
     const activeBin = dlmm.lbPair.activeId;
     const binStep = dlmm.lbPair.binStep;
 
-    // Centre the position on the pool's active bin so both bin arrays we
-    // initialise are likely to already exist (a hot pool keeps the
-    // active-bin's array warm).
-    const lowerBinId = activeBin - Math.floor(width / 2);
+    const lowerBinId =
+      args.lowerBinId ?? activeBin - Math.floor(width / 2);
     const upperBinId = lowerBinId + width - 1;
 
     const lowerArrayIdx = binIdToBinArrayIndex(new BN(lowerBinId));
@@ -280,16 +292,25 @@ export class ExecutorService {
     width: number;
   }): Promise<{ transaction: string; positionPubkey: string; positionAuthority: string }> {
     const positionKeypair = Keypair.generate();
-    const [positionAuthority] = PublicKey.findProgramAddressSync(
-      [POOL_AUTHORITY_SEED, args.stealth.toBuffer()],
-      this.programId,
-    );
+    const [positionAuthority] = derivePoolAuthorityPda(this.programId, args.stealth, args.lbPair);
+
+    // The on-chain `dlmm_init_position` ix uses `payer = stealth`, so the
+    // stealth account must hold enough lamports to cover the PoolAuthority
+    // PDA rent. Stealth is a fresh wallet-derived keypair with 0 SOL on
+    // chain, so we top it up from the relayer in the same tx. The lamports
+    // come back to the user via `close = stealth` in withdraw_close.
+    const fundStealthIx = SystemProgram.transfer({
+      fromPubkey: this.relayer.publicKey,
+      toPubkey: args.stealth,
+      lamports: STEALTH_INIT_FUNDING_LAMPORTS,
+    });
 
     const ix = await this.program.methods
-      .initPosition(args.lowerBinId, args.width, args.exitRecipient)
+      .dlmmInitPosition(args.lowerBinId, args.width, args.exitRecipient)
       .accounts({
         stealth: args.stealth,
-        positionAuthority,
+        poolAuthority: positionAuthority,
+        lbPair: args.lbPair,
         dlmmProgram: DLMM_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -308,7 +329,7 @@ export class ExecutorService {
     const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 });
     const { blockhash } = await this.connection.getLatestBlockhash("confirmed");
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: this.relayer.publicKey });
-    tx.add(computeIx, ix);
+    tx.add(computeIx, fundStealthIx, ix);
 
     // Server pre-signs with its two known signers (relayer + position kp).
     // The remaining stealth signature is added in the browser.
@@ -348,10 +369,7 @@ export class ExecutorService {
     const lbPair = new PublicKey(args.config.lbPair);
     const binArrayLower = new PublicKey(args.config.binArrayLower);
     const binArrayUpper = new PublicKey(args.config.binArrayUpper);
-    const [positionAuthority] = PublicKey.findProgramAddressSync(
-      [POOL_AUTHORITY_SEED, args.stealth.toBuffer()],
-      this.programId,
-    );
+    const [positionAuthority] = derivePoolAuthorityPda(this.programId, args.stealth, lbPair);
 
     // PDA-owned escrow ATAs (idempotent — created once on first call).
     const pdaAtaX = await getOrCreateAssociatedTokenAccount(
@@ -410,11 +428,12 @@ export class ExecutorService {
     ];
 
     const addLiqIx = await this.program.methods
-      .addLiquidity(Buffer.from(liquidityParams))
+      .dlmmAddLiquidity(Buffer.from(liquidityParams))
       .accounts({
         stealth: args.stealth,
-        positionAuthority,
+        poolAuthority: positionAuthority,
         dlmmProgram: DLMM_PROGRAM_ID,
+        lbPair,
       })
       .remainingAccounts(dlmmAccounts)
       .instruction();
@@ -440,10 +459,7 @@ export class ExecutorService {
     const lbPair = new PublicKey(args.config.lbPair);
     const binArrayLower = new PublicKey(args.config.binArrayLower);
     const binArrayUpper = new PublicKey(args.config.binArrayUpper);
-    const [positionAuthority] = PublicKey.findProgramAddressSync(
-      [POOL_AUTHORITY_SEED, args.stealth.toBuffer()],
-      this.programId,
-    );
+    const [positionAuthority] = derivePoolAuthorityPda(this.programId, args.stealth, lbPair);
 
     const exitAtaX = await getOrCreateAssociatedTokenAccount(
       this.connection, this.relayer, tokenX, args.exitRecipient,
@@ -477,10 +493,11 @@ export class ExecutorService {
     ];
 
     const ix = await this.program.methods
-      .withdrawClose(args.config.lowerBinId, args.config.upperBinId, 10000)
+      .dlmmWithdrawClose(args.config.lowerBinId, args.config.upperBinId, 10000)
       .accounts({
         stealth: args.stealth,
-        positionAuthority,
+        poolAuthority: positionAuthority,
+        lbPair,
         dlmmProgram: DLMM_PROGRAM_ID,
       })
       .remainingAccounts(dlmmAccounts)
@@ -496,33 +513,52 @@ export class ExecutorService {
     return { transaction: serialized.toString("base64") };
   }
 
-  async fetchPositionAuthority(stealth: PublicKey): Promise<{
+  async fetchPositionAuthority(
+    stealth: PublicKey,
+    lbPair: PublicKey,
+  ): Promise<{
     pda: string;
     stealthPubkey: string;
     lbPair: string;
     position: string;
     exitRecipient: string;
   } | null> {
-    const [pda] = PublicKey.findProgramAddressSync(
-      [POOL_AUTHORITY_SEED, stealth.toBuffer()],
-      this.programId,
-    );
-    const acct = await (this.program.account as any).positionAuthority.fetchNullable(pda);
+    const [pda] = derivePoolAuthorityPda(this.programId, stealth, lbPair);
+    const acct = await (this.program.account as any).poolAuthority.fetchNullable(pda);
     if (!acct) return null;
+    const dlmm = acct.poolRef?.dlmm;
+    if (!dlmm) return null;
     return {
       pda: pda.toBase58(),
       stealthPubkey: acct.stealthPubkey.toBase58(),
-      lbPair: acct.lbPair.toBase58(),
-      position: acct.position.toBase58(),
+      lbPair: dlmm.lbPair.toBase58(),
+      position: dlmm.position.toBase58(),
       exitRecipient: acct.exitRecipient.toBase58(),
     };
   }
 
-  /** Internal: read the PositionAuthority PDA to recover the position pubkey. */
+  /** Internal: read the PoolAuthority PDA to recover the DLMM position pubkey. */
   private async fetchPositionFromAuthority(pda: PublicKey): Promise<PublicKey> {
-    const acct = await (this.program.account as any).positionAuthority.fetch(pda);
-    return acct.position as PublicKey;
+    const acct = await (this.program.account as any).poolAuthority.fetch(pda);
+    const dlmm = acct.poolRef?.dlmm;
+    if (!dlmm) throw new Error("PoolAuthority is not a DLMM position.");
+    return dlmm.position as PublicKey;
   }
+}
+
+/**
+ * PoolAuthority PDA seeds match the program's `dlmm/*` handlers:
+ *   [POOL_AUTHORITY_SEED, stealth.key(), lb_pair.key()]
+ */
+function derivePoolAuthorityPda(
+  programId: PublicKey,
+  stealth: PublicKey,
+  lbPair: PublicKey,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [POOL_AUTHORITY_SEED, stealth.toBuffer(), lbPair.toBuffer()],
+    programId,
+  );
 }
 
 /**
