@@ -1,5 +1,15 @@
 const API_BASE = import.meta.env.VITE_API_URL ?? '/api'
 
+/**
+ * Active Solana network for all DLMM API calls.
+ *
+ * Set VITE_NETWORK=localnet (or devnet/mainnet) at build time. Defaults to
+ * devnet so the historical UX is preserved. On `localnet`, the API skips
+ * the Meteora indexer and reads pool data straight from the local validator.
+ */
+export const NETWORK: 'mainnet' | 'devnet' | 'localnet' =
+  (import.meta.env.VITE_NETWORK as 'mainnet' | 'devnet' | 'localnet' | undefined) ?? 'devnet'
+
 export interface PoolSummary {
   address: string
   name: string
@@ -14,7 +24,7 @@ export interface PoolSummary {
   binStep: number
   baseFee: number
   createdAt: number
-  network: 'mainnet' | 'devnet'
+  network: 'mainnet' | 'devnet' | 'localnet'
 }
 
 export interface PoolDetail extends PoolSummary {
@@ -79,7 +89,7 @@ export function mapPoolSummary(summary: PoolSummary): Pool {
 }
 
 export async function listPools(opts: {
-  network?: 'mainnet' | 'devnet'
+  network?: 'mainnet' | 'devnet' | 'localnet'
   search?: string
   page?: number
   pageSize?: number
@@ -104,7 +114,7 @@ export async function listPools(opts: {
 
 export interface PoolBinsResponse {
   address: string
-  network: 'mainnet' | 'devnet'
+  network: 'mainnet' | 'devnet' | 'localnet'
   activeBinId: number
   binStep: number
   bins: Array<{
@@ -118,7 +128,7 @@ export interface PoolBinsResponse {
 
 export async function getPoolBins(
   address: string,
-  opts: { network?: 'mainnet' | 'devnet'; count?: number } = {}
+  opts: { network?: 'mainnet' | 'devnet' | 'localnet'; count?: number } = {}
 ): Promise<PoolBinsResponse> {
   const params = new URLSearchParams()
   if (opts.network) params.set('network', opts.network)
@@ -154,7 +164,7 @@ export async function getPrices(mints: string[]): Promise<PriceMap> {
 
 export async function getPoolDetail(
   address: string,
-  network: 'mainnet' | 'devnet' = 'devnet'
+  network: 'mainnet' | 'devnet' | 'localnet' = 'devnet'
 ): Promise<PoolDetail> {
   const params = new URLSearchParams()
   params.set('network', network)

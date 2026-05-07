@@ -4,9 +4,15 @@ import type { ExecutorService, TestPairConfig } from "./executor.service.js";
 
 export function createExecutorController(executor: ExecutorService) {
   return {
-    /** POST /executor/setup-pair — server creates mints + LB pair + bin arrays. */
-    async setupPair(_req: FastifyRequest, reply: FastifyReply) {
-      const config = await executor.setupTestPair();
+    /**
+     * POST /executor/setup-pair — server creates mints + LB pair + bin arrays.
+     * Optional body: { useNativeSol?: boolean, lowerBinId?: number, width?: number }
+     */
+    async setupPair(
+      req: FastifyRequest<{ Body?: { useNativeSol?: boolean; lowerBinId?: number; width?: number } }>,
+      reply: FastifyReply,
+    ) {
+      const config = await executor.setupTestPair(req.body ?? {});
       return reply.send(config);
     },
 

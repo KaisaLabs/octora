@@ -15,15 +15,23 @@ import type {
 
 // Mainnet (`dlmm.datapi.meteora.ag`) and devnet (`dlmm-api.devnet.meteora.ag`)
 // expose two completely different APIs with different paths and field names.
-// The two are kept side-by-side and dispatched per call.
+// The two are kept side-by-side and dispatched per call. `localnet` has no
+// hosted indexer — every call falls through to the chain-direct path that
+// reads lb_pair / mint accounts from the local validator's RPC.
 const API_BASE = {
   mainnet: 'https://dlmm.datapi.meteora.ag',
   devnet: 'https://dlmm-api.devnet.meteora.ag',
 } as const
 
-export type Network = 'mainnet' | 'devnet'
+export type Network = 'mainnet' | 'devnet' | 'localnet'
 
 async function fetchMeteora(network: Network, path: string, params?: URLSearchParams): Promise<Response> {
+  if (network === 'localnet') {
+    throw new MeteoraApiError(
+      501,
+      `Meteora indexer not available on localnet (path=${path}); use the chain-direct path`,
+    )
+  }
   const base = API_BASE[network]
   const qs = params?.toString()
   const url = qs ? `${base}${path}?${qs}` : `${base}${path}`
@@ -241,6 +249,11 @@ export async function listPools(
   network: Network,
   opts: { search?: string; page?: number; pageSize?: number; sortBy?: string; filterBy?: string } = {}
 ): Promise<PaginatedResponse<PoolSummary>> {
+  if (network === 'localnet') {
+    // No hosted indexer for localnet — the browser navigates by pool address
+    // directly. Return empty so the listing UI renders without errors.
+    return { data: [], total: 0, pages: 0, currentPage: 1, pageSize: opts.pageSize ?? 50 }
+  }
   if (network === 'devnet') return listPoolsDevnet(opts)
 
   const params = new URLSearchParams()
@@ -346,6 +359,9 @@ async function listPoolsDevnet(
 
 export async function getPool(address: string, network: Network): Promise<PoolDetail | null> {
   try {
+    if (network === 'localnet') {
+      return await getPoolFromChain(address, network)
+    }
     if (network === 'devnet') {
       const res = await fetchMeteora('devnet', `/pair/${address}`)
       const pair: MeteoraPairDevnet = await res.json()
@@ -364,6 +380,9 @@ export async function listGroups(
   network: Network,
   opts: { page?: number; pageSize?: number } = {}
 ): Promise<PaginatedResponse<PoolGroup>> {
+  if (network === 'localnet') {
+    return { data: [], total: 0, pages: 0, currentPage: 1, pageSize: opts.pageSize ?? 50 }
+  }
   if (network === 'devnet') return listGroupsDevnet(opts)
 
   const params = new URLSearchParams()
@@ -433,6 +452,18 @@ export async function getGroup(
   network: Network,
   opts: { page?: number; pageSize?: number } = {}
 ): Promise<PoolGroup> {
+  if (network === 'localnet') {
+    return {
+      name: mintPair,
+      pair: mintPair,
+      mintX: '',
+      mintY: '',
+      pools: [],
+      total: 0,
+      pages: 0,
+      currentPage: 1,
+    }
+  }
   if (network === 'devnet') return getGroupDevnet(mintPair, opts)
 
   const params = new URLSearchParams()
@@ -486,9 +517,9 @@ export async function getOhlcv(
   network: Network,
   opts: { startTime?: number; endTime?: number; resolution?: string } = {}
 ): Promise<OhlcvCandle[]> {
-  // Devnet has no OHLCV endpoint. Return empty rather than 404 so the UI
-  // can render its empty/fallback state.
-  if (network === 'devnet') return []
+  // Devnet/localnet have no OHLCV endpoint. Return empty rather than 404
+  // so the UI can render its empty/fallback state.
+  if (network === 'devnet' || network === 'localnet') return []
 
   const params = new URLSearchParams()
   if (opts.startTime) params.set('start_time', String(opts.startTime))
@@ -513,6 +544,7 @@ export async function getVolumeHistory(
   network: Network,
   opts: { startTime?: number; endTime?: number; resolution?: string } = {}
 ): Promise<VolumeHistoryBucket[]> {
+  if (network === 'localnet') return []
   if (network === 'devnet') return getVolumeHistoryDevnet(address, opts)
 
   const params = new URLSearchParams()
@@ -555,6 +587,9 @@ async function getVolumeHistoryDevnet(
 }
 
 export async function getProtocolMetrics(network: Network): Promise<ProtocolMetrics> {
+  if (network === 'localnet') {
+    return { totalTvl: 0, volume24h: 0, fee24h: 0, totalVolume: 0, totalFees: 0, totalPools: 0 }
+  }
   if (network === 'devnet') {
     const res = await fetchMeteora('devnet', '/info/protocol_metrics')
     const raw = await res.json()
@@ -595,6 +630,10 @@ const RPC_URL: Record<Network, string> = {
     process.env.OCTORA_DLMM_RPC_URL_DEVNET ??
     process.env.OCTORA_EXECUTOR_RPC_URL ??
     'https://api.devnet.solana.com',
+  localnet:
+    process.env.OCTORA_DLMM_RPC_URL_LOCALNET ??
+    process.env.SOLANA_RPC_URL ??
+    'http://127.0.0.1:8899',
 }
 
 const connections: Partial<Record<Network, Connection>> = {}
@@ -685,4 +724,82 @@ function decimalize(raw: any, decimals: number): number {
 function bnToString(raw: any): string {
   if (raw == null) return '0'
   return typeof raw === 'string' ? raw : raw.toString?.() ?? String(raw)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Chain-direct PoolDetail (localnet, where Meteora's indexer is absent)
+// ─────────────────────────────────────────────────────────────────────
+
+async function getPoolFromChain(address: string, network: Network): Promise<PoolDetail | null> {
+  let dlmm: any
+  try {
+    dlmm = await getDlmmInstance(address, network)
+  } catch {
+    return null
+  }
+  const conn = getConnection(network)
+  const lbPair: any = dlmm.lbPair
+  const tokenXMint: PublicKey = dlmm.tokenX?.publicKey ?? new PublicKey(lbPair.tokenXMint)
+  const tokenYMint: PublicKey = dlmm.tokenY?.publicKey ?? new PublicKey(lbPair.tokenYMint)
+
+  const [xDecimals, yDecimals] = await Promise.all([
+    fetchMintDecimals(conn, tokenXMint, dlmm.tokenX?.mint?.decimals ?? dlmm.tokenX?.decimals),
+    fetchMintDecimals(conn, tokenYMint, dlmm.tokenY?.mint?.decimals ?? dlmm.tokenY?.decimals),
+  ])
+
+  const xSymbol = labelForMint(tokenXMint)
+  const ySymbol = labelForMint(tokenYMint)
+  const binStep = Number(lbPair.binStep ?? 0)
+  const baseFactor = Number(lbPair.parameters?.baseFactor ?? 0)
+  const baseFeeBps = Math.round((baseFactor * binStep) / 100)
+  const activeBinId = Number(lbPair.activeId ?? 0)
+
+  // Active bin price in tokenY-per-tokenX, scaled per the binStep formula:
+  //   price = (1 + binStep/10_000) ** activeId
+  const price = Math.pow(1 + binStep / 10_000, activeBinId)
+
+  return {
+    address,
+    name: `${xSymbol}-${ySymbol}`,
+    pair: `${xSymbol}/${ySymbol}`,
+    tokenX: { symbol: xSymbol, mint: tokenXMint.toBase58(), decimals: xDecimals },
+    tokenY: { symbol: ySymbol, mint: tokenYMint.toBase58(), decimals: yDecimals },
+    tvl: 0,
+    volume24h: 0,
+    fees24h: 0,
+    apr: 0,
+    feeBps: baseFeeBps,
+    binStep,
+    baseFee: baseFeeBps,
+    createdAt: 0,
+    network,
+    activeBinId,
+    price,
+    priceRange: { min: 0, max: 0 },
+    liquidityShape: 'unknown',
+    totalLiquidity: 0,
+    feeInfo: {
+      baseFeeBps,
+      maxFeeBps: baseFeeBps,
+      protocolFeeBps: Number(lbPair.parameters?.protocolShare ?? 0),
+    },
+  }
+}
+
+async function fetchMintDecimals(
+  conn: Connection,
+  mint: PublicKey,
+  fallback: number | undefined,
+): Promise<number> {
+  if (typeof fallback === 'number') return fallback
+  const acct = await conn.getAccountInfo(mint, 'confirmed')
+  if (!acct || acct.data.length < 45) return 0
+  // SPL mint layout: decimals at byte 44 (after mintAuthority option + supply).
+  return acct.data[44]
+}
+
+function labelForMint(mint: PublicKey): string {
+  const NATIVE_MINT_BS58 = 'So11111111111111111111111111111111111111112'
+  if (mint.toBase58() === NATIVE_MINT_BS58) return 'SOL'
+  return mint.toBase58().slice(0, 4)
 }

@@ -8,6 +8,11 @@ skip-lint = false
 octora_executor = "4n47TYP2hQ2bwS8GiU3a1EVyF9mgeSbKWBvAVmUjaUtK"
 octora_mixer = "BHxT3jyWJ1mRLyMjywQoiSXBqo7YpTiGWC1oVr2Ppnzx"
 
+[programs.localnet]
+octora_executor = "4n47TYP2hQ2bwS8GiU3a1EVyF9mgeSbKWBvAVmUjaUtK"
+octora_mixer = "BHxT3jyWJ1mRLyMjywQoiSXBqo7YpTiGWC1oVr2Ppnzx"
+
+
 [registry]
 url = "https://api.apr.dev"
 

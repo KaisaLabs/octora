@@ -3,7 +3,7 @@ import { useNavigate, useParams, useLocation, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 
-import { getPoolDetail, mapPoolSummary } from "@/lib/api";
+import { getPoolDetail, mapPoolSummary, NETWORK } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { DistributionShape } from "@/components/octora/types";
 import { PoolDetailView } from "@/components/octora/lp/PoolDetailView";
@@ -20,7 +20,7 @@ export function PoolDetailPage() {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["pool", address],
-    queryFn: () => getPoolDetail(address, "devnet"),
+    queryFn: () => getPoolDetail(address, NETWORK),
     enabled: !!address,
     staleTime: 30_000,
   });

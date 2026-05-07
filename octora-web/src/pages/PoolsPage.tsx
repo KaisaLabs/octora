@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Gem, Loader2, Rocket, Search, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 
 import type { DistributionShape, Pool } from "@/components/octora/types";
-import { listPools, mapPoolSummary } from "@/lib/api";
+import { listPools, mapPoolSummary, NETWORK } from "@/lib/api";
 import { DEFAULT_CLUSTER } from "@/lib/solana/config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -173,7 +173,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
   const searchQuery = useQuery({
     queryKey: ["pools", "search", debouncedQuery],
     queryFn: () =>
-      listPools({ network: "devnet", search: debouncedQuery, pageSize: 50 }).then((s) =>
+      listPools({ network: NETWORK, search: debouncedQuery, pageSize: 50 }).then((s) =>
         s.map(mapPoolSummary),
       ),
     enabled: debouncedQuery.length > 0,

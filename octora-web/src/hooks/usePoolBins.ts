@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import type { LiquidityBin, Pool } from "@/components/octora/types";
-import { getPoolBins } from "@/lib/api";
+import { getPoolBins, NETWORK } from "@/lib/api";
 import { synthesizeBins } from "@/lib/bins";
 
 export interface UsePoolBinsResult {
@@ -22,7 +22,7 @@ export function usePoolBins(pool: Pool, count = 61): UsePoolBinsResult {
 
   const query = useQuery({
     queryKey: ["pool-bins", pool.address, count],
-    queryFn: () => getPoolBins(pool.address, { network: "devnet", count }),
+    queryFn: () => getPoolBins(pool.address, { network: NETWORK, count }),
     enabled: Boolean(pool.address),
     staleTime: 30_000,
     refetchOnWindowFocus: false,

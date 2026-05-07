@@ -118,14 +118,27 @@ export class ExecutorService {
   async setupTestPair(opts: {
     lowerBinId?: number;
     width?: number;
+    /**
+     * When true, pair the test mint against native SOL (Wrapped SOL) instead
+     * of generating two fresh mints. Required for the private-deposit flow,
+     * which only supports SOL-paired pools (see `buildAddLiquidityTx`).
+     */
+    useNativeSol?: boolean;
   } = {}): Promise<TestPairConfig> {
     const lowerBinId = opts.lowerBinId ?? -10;
     const width = opts.width ?? 20;
     const upperBinId = lowerBinId + width - 1;
 
     // ── Mints ────────────────────────────────────────────────────────
-    let tokenX = await createMint(this.connection, this.relayer, this.relayer.publicKey, null, 6);
-    let tokenY = await createMint(this.connection, this.relayer, this.relayer.publicKey, null, 6);
+    let tokenX: PublicKey;
+    let tokenY: PublicKey;
+    if (opts.useNativeSol) {
+      tokenX = await createMint(this.connection, this.relayer, this.relayer.publicKey, null, 6);
+      tokenY = NATIVE_MINT;
+    } else {
+      tokenX = await createMint(this.connection, this.relayer, this.relayer.publicKey, null, 6);
+      tokenY = await createMint(this.connection, this.relayer, this.relayer.publicKey, null, 6);
+    }
     // DLMM derives the LB pair PDA from the smaller-pubkey-first ordering of
     // the two mints. Match it locally so `deriveLbPair2` produces the same
     // address the SDK passes into createLbPair.

@@ -24,7 +24,7 @@ const IntegratedTestPage = lazy(() =>
   import("./pages/IntegratedTestPage").then((m) => ({ default: m.IntegratedTestPage })),
 );
 import type { Pool } from "@/components/octora/types";
-import { listPools, mapPoolSummary } from "@/lib/api";
+import { listPools, mapPoolSummary, NETWORK } from "@/lib/api";
 import { portfolioActivity, portfolioPositions } from "@/data/octora";
 
 const queryClient = new QueryClient();
@@ -39,7 +39,7 @@ function AppRoutes() {
     setLoading(true);
     setError(null);
 
-    listPools({ network: "devnet", pageSize: 50 })
+    listPools({ network: NETWORK, pageSize: 50 })
       .then((summaries) => {
         if (!cancelled) {
           setRawPools(summaries.map(mapPoolSummary));
