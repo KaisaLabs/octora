@@ -1,30 +1,75 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  ArrowLeft,
-  ArrowRight,
-  Coins,
-  Copy,
-  Flame,
-  Gem,
-  Minus,
-  Rocket,
-  Search,
-  ShieldCheck,
-} from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { Gem, Loader2, Rocket, Search, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 
-import type { DistributionShape, LiquidityBin, Pool } from "@/components/octora/types";
+import type { DistributionShape, Pool } from "@/components/octora/types";
+import { listPools, mapPoolSummary } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BinLiquidityChart } from "@/components/octora/lp/BinLiquidityChart";
-import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
-import { PositionStatusPill } from "@/components/octora/lp/PositionStatusPill";
-import { usePoolBins } from "@/hooks/usePoolBins";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 
-type SortKey = "tvl" | "apr" | "volume";
-type ProtocolFilter = "all" | "DLMM" | "DAMM";
+type ContentTab = "top" | "trending" | "stable";
+type TimeFrame = "5m" | "30m" | "1h" | "2h" | "4h" | "12h" | "24h";
+
+const CONTENT_TABS: Array<{ id: ContentTab; label: string; sub: string }> = [
+  { id: "top", label: "Top performers", sub: "Best fee yield per dollar" },
+  { id: "trending", label: "Trending", sub: "Most 24h volume" },
+  { id: "stable", label: "Stable", sub: "USDC / USDT pairs" },
+];
+
+const TIMEFRAMES: TimeFrame[] = ["5m", "30m", "1h", "2h", "4h", "12h", "24h"];
+
+interface NumRange {
+  min: string;
+  max: string;
+}
+const EMPTY_RANGE: NumRange = { min: "", max: "" };
+
+interface FilterState {
+  poolAgeHours: NumRange;
+  volume: NumRange;
+  fees: NumRange;
+  feeTvlPct: NumRange;
+  tvl: NumRange;
+  binStep: NumRange;
+  hideLowTvl: boolean;
+}
+
+const DEFAULT_FILTERS: FilterState = {
+  poolAgeHours: { ...EMPTY_RANGE },
+  volume: { ...EMPTY_RANGE },
+  fees: { ...EMPTY_RANGE },
+  feeTvlPct: { ...EMPTY_RANGE },
+  tvl: { ...EMPTY_RANGE },
+  binStep: { ...EMPTY_RANGE },
+  hideLowTvl: true,
+};
+
+function rangeNum(s: string): number | null {
+  if (!s.trim()) return null;
+  const n = parseFloat(s.replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function inRange(value: number, range: NumRange): boolean {
+  const min = rangeNum(range.min);
+  const max = rangeNum(range.max);
+  if (min !== null && value < min) return false;
+  if (max !== null && value > max) return false;
+  return true;
+}
+
+function countActiveFilters(f: FilterState): number {
+  let c = 0;
+  for (const k of ["poolAgeHours", "volume", "fees", "feeTvlPct", "tvl", "binStep"] as const) {
+    if (f[k].min || f[k].max) c++;
+  }
+  if (!f.hideLowTvl) c++;
+  return c;
+}
 type Strategy = {
   id: "stable" | "trending" | "blue-chip";
   title: string;
@@ -75,6 +120,26 @@ const parsePct = (v: string | number) => {
   return parseFloat(v.replace("%", ""));
 };
 
+/** Annualized fee yield against TVL: 24h fees * 365 / TVL, expressed as percent. */
+function feeTvlPct(p: Pool): number {
+  const tvl = parseUsd(p.tvl);
+  if (tvl <= 0) return 0;
+  const fees = parseUsd(p.fees24h);
+  return ((fees * 365) / tvl) * 100;
+}
+
+function truncateMiddle(s: string, head = 6, tail = 6): string {
+  if (s.length <= head + tail + 1) return s;
+  return `${s.slice(0, head)}…${s.slice(-tail)}`;
+}
+
+function fmtFeeTvl(p: Pool): string {
+  const v = feeTvlPct(p);
+  if (!Number.isFinite(v) || v === 0) return "—";
+  if (v >= 1000) return `${(v / 1000).toFixed(1)}Kx`;
+  return `${v.toFixed(1)}%`;
+}
+
 interface PoolsPageProps {
   pools: Pool[];
   loading: boolean;
@@ -82,42 +147,106 @@ interface PoolsPageProps {
 }
 
 export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
-  const [sortBy, setSortBy] = useState<SortKey>("tvl");
-  const [protocolFilter, setProtocolFilter] = useState<ProtocolFilter>("all");
+  const [contentTab, setContentTab] = useState<ContentTab>("top");
+  const [timeframe, setTimeframe] = useState<TimeFrame>("4h");
+  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [strategyId, setStrategyId] = useState<Strategy["id"] | null>(null);
-  const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null);
+
+  // Debounce search input to avoid hammering the API on every keystroke.
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  useEffect(() => {
+    const trimmed = query.trim();
+    const t = setTimeout(() => setDebouncedQuery(trimmed), 250);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  // The local `pools` prop is capped at 50; for any non-empty query we hit the
+  // backend so users can find pools by mint/address/pair beyond that window.
+  const searchQuery = useQuery({
+    queryKey: ["pools", "search", debouncedQuery],
+    queryFn: () =>
+      listPools({ network: "mainnet", search: debouncedQuery, pageSize: 50 }).then((s) =>
+        s.map(mapPoolSummary),
+      ),
+    enabled: debouncedQuery.length > 0,
+    staleTime: 30_000,
+  });
 
   const activeStrategy = useMemo(() => STRATEGIES.find((s) => s.id === strategyId) ?? null, [strategyId]);
+  const filterCount = countActiveFilters(filters);
+
+  const openPool = (pool: Pool) => {
+    navigate(`/pool/${pool.address}`, {
+      state: activeStrategy ? { presetShape: activeStrategy.shape } : undefined,
+    });
+  };
+
+  const nowSec = useMemo(() => Math.floor(Date.now() / 1000), []);
 
   const filteredPools = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    let list = pools.filter((p) => {
-      if (protocolFilter !== "all" && !p.protocol.includes(protocolFilter)) return false;
+    const q = debouncedQuery.toLowerCase();
+    // While a query is active, prefer the backend search results (covers pools
+    // outside the local first-50 window). Fall back to local pools while the
+    // request is in flight or if it errors.
+    const sourcePools = q && searchQuery.data ? searchQuery.data : pools;
+
+    let list = sourcePools.filter((p) => {
+      if (filters.hideLowTvl && parseUsd(p.tvl) < 1_000) return false;
+      if (!inRange(p.binStep, filters.binStep)) return false;
+      if (!inRange(parseUsd(p.tvl), filters.tvl)) return false;
+      if (!inRange(parseUsd(p.volume24h), filters.volume)) return false;
+      if (!inRange(parseUsd(p.fees24h), filters.fees)) return false;
+      if (!inRange(feeTvlPct(p), filters.feeTvlPct)) return false;
+      if (filters.poolAgeHours.min || filters.poolAgeHours.max) {
+        if (!p.createdAt) return false;
+        const ageHours = (nowSec - p.createdAt) / 3600;
+        if (!inRange(ageHours, filters.poolAgeHours)) return false;
+      }
+      if (contentTab === "stable") {
+        const upper = [p.tokenA, p.tokenB].map((t) => t.toUpperCase());
+        if (!upper.some((t) => t === "USDC" || t === "USDT")) return false;
+      }
       if (activeStrategy) {
-        const tokens = [p.tokenA, p.tokenB].map((t) => t.toUpperCase());
+        const upper = [p.tokenA, p.tokenB].map((t) => t.toUpperCase());
         const wanted = activeStrategy.matchTokens.map((t) => t.toUpperCase());
-        if (!tokens.some((t) => wanted.includes(t))) return false;
+        if (!upper.some((t) => wanted.includes(t))) return false;
       }
       if (!q) return true;
-      return [p.name, p.pair, p.protocol, p.tokenA, p.tokenB, p.address, ...(p.tags ?? [])]
+      return [
+        p.name,
+        p.pair,
+        p.protocol,
+        p.tokenA,
+        p.tokenB,
+        p.tokenAMint,
+        p.tokenBMint,
+        p.address,
+        ...(p.tags ?? []),
+      ]
         .join(" ")
         .toLowerCase()
         .includes(q);
     });
 
+    // Content tab implies sort. No separate sort UI.
     list = [...list].sort((a, b) => {
-      if (sortBy === "tvl") return parseUsd(b.tvl) - parseUsd(a.tvl);
-      if (sortBy === "apr") return parsePct(b.apr) - parsePct(a.apr);
-      return parseUsd(b.volume24h) - parseUsd(a.volume24h);
+      if (contentTab === "trending") return parseUsd(b.volume24h) - parseUsd(a.volume24h);
+      if (contentTab === "stable") return parseUsd(b.tvl) - parseUsd(a.tvl);
+      // top: best fee yield per dollar at risk.
+      const af = feeTvlPct(a);
+      const bf = feeTvlPct(b);
+      if (bf !== af) return bf - af;
+      return parseUsd(b.tvl) - parseUsd(a.tvl);
     });
     return list;
-  }, [pools, query, sortBy, protocolFilter, activeStrategy]);
+  }, [pools, debouncedQuery, searchQuery.data, contentTab, filters, activeStrategy, nowSec]);
 
-  const selectedPool = useMemo(
-    () => pools.find((p) => p.id === selectedPoolId) ?? null,
-    [pools, selectedPoolId],
-  );
+  const resetFilters = () => {
+    setFilters(DEFAULT_FILTERS);
+    setStrategyId(null);
+  };
 
   if (loading) {
     return <PoolsSkeleton />;
@@ -136,110 +265,136 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
       <FeaturedStrategies activeId={strategyId} onSelect={setStrategyId} />
 
       <section className="panel-shell rounded-2xl p-4 sm:p-6">
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-                Discover pools
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {activeStrategy
-                  ? `Filtered to ${activeStrategy.title.toLowerCase()} candidates.`
-                  : "Search a pair or paste a contract address."}
-              </p>
-            </div>
-            {activeStrategy && (
-              <button
-                type="button"
-                onClick={() => setStrategyId(null)}
-                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Clear strategy
-              </button>
-            )}
-          </div>
-
-          <label className="relative block">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search SOL, JUP, or paste CA..."
-              className="h-12 rounded-xl border-border bg-background pl-10"
-            />
-          </label>
+        {/* Header row: tabs (left), timeframe + search + filter (right) */}
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <ContentTabBar value={contentTab} onChange={setContentTab} />
 
           <div className="flex flex-wrap items-center gap-2">
-            <FilterChip active={protocolFilter === "all"} onClick={() => setProtocolFilter("all")}>All</FilterChip>
-            <FilterChip active={protocolFilter === "DLMM"} onClick={() => setProtocolFilter("DLMM")}>DLMM</FilterChip>
-            <FilterChip active={protocolFilter === "DAMM"} onClick={() => setProtocolFilter("DAMM")}>DAMM</FilterChip>
-            <span className="mx-1 h-5 w-px bg-border" />
-            <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Sort</span>
-            <FilterChip active={sortBy === "tvl"} onClick={() => setSortBy("tvl")}>TVL</FilterChip>
-            <FilterChip active={sortBy === "apr"} onClick={() => setSortBy("apr")}>APR</FilterChip>
-            <FilterChip active={sortBy === "volume"} onClick={() => setSortBy("volume")}>Volume</FilterChip>
+            <TimeframeSelect value={timeframe} onChange={setTimeframe} />
+            <label className="relative block flex-1 lg:w-72 lg:flex-none">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search pair, mint, or pool address..."
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="off"
+                className="h-9 rounded-md border-border bg-background pl-9 pr-9 font-mono text-xs tabular-nums sm:text-sm"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  aria-label="Clear search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {searchQuery.isFetching ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <X className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              )}
+            </label>
+            <FilterPopover
+              filters={filters}
+              onChange={setFilters}
+              activeCount={filterCount}
+              onReset={resetFilters}
+            />
           </div>
         </div>
 
-        {/* Desktop table */}
-        <div className="mt-6 hidden overflow-hidden rounded-xl border border-border lg:block">
-          <div className="grid grid-cols-[1.4fr_1fr_1fr_1fr_1fr_120px] gap-4 bg-secondary/60 px-4 py-3 text-xs uppercase tracking-[0.18em] text-muted-foreground">
-            <span>Pool</span>
-            <span>Protocol</span>
-            <span>TVL</span>
-            <span>24h Volume</span>
-            <span>APR</span>
-            <span className="text-right">Action</span>
+        {/* Active strategy chip — only when one is selected */}
+        {activeStrategy && (
+          <div className="mt-4 flex items-center gap-2">
+            <span className="inline-flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-xs text-primary">
+              {activeStrategy.title}
+              <button
+                type="button"
+                onClick={() => setStrategyId(null)}
+                className="-mr-1 text-primary/70 transition-colors hover:text-primary"
+                aria-label="Clear strategy"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
           </div>
-          <div className="divide-y divide-border">
-            {filteredPools.map((p) => (
-              <div key={p.id} className="grid grid-cols-[1.4fr_1fr_1fr_1fr_1fr_120px] items-center gap-4 bg-card px-4 py-4 text-sm transition-colors hover:bg-surface-elevated">
-                <div>
-                  <p className="font-medium text-foreground">{p.name}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{p.pair}</p>
+        )}
+
+        {/* Desktop table */}
+        <div className="mt-5 hidden overflow-x-auto rounded-xl border border-border lg:block">
+          <div className="min-w-[1100px]">
+            <div className="grid grid-cols-[40px_minmax(220px,2fr)_100px_110px_110px_110px_110px_110px_120px] gap-3 bg-secondary/60 px-4 py-3 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+              <span className="text-left">#</span>
+              <span className="text-left">Pool</span>
+              <span className="text-right">Pool Age</span>
+              <span className="text-right">TVL</span>
+              <span className="text-right">24h Volume</span>
+              <span className="text-right">24h Fees</span>
+              <span className="text-right">Fee/TVL</span>
+              <span className="text-right">APR</span>
+              <span className="text-right">Action</span>
+            </div>
+            <div className="divide-y divide-border">
+              {filteredPools.map((p, i) => (
+                <div
+                  key={p.id}
+                  className="grid grid-cols-[40px_minmax(220px,2fr)_100px_110px_110px_110px_110px_110px_120px] items-center gap-3 bg-card px-4 py-4 text-sm transition-colors hover:bg-surface-elevated"
+                >
+                  <span className="font-mono text-xs text-muted-foreground tabular-nums">#{i + 1}</span>
+                  <PoolPairCell pool={p} />
+                  <p className="text-right font-mono text-xs text-muted-foreground tabular-nums">
+                    {formatAge(p.createdAt, nowSec)}
+                  </p>
+                  <p className="text-right font-mono tabular-nums text-foreground">{p.tvl}</p>
+                  <p className="text-right font-mono tabular-nums text-foreground">{p.volume24h}</p>
+                  <p className="text-right font-mono tabular-nums text-foreground">{p.fees24h}</p>
+                  <p className="text-right font-mono tabular-nums text-foreground">{fmtFeeTvl(p)}</p>
+                  <p className="text-right font-mono tabular-nums text-primary">{p.apr}</p>
+                  <div className="text-right">
+                    <Button size="sm" variant="premium" onClick={() => openPool(p)}>
+                      Open
+                    </Button>
+                  </div>
                 </div>
-                <p className="text-muted-foreground">{p.protocol}</p>
-                <p className="text-foreground">{p.tvl}</p>
-                <p className="text-foreground">{p.volume24h}</p>
-                <p className="text-primary">{p.apr}</p>
-                <div className="text-right">
-                  <Button size="sm" variant="premium" onClick={() => setSelectedPoolId(p.id)}>
-                    Open
-                  </Button>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
 
         {/* Mobile cards */}
-        <div className="mt-6 grid gap-3 lg:hidden">
+        <div className="mt-5 grid gap-3 lg:hidden">
           {filteredPools.map((p) => (
             <button
               key={p.id}
               type="button"
-              onClick={() => setSelectedPoolId(p.id)}
+              onClick={() => openPool(p)}
               className="rounded-xl border border-border bg-card p-4 text-left transition-colors hover:border-primary/30"
             >
               <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-base font-semibold text-foreground">{p.name}</p>
-                  <p className="mt-0.5 text-xs uppercase tracking-[0.18em] text-muted-foreground">{p.protocol}</p>
-                </div>
-                <span className="rounded-full border border-border bg-secondary px-2.5 py-1 text-xs text-primary">{p.apr}</span>
+                <PoolPairCell pool={p} />
+                <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                  {formatAge(p.createdAt, nowSec)}
+                </span>
               </div>
-              <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
+              <div className="mt-3 grid grid-cols-4 gap-3 text-sm">
                 <div>
-                  <p className="text-xs text-muted-foreground">TVL</p>
-                  <p className="mt-0.5 text-foreground">{p.tvl}</p>
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">TVL</p>
+                  <p className="mt-0.5 font-mono tabular-nums text-foreground">{p.tvl}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">24h Vol</p>
-                  <p className="mt-0.5 text-foreground">{p.volume24h}</p>
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">24h Vol</p>
+                  <p className="mt-0.5 font-mono tabular-nums text-foreground">{p.volume24h}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Fees</p>
-                  <p className="mt-0.5 text-foreground">{p.fees24h}</p>
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Fee/TVL</p>
+                  <p className="mt-0.5 font-mono tabular-nums text-foreground">{fmtFeeTvl(p)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">APR</p>
+                  <p className="mt-0.5 font-mono tabular-nums text-primary">{p.apr}</p>
                 </div>
               </div>
             </button>
@@ -248,19 +403,33 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
 
         {filteredPools.length === 0 && (
           <div className="mt-6 rounded-xl border border-dashed border-border bg-card p-8 text-center text-sm text-muted-foreground">
-            No pools match your filters.
+            {debouncedQuery && searchQuery.isFetching ? (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" /> Searching for{" "}
+                <span className="font-mono text-foreground">{truncateMiddle(debouncedQuery)}</span>…
+              </span>
+            ) : debouncedQuery && searchQuery.isError ? (
+              <>
+                Search failed.{" "}
+                <button
+                  type="button"
+                  onClick={() => searchQuery.refetch()}
+                  className="text-primary hover:underline"
+                >
+                  Retry
+                </button>
+              </>
+            ) : debouncedQuery ? (
+              <>
+                No pools matched{" "}
+                <span className="font-mono text-foreground">{truncateMiddle(debouncedQuery)}</span>.
+              </>
+            ) : (
+              "No pools match your filters."
+            )}
           </div>
         )}
       </section>
-
-      {/* Pool Detail Sheet */}
-      <Sheet open={!!selectedPool} onOpenChange={(open) => !open && setSelectedPoolId(null)}>
-        <SheetContent side="bottom" className="max-h-[90vh] overflow-y-auto rounded-t-2xl border-t border-border bg-background p-0 sm:max-h-[85vh]">
-          {selectedPool && (
-            <PoolDetail pool={selectedPool} presetShape={activeStrategy?.shape} onBack={() => setSelectedPoolId(null)} />
-          )}
-        </SheetContent>
-      </Sheet>
     </div>
   );
 }
@@ -326,326 +495,6 @@ function FeaturedStrategies({
   );
 }
 
-/* ---------------- Pool detail ---------------- */
-
-function PoolDetail({ pool, presetShape, onBack }: { pool: Pool; presetShape?: DistributionShape; onBack: () => void }) {
-  const [detailTab, setDetailTab] = useState("deposit");
-
-  return (
-    <div className="space-y-5 p-4 sm:p-6">
-      {/* Header */}
-      <div>
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Back to pools
-        </button>
-
-        <div className="mt-4 flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full border border-border bg-secondary px-2.5 py-1 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                {pool.protocol}
-              </span>
-              <span className="rounded-full border border-border bg-secondary px-2.5 py-1 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                Fee {pool.feeBps} bps
-              </span>
-              {(pool.tags ?? []).slice(0, 2).map((t) => (
-                <span key={t} className="rounded-full border border-border bg-secondary/60 px-2.5 py-1 text-[11px] text-muted-foreground">
-                  {t}
-                </span>
-              ))}
-            </div>
-            <h2 className="font-display text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-              {pool.name}
-            </h2>
-            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <span className="font-mono text-xs">{pool.address}</span>
-              <button type="button" className="inline-flex items-center gap-1 text-foreground transition-colors hover:text-primary">
-                <Copy className="h-3.5 w-3.5" /> Copy
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 sm:gap-3 lg:w-[480px]">
-            <PoolInfoStat label="TVL" value={pool.tvl} />
-            <PoolInfoStat label="24h Vol" value={pool.volume24h} />
-            <PoolInfoStat label="APR" value={pool.apr} highlight />
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <InfoCard label="Price range" value={pool.priceRange} helper={pool.binRange} />
-          <InfoCard label="Depth" value={pool.depth} helper={pool.risk} />
-          <InfoCard
-            label="Allocation"
-            value={`${pool.allocation.tokenA}% ${pool.tokenA} / ${pool.allocation.tokenB}% ${pool.tokenB}`}
-            helper="Suggested split"
-          />
-          <InfoCard label="24h Fees" value={pool.fees24h} helper="Across active bins" />
-        </div>
-      </div>
-
-      {/* Action tabs */}
-      <Tabs value={detailTab} onValueChange={setDetailTab}>
-        <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-lg border border-border bg-secondary/60 p-1 sm:w-auto">
-          <TabsTrigger value="deposit" className="rounded-md px-4 py-2 text-sm data-[state=active]:bg-surface-elevated">Add liquidity</TabsTrigger>
-          <TabsTrigger value="claim" className="rounded-md px-4 py-2 text-sm data-[state=active]:bg-surface-elevated">Claim</TabsTrigger>
-          <TabsTrigger value="withdraw" className="rounded-md px-4 py-2 text-sm data-[state=active]:bg-surface-elevated">Withdraw</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="deposit" className="mt-4">
-          <DepositPanel pool={pool} presetShape={presetShape} />
-        </TabsContent>
-        <TabsContent value="claim" className="mt-4">
-          <ClaimPanel pool={pool} />
-        </TabsContent>
-        <TabsContent value="withdraw" className="mt-4">
-          <WithdrawPanel pool={pool} />
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
-}
-
-/* ---------------- Deposit ---------------- */
-
-function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: DistributionShape }) {
-  const { bins, activeBinId, isLoading: binsLoading, isFallback } = usePoolBins(pool, 61);
-
-  const [depositUsd, setDepositUsd] = useState(2500);
-  const [shape, setShape] = useState<DistributionShape>(presetShape ?? "curve");
-
-  useEffect(() => {
-    if (presetShape) setShape(presetShape);
-  }, [presetShape]);
-  const [range, setRange] = useState<{ lower: number; upper: number }>(() => ({
-    lower: activeBinId - 8,
-    upper: activeBinId + 8,
-  }));
-
-  // Re-center range when active bin changes (pool change or first real fetch).
-  useEffect(() => {
-    setRange({ lower: activeBinId - 8, upper: activeBinId + 8 });
-  }, [activeBinId]);
-
-  const lowerPrice = bins.find((b) => b.binId === range.lower)?.price ?? 0;
-  const upperPrice = bins.find((b) => b.binId === range.upper)?.price ?? 0;
-  const activePrice = bins.find((b) => b.binId === activeBinId)?.price ?? 0;
-
-  const lowerPct = activePrice ? ((lowerPrice - activePrice) / activePrice) * 100 : 0;
-  const upperPct = activePrice ? ((upperPrice - activePrice) / activePrice) * 100 : 0;
-  const binsCovered = Math.max(0, range.upper - range.lower + 1);
-
-  const projection = useMemo(() => {
-    const entryFee = depositUsd * (pool.feeBps / 10000);
-    // Concentration multiplier: narrower range → higher fee share per dollar.
-    // Crude proxy: full bin window in pool ≈ 60 bins.
-    const concentration = Math.max(1, 60 / Math.max(binsCovered, 1));
-    const baseDaily = (depositUsd * (parseFloat(pool.apr) / 100)) / 365;
-    const estimatedDaily = baseDaily * Math.min(concentration, 6);
-    const monthlyRange = estimatedDaily * 30;
-    return { entryFee, estimatedDaily, monthlyRange, concentration };
-  }, [depositUsd, pool, binsCovered]);
-
-  return (
-    <section className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Strategy</p>
-          <h3 className="mt-1 font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-            Shape your liquidity
-          </h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Drag the handles to set your range. Pick a shape to spread liquidity.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 self-start text-xs text-muted-foreground">
-          <span className="rounded-full border border-border bg-secondary/60 px-2.5 py-1 font-mono">
-            Bin step {pool.binStep || "—"}
-          </span>
-          <span className="rounded-full border border-border bg-secondary/60 px-2.5 py-1 font-mono">
-            {binsCovered} bins
-          </span>
-        </div>
-      </div>
-
-      {/* Bin chart */}
-      <div className="rounded-2xl border border-border/70 bg-card/60 p-3 sm:p-5">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-baseline gap-3">
-            <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Active price</span>
-            <span className="font-mono text-base text-foreground tabular-nums">
-              {formatPrice(activePrice)}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              {pool.tokenA}/{pool.tokenB}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <BinSourceBadge loading={binsLoading} fallback={isFallback} />
-            <PositionStatusPill inRange size="sm" label="Active in range" />
-          </div>
-        </div>
-
-        <BinLiquidityChart
-          bins={bins}
-          activeBinId={activeBinId}
-          range={range}
-          shape={shape}
-          depositUsd={depositUsd}
-          onRangeChange={setRange}
-          height={240}
-        />
-
-        <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
-          <RangeReadout
-            label="Min price"
-            price={lowerPrice}
-            pct={lowerPct}
-            onAdjust={(d) => setRange((r) => ({ lower: r.lower + d, upper: r.upper }))}
-          />
-          <RangeReadout label="Active" price={activePrice} pct={0} center />
-          <RangeReadout
-            label="Max price"
-            price={upperPrice}
-            pct={upperPct}
-            onAdjust={(d) => setRange((r) => ({ lower: r.lower, upper: r.upper + d }))}
-          />
-        </div>
-      </div>
-
-      {/* Distribution + amount */}
-      <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
-        <div className="space-y-5">
-          <div>
-            <p className="mb-2 text-xs uppercase tracking-[0.2em] text-muted-foreground">Distribution</p>
-            <DistributionPreset value={shape} onChange={setShape} />
-          </div>
-
-          <label className="block space-y-2">
-            <span className="text-sm text-muted-foreground">Deposit (USD)</span>
-            <Input
-              type="number"
-              min={100}
-              step={100}
-              value={depositUsd}
-              onChange={(e) => setDepositUsd(Number(e.target.value))}
-              className="h-12 rounded-xl border-border bg-background font-mono text-base tabular-nums"
-            />
-            <div className="flex flex-wrap gap-2 pt-1">
-              {[500, 1000, 5000, 10000].map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setDepositUsd(v)}
-                  className="rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  ${v.toLocaleString()}
-                </button>
-              ))}
-            </div>
-          </label>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <StrategyTile
-              title={`${pool.tokenA} allocation`}
-              value={`$${((depositUsd * pool.allocation.tokenA) / 100).toFixed(0)}`}
-              helper={`${pool.allocation.tokenA}%`}
-            />
-            <StrategyTile
-              title={`${pool.tokenB} allocation`}
-              value={`$${((depositUsd * pool.allocation.tokenB) / 100).toFixed(0)}`}
-              helper={`${pool.allocation.tokenB}%`}
-            />
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-border bg-card p-4 sm:p-5">
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Summary</p>
-          <div className="mt-4 space-y-3.5">
-            <OutcomeRow label="Bins entered" value={`${binsCovered}`} />
-            <OutcomeRow
-              label="Capital efficiency"
-              value={`${projection.concentration.toFixed(1)}x`}
-              accent
-            />
-            <OutcomeRow label="Entry fee" value={`$${projection.entryFee.toFixed(2)}`} />
-            <OutcomeRow label="Est. daily fees" value={`$${projection.estimatedDaily.toFixed(2)}`} />
-            <OutcomeRow label="30d est." value={`$${projection.monthlyRange.toFixed(2)}`} />
-            <OutcomeRow label="Execution" value="Private relay" />
-          </div>
-          <Button variant="hero" size="lg" className="mt-5 w-full justify-center rounded-xl">
-            Deposit privately
-            <ArrowRight />
-          </Button>
-          <p className="mt-3 text-xs leading-5 text-muted-foreground">
-            Routed via Vanish + MagicBlock. Origin wallet stays hidden.
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function formatPrice(p: number): string {
-  if (!Number.isFinite(p) || p === 0) return "—";
-  if (p >= 1000) return p.toFixed(2);
-  if (p >= 1) return p.toFixed(4);
-  if (p >= 0.01) return p.toFixed(5);
-  return p.toExponential(3);
-}
-
-function RangeReadout({
-  label,
-  price,
-  pct,
-  center,
-  onAdjust,
-}: {
-  label: string;
-  price: number;
-  pct: number;
-  center?: boolean;
-  onAdjust?: (delta: number) => void;
-}) {
-  return (
-    <div
-      className={`rounded-xl border ${
-        center ? "border-amber-500/30 bg-amber-500/5" : "border-border bg-secondary/40"
-      } px-3 py-2.5`}
-    >
-      <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-        <span>{label}</span>
-        {onAdjust && (
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => onAdjust(-1)}
-              className="rounded border border-border bg-card px-1.5 leading-none text-foreground/70 transition-colors hover:text-foreground"
-            >
-              −
-            </button>
-            <button
-              type="button"
-              onClick={() => onAdjust(1)}
-              className="rounded border border-border bg-card px-1.5 leading-none text-foreground/70 transition-colors hover:text-foreground"
-            >
-              +
-            </button>
-          </div>
-        )}
-      </div>
-      <p className="mt-1.5 font-mono text-sm text-foreground tabular-nums">{formatPrice(price)}</p>
-      <p className={`mt-0.5 text-[11px] tabular-nums ${center ? "text-amber-400" : pct >= 0 ? "text-primary" : "text-muted-foreground"}`}>
-        {center ? "Mid price" : `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`}
-      </p>
-    </div>
-  );
-}
-
 function PoolsSkeleton() {
   return (
     <section className="panel-shell space-y-6 rounded-2xl p-4 sm:p-6">
@@ -668,200 +517,279 @@ function PoolsSkeleton() {
   );
 }
 
-/* ---------------- Claim ---------------- */
-
-function ClaimPanel({ pool }: { pool: Pool }) {
-  const fees = (parseFloat(pool.apr) / 365) * 30 * 100;
+function ContentTabBar({
+  value,
+  onChange,
+}: {
+  value: ContentTab;
+  onChange: (v: ContentTab) => void;
+}) {
   return (
-    <section className="space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Earnings</p>
-          <h3 className="mt-1 text-xl font-semibold text-foreground sm:text-2xl">Claim fees & rewards</h3>
-        </div>
-        <Coins className="h-5 w-5 text-primary" />
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-3">
-        <ClaimTile label="Unclaimed fees" value={`$${fees.toFixed(2)}`} sub={pool.tokenA + " + " + pool.tokenB} />
-        <ClaimTile label="MET rewards" value="124.8 MET" sub="≈ $38.20" />
-        <ClaimTile label="Last claim" value="3 days ago" sub="Privately settled" />
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Button variant="hero" size="lg" className="w-full justify-center rounded-xl">
-          <Coins />
-          Claim fees
-        </Button>
-        <Button variant="premium" size="lg" className="w-full justify-center rounded-xl">
-          <Flame />
-          Claim rewards
-        </Button>
-      </div>
-
-      <p className="text-xs leading-5 text-muted-foreground">
-        Claims settle to your session wallet, then are forwarded through the private route to your funding address.
-      </p>
-    </section>
+    <div className="flex items-center gap-1 overflow-x-auto">
+      {CONTENT_TABS.map((t) => {
+        const active = value === t.id;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onChange(t.id)}
+            title={t.sub}
+            className={`relative whitespace-nowrap rounded-full px-3.5 py-2 text-sm transition-colors ${
+              active
+                ? "font-display text-xl font-semibold tracking-tight text-foreground sm:text-2xl"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
-/* ---------------- Withdraw ---------------- */
+function TimeframeSelect({
+  value,
+  onChange,
+}: {
+  value: TimeFrame;
+  onChange: (v: TimeFrame) => void;
+}) {
+  return (
+    <div className="hidden items-center rounded-md border border-border bg-secondary/60 p-0.5 sm:inline-flex">
+      {TIMEFRAMES.map((tf) => {
+        const active = value === tf;
+        return (
+          <button
+            key={tf}
+            type="button"
+            onClick={() => onChange(tf)}
+            className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+              active
+                ? "bg-primary/15 text-primary shadow-[inset_0_0_0_1px_hsl(160_84%_45%_/_0.4)]"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {tf.replace("h", "H").replace("m", "m")}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
-function WithdrawPanel({ pool }: { pool: Pool }) {
-  const [pct, setPct] = useState(50);
-  const positionValue = 12480;
-  const withdrawValue = (positionValue * pct) / 100;
+function formatAge(createdAtSec: number, nowSec: number): string {
+  if (!createdAtSec || createdAtSec <= 0) return "—";
+  const seconds = Math.max(0, nowSec - createdAtSec);
+  const minutes = seconds / 60;
+  const hours = minutes / 60;
+  const days = hours / 24;
+  const months = days / 30;
+  const years = days / 365;
+  if (years >= 1) {
+    const y = Math.floor(years);
+    const mo = Math.floor((days - y * 365) / 30);
+    return mo > 0 ? `${y}y ${mo}mo` : `${y}y`;
+  }
+  if (months >= 1) {
+    const mo = Math.floor(months);
+    const d = Math.floor(days - mo * 30);
+    return d > 0 ? `${mo}mo ${d}d` : `${mo}mo`;
+  }
+  if (days >= 1) {
+    const d = Math.floor(days);
+    const h = Math.floor(hours - d * 24);
+    return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  }
+  if (hours >= 1) return `${Math.floor(hours)}h`;
+  return `${Math.max(1, Math.floor(minutes))}m`;
+}
+
+function FilterPopover({
+  filters,
+  onChange,
+  activeCount,
+  onReset,
+}: {
+  filters: FilterState;
+  onChange: (next: FilterState) => void;
+  activeCount: number;
+  onReset: () => void;
+}) {
+  const update = <K extends keyof FilterState>(key: K, value: FilterState[K]) => {
+    onChange({ ...filters, [key]: value });
+  };
 
   return (
-    <section className="space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Remove liquidity</p>
-          <h3 className="mt-1 text-xl font-semibold text-foreground sm:text-2xl">Withdraw from {pool.name}</h3>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="relative inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          <span className="hidden lg:inline">Filter</span>
+          {activeCount > 0 && (
+            <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full border border-primary/40 bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+              {activeCount}
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[340px] max-h-[80vh] overflow-y-auto p-0">
+        <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
+          <p className="text-sm font-semibold text-foreground">Filter by</p>
+          <button
+            type="button"
+            onClick={onReset}
+            className="text-xs font-medium text-amber-400 transition-colors hover:text-amber-300"
+          >
+            Reset
+          </button>
         </div>
-        <Minus className="h-5 w-5 text-primary" />
-      </div>
 
-      <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">Withdraw amount</p>
-          <p className="text-sm font-medium text-foreground">{pct}%</p>
+        <div className="space-y-5 p-4">
+          <FilterSection title="Pool Details">
+            <RangeField
+              label="Pool Age (Hours)"
+              range={filters.poolAgeHours}
+              onChange={(r) => update("poolAgeHours", r)}
+            />
+            <RangeField
+              label="Volume"
+              prefix="$"
+              range={filters.volume}
+              onChange={(r) => update("volume", r)}
+            />
+            <RangeField
+              label="Fees"
+              prefix="$"
+              range={filters.fees}
+              onChange={(r) => update("fees", r)}
+            />
+            <RangeField
+              label="Fees/TVL %"
+              suffix="%"
+              range={filters.feeTvlPct}
+              onChange={(r) => update("feeTvlPct", r)}
+            />
+            <RangeField
+              label="TVL"
+              prefix="$"
+              range={filters.tvl}
+              onChange={(r) => update("tvl", r)}
+            />
+
+            <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3">
+              <div>
+                <p className="text-sm text-foreground">Hide low TVL</p>
+                <p className="text-[11px] text-muted-foreground">Pools with under $1K.</p>
+              </div>
+              <Switch
+                checked={filters.hideLowTvl}
+                onCheckedChange={(v) => update("hideLowTvl", v)}
+              />
+            </div>
+          </FilterSection>
+
+          <FilterSection title="DLMM">
+            <RangeField
+              label="Bin Step"
+              range={filters.binStep}
+              onChange={(r) => update("binStep", r)}
+            />
+          </FilterSection>
         </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function FilterSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-3">
+      <p className="text-sm font-semibold text-foreground">{title}</p>
+      <div className="space-y-3">{children}</div>
+    </div>
+  );
+}
+
+function RangeField({
+  label,
+  prefix,
+  suffix,
+  range,
+  onChange,
+}: {
+  label: string;
+  prefix?: string;
+  suffix?: string;
+  range: NumRange;
+  onChange: (r: NumRange) => void;
+}) {
+  const minPlaceholder = `Min${prefix ? " " + prefix : suffix ? " " + suffix : ""}`;
+  const maxPlaceholder = `Max${prefix ? " " + prefix : suffix ? " " + suffix : ""}`;
+  return (
+    <div>
+      <p className="mb-1.5 text-xs font-medium text-foreground/85">{label}</p>
+      <div className="grid grid-cols-[1fr_8px_1fr] items-center gap-1">
         <input
-          type="range"
-          min={0}
-          max={100}
-          value={pct}
-          onChange={(e) => setPct(Number(e.target.value))}
-          className="mt-3 w-full accent-[hsl(var(--primary))]"
+          type="text"
+          inputMode="decimal"
+          value={range.min}
+          onChange={(e) => onChange({ ...range, min: e.target.value })}
+          placeholder={minPlaceholder}
+          className="h-9 rounded-md border border-border bg-background px-2.5 font-mono text-xs tabular-nums text-foreground placeholder:text-muted-foreground/60 focus:border-primary/40 focus:outline-none"
         />
-        <div className="mt-3 flex flex-wrap gap-2">
-          {[25, 50, 75, 100].map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setPct(v)}
-              className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-                pct === v ? "border-primary/40 bg-surface-elevated text-foreground" : "border-border bg-card text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {v}%
-            </button>
-          ))}
-        </div>
+        <span className="text-center text-muted-foreground">–</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={range.max}
+          onChange={(e) => onChange({ ...range, max: e.target.value })}
+          placeholder={maxPlaceholder}
+          className="h-9 rounded-md border border-border bg-background px-2.5 font-mono text-xs tabular-nums text-foreground placeholder:text-muted-foreground/60 focus:border-primary/40 focus:outline-none"
+        />
       </div>
+    </div>
+  );
+}
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <ClaimTile label="Receive" value={`$${withdrawValue.toFixed(0)}`} sub="Estimated value" />
-        <ClaimTile label={pool.tokenA} value={`${((withdrawValue * pool.allocation.tokenA) / 100).toFixed(2)}`} sub="Tokens" />
-        <ClaimTile label={pool.tokenB} value={`${((withdrawValue * pool.allocation.tokenB) / 100).toFixed(2)}`} sub="Tokens" />
+function PoolPairCell({ pool }: { pool: Pool }) {
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      <PairAvatar a={pool.tokenA} b={pool.tokenB} />
+      <div className="min-w-0">
+        <p className="truncate font-medium text-foreground">{pool.name}</p>
+        <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+          <span className="font-mono">Fee {(pool.feeBps / 100).toFixed(2)}%</span>
+          <span aria-hidden>·</span>
+          <span className="font-mono">Bin {pool.binStep}</span>
+          <span aria-hidden>·</span>
+          <span className="rounded-full border border-border bg-secondary/60 px-1.5 py-0 text-[10px] uppercase tracking-[0.16em]">
+            DLMM
+          </span>
+        </p>
       </div>
-
-      <Button variant="hero" size="lg" className="w-full justify-center rounded-xl">
-        Withdraw privately
-        <ArrowRight />
-      </Button>
-      <p className="text-xs leading-5 text-muted-foreground">
-        Funds return through the private route — your main wallet remains hidden from on-chain observers.
-      </p>
-    </section>
-  );
-}
-
-/* ---------------- Small components ---------------- */
-
-function PoolInfoStat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <div className="rounded-xl border border-border bg-card p-3 sm:p-4">
-      <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground sm:text-xs">{label}</p>
-      <p className={`mt-1.5 text-base font-semibold sm:text-lg ${highlight ? "text-primary" : "text-foreground"}`}>{value}</p>
     </div>
   );
 }
 
-function InfoCard({ label, value, helper }: { label: string; value: string; helper: string }) {
+function PairAvatar({ a, b }: { a: string; b: string }) {
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
-      <p className="mt-2 text-sm font-medium text-foreground">{value}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{helper}</p>
-    </div>
-  );
-}
-
-function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
-        active ? "border-primary/40 bg-surface-elevated text-foreground" : "border-border bg-card text-muted-foreground hover:text-foreground"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function StrategyTile({ title, value, helper }: { title: string; value: string; helper: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <p className="text-xs text-muted-foreground">{title}</p>
-      <p className="mt-1.5 text-xl font-semibold text-foreground sm:text-2xl">{value}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{helper}</p>
-    </div>
-  );
-}
-
-function ClaimTile({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
-      <p className="mt-2 text-lg font-semibold text-foreground sm:text-xl">{value}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
-    </div>
-  );
-}
-
-function BinSourceBadge({ loading, fallback }: { loading: boolean; fallback: boolean }) {
-  if (loading) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-secondary/60 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground/60" />
-        Loading bins
+    <div className="relative h-8 w-12 shrink-0">
+      <span className="absolute left-0 top-0 flex h-8 w-8 items-center justify-center rounded-full border border-border bg-secondary/60 text-[10px] font-semibold uppercase text-foreground/80">
+        {initials(a)}
       </span>
-    );
-  }
-  if (fallback) {
-    return (
-      <span
-        title="Live bin data unavailable; showing modeled distribution."
-        className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-amber-300"
-      >
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-        Modeled
-      </span>
-    );
-  }
-  return (
-    <span
-      title="Live bin liquidity from on-chain DLMM."
-      className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-primary"
-    >
-      <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_6px_hsl(160_84%_55%)]" />
-      On-chain
-    </span>
-  );
-}
-
-function OutcomeRow({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-border/80 pb-3 last:border-b-0 last:pb-0">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className={`font-mono text-sm font-medium tabular-nums ${accent ? "text-primary" : "text-foreground"}`}>
-        {value}
+      <span className="absolute left-4 top-0 flex h-8 w-8 items-center justify-center rounded-full border border-border bg-secondary text-[10px] font-semibold uppercase text-foreground/80">
+        {initials(b)}
       </span>
     </div>
   );
 }
+
+function initials(token: string): string {
+  if (!token) return "?";
+  return token.slice(0, 2).toUpperCase();
+}
+

@@ -10,6 +10,9 @@ export type Pool = {
   pair: string;
   tokenA: string;
   tokenB: string;
+  /** Solana mint addresses; empty string if unknown. */
+  tokenAMint: string;
+  tokenBMint: string;
   address: string;
   protocol: string;
   tvl: string;
@@ -21,6 +24,8 @@ export type Pool = {
   risk: string;
   feeBps: number;
   binStep: number;
+  /** Unix seconds; 0 if unknown. */
+  createdAt: number;
   binRange: string;
   priceRange: string;
   activeBinId: number;

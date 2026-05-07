@@ -92,6 +92,7 @@ function mapPool(pool: MeteoraPool, network: Network): PoolSummary {
     feeBps: pool.pool_config.base_fee_pct * 100,
     binStep: pool.pool_config.bin_step,
     baseFee: pool.pool_config.base_fee_pct,
+    createdAt: pool.created_at ?? 0,
     network,
   }
 }

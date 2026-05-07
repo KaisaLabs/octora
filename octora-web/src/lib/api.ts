@@ -13,6 +13,7 @@ export interface PoolSummary {
   feeBps: number
   binStep: number
   baseFee: number
+  createdAt: number
   network: 'mainnet' | 'devnet'
 }
 
@@ -43,12 +44,6 @@ function fmtPct(n: number): string {
   return `${n.toFixed(1)}%`;
 }
 
-/** Determines the protocol label from binStep */
-function protocolLabel(binStep: number): string {
-  // DLMM pools typically have smaller bin steps, DAMM have larger/dynamic
-  return binStep <= 100 ? "Meteora DLMM" : "Meteora DAMM";
-}
-
 /** Maps an API PoolSummary to the internal Pool type */
 export function mapPoolSummary(summary: PoolSummary): Pool {
   const tokenA = summary.tokenX.symbol;
@@ -60,23 +55,26 @@ export function mapPoolSummary(summary: PoolSummary): Pool {
     pair: summary.pair || `${tokenA}-${tokenB}`,
     tokenA,
     tokenB,
+    tokenAMint: summary.tokenX.mint,
+    tokenBMint: summary.tokenY.mint,
     address: summary.address,
-    protocol: protocolLabel(summary.binStep),
+    protocol: "Meteora DLMM",
     tvl: fmtUsd(summary.tvl),
     apr: fmtPct(summary.apr),
     volume24h: fmtUsd(summary.volume24h),
     fees24h: fmtUsd(summary.fees24h),
     strategy: "Auto range · Balanced",
-    depth: summary.binStep <= 50 ? "Tight" : summary.binStep <= 200 ? "Medium" : "Wide",
+    depth: summary.binStep <= 10 ? "Tight" : summary.binStep <= 50 ? "Medium" : "Wide",
     risk: summary.apr > 30 ? "Active" : "Balanced",
     feeBps: summary.feeBps,
     binStep: summary.binStep,
+    createdAt: summary.createdAt ?? 0,
     binRange: summary.binStep ? `±${summary.binStep} bins` : "Dynamic",
     priceRange: "Live pricing",
     activeBinId: 0,
     activePrice: 0,
     allocation: { tokenA: 50, tokenB: 50 },
-    tags: summary.binStep <= 100 ? ["Tight bands", "Active"] : ["Wide coverage", "Passive"],
+    tags: summary.binStep <= 10 ? ["Tight bands", "Active"] : ["Wide coverage", "Passive"],
   };
 }
 

@@ -17,6 +17,8 @@ export interface PoolSummary {
   feeBps: number
   binStep: number
   baseFee: number
+  /** Unix seconds from Meteora; 0 if unavailable. */
+  createdAt: number
   network: 'mainnet' | 'devnet'
 }
 

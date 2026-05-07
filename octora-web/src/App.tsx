@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SolanaProvider } from "@/providers/SolanaProvider";
 import { AppShell } from "@/components/octora/AppShell";
 import { PoolsPage } from "@/pages/PoolsPage";
+import { PoolDetailPage } from "@/pages/PoolDetailPage";
 import { PortfolioPage } from "@/pages/PortfolioPage";
 import { PositionDetailPage } from "@/pages/PositionDetailPage";
 import { ActivityPage } from "@/pages/ActivityPage";
@@ -66,6 +67,7 @@ function AppRoutes() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<PoolsPage pools={pools} loading={loading} error={error} />} />
+        <Route path="pool/:address" element={<PoolDetailPage />} />
         <Route path="portfolio" element={<PortfolioPage positions={portfolioPositions} />} />
         <Route path="position/:id" element={<PositionDetailPage positions={portfolioPositions} />} />
         <Route path="activity" element={<ActivityPage activity={portfolioActivity} />} />
