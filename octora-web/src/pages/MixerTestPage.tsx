@@ -151,7 +151,7 @@ export function MixerTestPage() {
 
   // Pull the live pool denomination so step labels display the actual amount
   // every deposit/withdrawal moves. The default denomination is set by the
-  // API's MIXER_DENOMINATION env var (0.02 SOL) and frozen at pool init.
+  // API's MIXER_DENOMINATION env var (1 SOL) and frozen at pool init.
   useEffect(() => {
     let cancelled = false;
     (async () => {

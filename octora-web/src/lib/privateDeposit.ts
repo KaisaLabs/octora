@@ -1,18 +1,35 @@
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import { deriveStealthForPool, type DerivedStealth } from "./stealthVault";
 
+// `@/lib/mixer` transitively imports circomlibjs and the snarkjs/witness
+// machinery (~3MB). Loading it at module level here would pull that whole
+// bundle into every page that mounts PrivateDepositModal, blanking the
+// entire app while it parses. Dynamic-import inside `runPrivateDeposit`
+// instead so the cost is paid once, only when a user actually deposits.
+type MixerModule = typeof import("./mixer");
+let mixerModulePromise: Promise<MixerModule> | null = null;
+function loadMixer(): Promise<MixerModule> {
+  mixerModulePromise ??= import("./mixer");
+  return mixerModulePromise;
+}
+
 /**
- * Private deposit orchestrator.
+ * Private deposit orchestrator (single-sided SOL, fixed denomination).
  *
- * Walks the browser through the full lifecycle:
- *   1. derive   — sign a deterministic message → derive stealth keypair (1 wallet popup, free)
- *   2. prepare  — POST /deposits/prepare-private, register the privacy intent server-side
- *   3. use-pool — POST /executor/use-pool, load on-chain pool state and bin arrays
- *   4. init     — POST /executor/init-position-tx, browser adds stealth sig and sends (silent)
- *   5. fund     — POST /executor/add-liquidity-tx, user co-signs the SPL transfer (1 wallet popup)
+ * 1. derive          — sign deterministic message → derive stealth keypair (1 popup, free)
+ * 2. relayer-info    — fetch relayer pubkey, fee, and pool denomination
+ * 3. prepare         — POST /deposits/prepare-private (registers privacy intent)
+ * 4. mixer-deposit   — generate commitment, main wallet signs+submits mixer.deposit
+ * 5. confirm-deposit — record leaf index server-side so the public history stays warm
+ * 6. build-tree      — reconstruct the Merkle tree locally from /mixer/deposits
+ * 7. prove           — Groth16 prove in-browser (witness never leaves the device)
+ * 8. relayer-withdraw — POST /relayer/withdraw, relayer submits and funds the stealth
+ * 9. use-pool        — load on-chain DLMM state for the chosen pool
+ * 10. init-position  — stealth signs init position (silent; no popup)
+ * 11. add-liquidity  — stealth signs add liquidity (silent; no main-wallet co-sign)
  *
- * Everything after step 1 happens with one user-visible signature (the funding tx);
- * the stealth keypair signs locally with no popup.
+ * Only step 1 and step 4 trigger a wallet popup; everything else is signed
+ * by the stealth keypair locally or by the relayer hot wallet server-side.
  */
 
 const API = (import.meta.env.VITE_API_URL as string | undefined) ?? "/api";
@@ -21,10 +38,16 @@ const RPC_URL =
 
 export type DepositStepKey =
   | "derive"
+  | "relayer-info"
   | "prepare"
+  | "mixer-deposit"
+  | "confirm-deposit"
+  | "build-tree"
+  | "prove"
+  | "relayer-withdraw"
   | "use-pool"
   | "init-position"
-  | "fund-position"
+  | "add-liquidity"
   | "done";
 
 export interface DepositStepEvent {
@@ -36,31 +59,26 @@ export interface DepositStepEvent {
 
 export type DepositStepCallback = (event: DepositStepEvent) => void;
 
+export type DistributionShape = "spot" | "curve" | "bid-ask";
+
 export interface PrivateDepositInput {
-  /** Connected user main wallet pubkey (base58). */
   mainWalletAddress: string;
-  /** DLMM lb_pair address (base58). */
   poolAddress: string;
-  /** Inclusive bin range from the BinLiquidityChart. */
   lowerBinId: number;
   upperBinId: number;
-  /** Distribution shape — currently informational; passed through to the privacy receipt. */
-  shape: "spot" | "curve" | "bid-ask";
-  /** Deposit amount in USD — included on the privacy receipt for audit. */
-  amountUsd: number;
-  /** USD allocation split, used by the receipt only (token amounts come from the fields below). */
-  allocation: { tokenA: number; tokenB: number };
-  /** Token amounts in base units (BigInt-stringified or bigint). */
-  amountX: bigint;
-  amountY: bigint;
+  shape: DistributionShape;
 }
 
 export interface PrivateDepositResult {
   positionId: string;
   stealthPubkey: string;
   positionPubkey: string;
+  mixerDepositSignature: string;
+  relayerWithdrawSignature: string;
   initSignature: string;
   fundSignature: string;
+  /** Lamports landed on the stealth wallet (denomination − relayer fee). */
+  fundedLamports: string;
 }
 
 interface SignTransactionProvider {
@@ -92,9 +110,22 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${API}${path}`);
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  return res.json() as Promise<T>;
+}
+
 function decodeBase64Tx(base64: string): Transaction {
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
   return Transaction.from(bytes);
+}
+
+interface RelayerInfo {
+  relayerPubkey: string;
+  feeLamports: string;
+  denominationLamports: string;
+  mixerPoolAddress: string;
 }
 
 interface PreparePrivateResponse {
@@ -106,6 +137,32 @@ interface PreparePrivateResponse {
     summary: string;
     createdAtIso: string;
   };
+}
+
+interface MixerStatus {
+  poolAddress: string;
+  denomination: string;
+  nextLeafIndex: number;
+  isPaused: boolean;
+  balance: string;
+  depositsTracked: number;
+}
+
+interface MixerDepositList {
+  deposits: Array<{ commitment: string; leafIndex: number; txSignature: string }>;
+}
+
+interface MixerDepositTxResp {
+  transaction: string;
+}
+
+interface RelayerWithdrawResp {
+  success: boolean;
+  txSignature: string | null;
+  recipient: string;
+  amountLamports: string;
+  feeLamports: string;
+  error?: string;
 }
 
 interface TestPairConfig {
@@ -140,8 +197,15 @@ export async function runPrivateDeposit(
   if (width <= 0) throw new Error("upperBinId must be >= lowerBinId.");
 
   const connection = new Connection(RPC_URL, "confirmed");
+  const {
+    buildWithdrawCircuitInput,
+    createMixerMerkleTree,
+    generateCommitment,
+    generateWithdrawProof,
+    pubkeyToFieldHash,
+  } = await loadMixer();
 
-  // ── 1. derive stealth keypair from a wallet signature ────────────────
+  // ── 1. derive stealth ─────────────────────────────────────────────
   onStep({ step: "derive", status: "active", message: "Authorize private session in your wallet…" });
   let stealth: DerivedStealth;
   try {
@@ -153,35 +217,182 @@ export async function runPrivateDeposit(
     onStep({ step: "derive", status: "error", message: describe(err) });
     throw err;
   }
+  onStep({ step: "derive", status: "ok", data: { stealthPubkey: stealth.publicKey } });
+
+  // ── 2. fetch relayer binding info ─────────────────────────────────
+  onStep({ step: "relayer-info", status: "active", message: "Fetching mixer config…" });
+  let relayerInfo: RelayerInfo;
+  try {
+    relayerInfo = await apiGet<RelayerInfo>("/relayer/info");
+  } catch (err) {
+    onStep({ step: "relayer-info", status: "error", message: describe(err) });
+    throw err;
+  }
+  const denomination = BigInt(relayerInfo.denominationLamports);
+  const fee = BigInt(relayerInfo.feeLamports);
   onStep({
-    step: "derive",
+    step: "relayer-info",
     status: "ok",
-    data: { stealthPubkey: stealth.publicKey },
+    data: { denominationLamports: denomination.toString(), feeLamports: fee.toString() },
   });
 
-  // ── 2. register the privacy intent server-side ───────────────────────
+  // ── 3. register the privacy intent ────────────────────────────────
   onStep({ step: "prepare", status: "active", message: "Preparing private deposit…" });
   let prepared: PreparePrivateResponse;
   try {
     prepared = await apiPost<PreparePrivateResponse>("/deposits/prepare-private", {
       poolAddress: input.poolAddress,
       stealthPubkey: stealth.publicKey,
-      amountUsd: input.amountUsd,
+      amountUsd: 0,
       shape: input.shape,
       range: { lower: input.lowerBinId, upper: input.upperBinId },
-      allocation: input.allocation,
+      allocation: { tokenA: 0, tokenB: 100 },
     });
   } catch (err) {
     onStep({ step: "prepare", status: "error", message: describe(err) });
     throw err;
   }
+  onStep({ step: "prepare", status: "ok", data: { positionId: prepared.positionId } });
+
+  // ── 4. mixer.deposit (main wallet signs the commitment) ───────────
   onStep({
-    step: "prepare",
+    step: "mixer-deposit",
+    status: "active",
+    message: `Confirm in your wallet to deposit ${formatSol(denomination)} into the mixer…`,
+  });
+  let commitmentBundle;
+  let mixerDepositSig: string;
+  let leafIndex: number;
+  try {
+    commitmentBundle = await generateCommitment();
+
+    // Capture the leaf index BEFORE depositing so we know where our commitment
+    // will land when the on-chain handler increments next_leaf_index. The mixer
+    // pool serializes commitments through `next_leaf_index` so this read-then-
+    // submit pattern is race-free as long as we don't have multiple concurrent
+    // deposits from the same browser tab.
+    const preStatus = await apiGet<MixerStatus>("/mixer/status");
+    leafIndex = preStatus.nextLeafIndex;
+
+    const { transaction: depositB64 } = await apiPost<MixerDepositTxResp>("/mixer/deposit", {
+      depositor: input.mainWalletAddress,
+      commitment: commitmentBundle.commitment.toString(),
+    });
+    const depositTx = decodeBase64Tx(depositB64);
+    const signed = await getInjectedSigner().signTransaction(depositTx);
+    mixerDepositSig = await connection.sendRawTransaction(signed.serialize(), {
+      skipPreflight: false,
+      preflightCommitment: "confirmed",
+    });
+    await waitForConfirmation(connection, mixerDepositSig, signed.recentBlockhash!);
+  } catch (err) {
+    onStep({ step: "mixer-deposit", status: "error", message: describe(err) });
+    throw err;
+  }
+  onStep({
+    step: "mixer-deposit",
     status: "ok",
-    data: { positionId: prepared.positionId, receiptId: prepared.receipt.receiptId },
+    data: { signature: mixerDepositSig, leafIndex },
   });
 
-  // ── 3. load on-chain pool state + bin arrays ─────────────────────────
+  // ── 5. confirm-deposit (warm the server's history cache) ──────────
+  onStep({ step: "confirm-deposit", status: "active", message: "Recording deposit…" });
+  try {
+    await apiPost("/mixer/confirm-deposit", {
+      commitment: commitmentBundle.commitment.toString(),
+      leafIndex,
+      txSignature: mixerDepositSig,
+    });
+  } catch (err) {
+    // Best-effort — the server can still rehydrate from chain logs.
+    onStep({ step: "confirm-deposit", status: "error", message: describe(err) });
+  }
+  onStep({ step: "confirm-deposit", status: "ok" });
+
+  // ── 6. build merkle tree locally ──────────────────────────────────
+  onStep({ step: "build-tree", status: "active", message: "Reconstructing Merkle tree…" });
+  let tree;
+  try {
+    const list = await apiGet<MixerDepositList>("/mixer/deposits");
+    const ordered = [...list.deposits].sort((a, b) => a.leafIndex - b.leafIndex);
+    const leaves = ordered.map((d) => BigInt(d.commitment));
+    tree = await createMixerMerkleTree(undefined, leaves);
+    if (tree.indexOf(commitmentBundle.commitment) === -1) {
+      throw new Error("Commitment not found in tree — server cache may be stale.");
+    }
+  } catch (err) {
+    onStep({ step: "build-tree", status: "error", message: describe(err) });
+    throw err;
+  }
+  onStep({ step: "build-tree", status: "ok" });
+
+  // ── 7. generate Groth16 proof ─────────────────────────────────────
+  onStep({
+    step: "prove",
+    status: "active",
+    message: "Generating zero-knowledge proof (10–60s)…",
+  });
+  let proof;
+  let publicSignals: string[];
+  try {
+    const stealthPubkey = new PublicKey(stealth.publicKey);
+    const relayerPubkey = new PublicKey(relayerInfo.relayerPubkey);
+    const recipientField = await pubkeyToFieldHash(stealthPubkey);
+    const relayerField = await pubkeyToFieldHash(relayerPubkey);
+
+    const localLeafIndex = tree.indexOf(commitmentBundle.commitment);
+    const circuitInput = buildWithdrawCircuitInput({
+      tree,
+      leafIndex: localLeafIndex,
+      secret: commitmentBundle.secret,
+      nullifier: commitmentBundle.nullifier,
+      nullifierHash: commitmentBundle.nullifierHash,
+      recipientField,
+      relayerField,
+      fee,
+    });
+    const proofResult = await generateWithdrawProof(circuitInput);
+    proof = proofResult.proof;
+    publicSignals = proofResult.publicSignals;
+  } catch (err) {
+    onStep({ step: "prove", status: "error", message: describe(err) });
+    throw err;
+  }
+  onStep({ step: "prove", status: "ok" });
+
+  // ── 8. relayer.withdraw → stealth gets funded ─────────────────────
+  onStep({
+    step: "relayer-withdraw",
+    status: "active",
+    message: "Submitting withdrawal to relayer…",
+  });
+  let relayerSig: string;
+  let fundedLamports: string;
+  try {
+    const result = await apiPost<RelayerWithdrawResp>("/relayer/withdraw", {
+      proof,
+      publicSignals,
+      root: tree.root().toString(),
+      nullifierHash: commitmentBundle.nullifierHash.toString(),
+      recipient: stealth.publicKey,
+      fee: fee.toString(),
+    });
+    if (!result.success || !result.txSignature) {
+      throw new Error(result.error ?? "relayer.withdraw failed");
+    }
+    relayerSig = result.txSignature;
+    fundedLamports = result.amountLamports;
+  } catch (err) {
+    onStep({ step: "relayer-withdraw", status: "error", message: describe(err) });
+    throw err;
+  }
+  onStep({
+    step: "relayer-withdraw",
+    status: "ok",
+    data: { signature: relayerSig, fundedLamports },
+  });
+
+  // ── 9. use-pool ───────────────────────────────────────────────────
   onStep({ step: "use-pool", status: "active", message: "Loading pool state…" });
   let config: TestPairConfig;
   try {
@@ -196,7 +407,7 @@ export async function runPrivateDeposit(
   }
   onStep({ step: "use-pool", status: "ok", data: { lbPair: config.lbPair } });
 
-  // ── 4. init the executor's PA-owned DLMM position (silent stealth sign) ──
+  // ── 10. init-position (silent stealth sign) ───────────────────────
   onStep({ step: "init-position", status: "active", message: "Opening private position…" });
   let initSig: string;
   let initResp: InitPositionResponse;
@@ -204,7 +415,10 @@ export async function runPrivateDeposit(
     initResp = await apiPost<InitPositionResponse>("/executor/init-position-tx", {
       stealth: stealth.publicKey,
       lbPair: config.lbPair,
-      exitRecipient: input.mainWalletAddress,
+      // Exit recipient = stealth itself so the rent + dust come back to it on
+      // close. Real claim/withdraw flows route the actual position outputs
+      // through a separately derived "yield address".
+      exitRecipient: stealth.publicKey,
       lowerBinId: config.lowerBinId,
       width: config.width,
     });
@@ -225,56 +439,55 @@ export async function runPrivateDeposit(
     data: { positionPubkey: initResp.positionPubkey, signature: initSig },
   });
 
-  // ── 5. fund + add liquidity (the only on-chain user signature) ───────
-  onStep({
-    step: "fund-position",
-    status: "active",
-    message: "Confirm in your wallet to fund the position…",
-  });
+  // ── 11. add-liquidity (stealth-only signature) ────────────────────
+  onStep({ step: "add-liquidity", status: "active", message: "Adding single-sided SOL…" });
   let fundSig: string;
   try {
+    // The relayer keeps a few lamports back as headroom for rent on the
+    // stealth WSOL ATA + the close-account refund cycle. We pass the full
+    // funded amount minus a small reserve so the wrap doesn't underflow
+    // on the SystemProgram.transfer.
+    const reserve = 5_000_000n;
+    const totalSolLamports = BigInt(fundedLamports) - reserve;
+    if (totalSolLamports <= 0n) {
+      throw new Error(
+        `Funded amount ${fundedLamports} too small after rent reserve (${reserve}).`,
+      );
+    }
+
     const { transaction } = await apiPost<AddLiquidityResponse>("/executor/add-liquidity-tx", {
       stealth: stealth.publicKey,
-      userOwner: input.mainWalletAddress,
       config,
-      amountX: input.amountX.toString(),
-      amountY: input.amountY.toString(),
+      totalSolLamports: totalSolLamports.toString(),
+      shape: input.shape,
     });
     const tx = decodeBase64Tx(transaction);
-    // Stealth signs first while the keypair is in browser memory; only then
-    // do we hand off to the wallet adapter for the user signature.
     tx.partialSign(stealth.keypair);
-
-    const signer = getInjectedSigner();
-    const signed = await signer.signTransaction(tx);
-
-    fundSig = await connection.sendRawTransaction(signed.serialize(), {
+    fundSig = await connection.sendRawTransaction(tx.serialize(), {
       skipPreflight: false,
       preflightCommitment: "confirmed",
     });
-    await waitForConfirmation(connection, fundSig, signed.recentBlockhash!);
+    await waitForConfirmation(connection, fundSig, tx.recentBlockhash!);
   } catch (err) {
-    onStep({ step: "fund-position", status: "error", message: describe(err) });
+    onStep({ step: "add-liquidity", status: "error", message: describe(err) });
     throw err;
   }
-  onStep({ step: "fund-position", status: "ok", data: { signature: fundSig } });
+  onStep({ step: "add-liquidity", status: "ok", data: { signature: fundSig } });
 
   const result: PrivateDepositResult = {
     positionId: prepared.positionId,
     stealthPubkey: stealth.publicKey,
     positionPubkey: initResp.positionPubkey,
+    mixerDepositSignature: mixerDepositSig,
+    relayerWithdrawSignature: relayerSig,
     initSignature: initSig,
     fundSignature: fundSig,
+    fundedLamports,
   };
   onStep({ step: "done", status: "ok", data: result as unknown as Record<string, unknown> });
   return result;
 }
 
-/**
- * Confirm a transaction without re-fetching `lastValidBlockHeight`. The server
- * pre-signs against its own blockhash, so we trust that value rather than
- * the freshest one to avoid block-height-mismatch confirmation strategies.
- */
 async function waitForConfirmation(
   connection: Connection,
   signature: string,
@@ -285,6 +498,14 @@ async function waitForConfirmation(
     { signature, blockhash, lastValidBlockHeight },
     "confirmed",
   );
+}
+
+function formatSol(lamports: bigint): string {
+  const whole = lamports / 1_000_000_000n;
+  const frac = lamports % 1_000_000_000n;
+  if (frac === 0n) return `${whole} SOL`;
+  const fracStr = frac.toString().padStart(9, "0").replace(/0+$/, "");
+  return `${whole}.${fracStr} SOL`;
 }
 
 function describe(err: unknown): string {

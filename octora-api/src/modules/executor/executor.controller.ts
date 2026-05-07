@@ -52,44 +52,85 @@ export function createExecutorController(executor: ExecutorService) {
       return reply.send(result);
     },
 
-    /** POST /executor/add-liquidity-tx */
+    /**
+     * POST /executor/add-liquidity-tx
+     *
+     * Single-sided SOL deposit for the private flow. Body:
+     *   stealth          — the stealth wallet pubkey (already funded by mixer.withdraw)
+     *   config           — the TestPairConfig from /executor/use-pool
+     *   totalSolLamports — total SOL deposit in lamports (must equal mixer denomination)
+     *   shape            — distribution shape: spot | curve | bid-ask
+     */
     async addLiquidityTx(
       req: FastifyRequest<{
         Body: {
           stealth: string;
-          userOwner: string;
           config: TestPairConfig;
-          amountX: string;
-          amountY: string;
+          totalSolLamports: string;
+          shape: "spot" | "curve" | "bid-ask";
         };
       }>,
       reply: FastifyReply,
     ) {
-      const { stealth, userOwner, config, amountX, amountY } = req.body;
-      const result = await executor.buildAddLiquidityTx({
-        stealth: new PublicKey(stealth),
-        userOwner: new PublicKey(userOwner),
-        config,
-        amountX: BigInt(amountX),
-        amountY: BigInt(amountY),
-      });
-      return reply.send(result);
+      const { stealth, config, totalSolLamports, shape } = req.body;
+      try {
+        const result = await executor.buildAddLiquidityTx({
+          stealth: new PublicKey(stealth),
+          config,
+          totalSolLamports: BigInt(totalSolLamports),
+          shape,
+        });
+        return reply.send(result);
+      } catch (err) {
+        return reply
+          .status(400)
+          .send({ error: err instanceof Error ? err.message : "add-liquidity-tx failed" });
+      }
     },
 
-    /** POST /executor/withdraw-close-tx */
-    async withdrawCloseTx(
-      req: FastifyRequest<{
-        Body: { stealth: string; exitRecipient: string; config: TestPairConfig };
-      }>,
+    /**
+     * POST /executor/claim-fees-tx
+     * Body: { stealth, config } — exit_recipient is read from PoolAuthority.
+     */
+    async claimFeesTx(
+      req: FastifyRequest<{ Body: { stealth: string; config: TestPairConfig } }>,
       reply: FastifyReply,
     ) {
-      const { stealth, exitRecipient, config } = req.body;
-      const result = await executor.buildWithdrawCloseTx({
-        stealth: new PublicKey(stealth),
-        exitRecipient: new PublicKey(exitRecipient),
-        config,
-      });
-      return reply.send(result);
+      const { stealth, config } = req.body;
+      try {
+        const result = await executor.buildClaimFeesTx({
+          stealth: new PublicKey(stealth),
+          config,
+        });
+        return reply.send(result);
+      } catch (err) {
+        return reply
+          .status(400)
+          .send({ error: err instanceof Error ? err.message : "claim-fees-tx failed" });
+      }
+    },
+
+    /**
+     * POST /executor/withdraw-close-tx
+     * Body: { stealth, config } — exit_recipient is read from PoolAuthority.
+     * Always full exit (BPS=10000) per the MVP scope decision.
+     */
+    async withdrawCloseTx(
+      req: FastifyRequest<{ Body: { stealth: string; config: TestPairConfig } }>,
+      reply: FastifyReply,
+    ) {
+      const { stealth, config } = req.body;
+      try {
+        const result = await executor.buildWithdrawCloseTx({
+          stealth: new PublicKey(stealth),
+          config,
+        });
+        return reply.send(result);
+      } catch (err) {
+        return reply
+          .status(400)
+          .send({ error: err instanceof Error ? err.message : "withdraw-close-tx failed" });
+      }
     },
 
     /** GET /executor/pool-authority?stealth=...&lbPair=... */

@@ -1,5 +1,7 @@
 export { RelayerService } from "./relayer.service.js";
 export { DepositService } from "./deposit.service.js";
+export { registerRelayerRoutes, type RelayerRoutesOptions } from "./relayer.routes.js";
+export type { RelayerInfoResponse } from "./relayer.controller.js";
 export {
   InMemoryNullifierRegistry,
   OnChainNullifierRegistry,

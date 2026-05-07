@@ -12,6 +12,17 @@ export interface AppConfig {
   mixerProgramId: string;
   /** Path to the relayer hot wallet keypair JSON. Pays gas for executor txs. */
   executorRelayerKeypairPath: string;
+  /**
+   * Path to the mixer relayer hot wallet keypair JSON. Pays gas for and
+   * submits `mixer.withdraw` transactions on behalf of stealth recipients.
+   * Kept separate from the executor relayer so a leak of one key doesn't
+   * collapse the privacy boundary the other side relies on.
+   */
+  mixerRelayerKeypairPath: string;
+  /** Fee in lamports the mixer relayer deducts per withdrawal. */
+  mixerRelayerFeeLamports: bigint;
+  /** Fixed-amount mixer pool denomination in lamports (must match the on-chain pool). */
+  mixerDenomination: bigint;
 }
 
 function requireEnv(name: string): string {
@@ -35,5 +46,10 @@ export function loadConfig(): AppConfig {
     executorRelayerKeypairPath:
       process.env.OCTORA_EXECUTOR_RELAYER_KEYPAIR ??
       `${process.env.HOME ?? ""}/.config/solana/id.json`,
+    mixerRelayerKeypairPath:
+      process.env.OCTORA_MIXER_RELAYER_KEYPAIR ??
+      `${process.env.HOME ?? ""}/.config/solana/id.json`,
+    mixerRelayerFeeLamports: BigInt(process.env.OCTORA_MIXER_RELAYER_FEE ?? "0"),
+    mixerDenomination: BigInt(process.env.MIXER_DENOMINATION ?? "1000000000"),
   };
 }

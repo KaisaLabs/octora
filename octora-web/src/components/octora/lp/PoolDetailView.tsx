@@ -112,14 +112,41 @@ function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: Distrib
     if (presetShape) setShape(presetShape);
   }, [presetShape]);
 
-  const [range, setRange] = useState<{ lower: number; upper: number }>(() => ({
-    lower: activeBinId - 8,
-    upper: activeBinId + 8,
-  }));
+  // Single-sided SOL clamp: privacy flow can only deposit one token, so a
+  // straddling range would silently widen into the non-SOL side and reject
+  // server-side. Detect the SOL side from the pool mints and constrain the
+  // initial range + every setRange call to bins on that side of active.
+  // Non-SOL pools fall back to the prior straddling default.
+  const SOL_MINT = "So11111111111111111111111111111111111111112";
+  const solSide: "x" | "y" | null =
+    pool.tokenAMint === SOL_MINT ? "x" : pool.tokenBMint === SOL_MINT ? "y" : null;
+  const clampRange = (r: { lower: number; upper: number }) => {
+    if (solSide === "y") {
+      const upper = Math.min(r.upper, activeBinId - 1);
+      return { lower: Math.min(r.lower, upper), upper };
+    }
+    if (solSide === "x") {
+      const lower = Math.max(r.lower, activeBinId + 1);
+      return { lower, upper: Math.max(r.upper, lower) };
+    }
+    return r;
+  };
+
+  const [range, setRange] = useState<{ lower: number; upper: number }>(() =>
+    clampRange({ lower: activeBinId - 8, upper: activeBinId + 8 }),
+  );
 
   useEffect(() => {
-    setRange({ lower: activeBinId - 8, upper: activeBinId + 8 });
-  }, [activeBinId]);
+    setRange(clampRange({ lower: activeBinId - 8, upper: activeBinId + 8 }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBinId, solSide]);
+
+  const setRangeClamped: typeof setRange = (next) => {
+    setRange((prev) => {
+      const candidate = typeof next === "function" ? (next as (p: typeof prev) => typeof prev)(prev) : next;
+      return clampRange(candidate);
+    });
+  };
 
   const lowerPrice = bins.find((b) => b.binId === range.lower)?.price ?? 0;
   const upperPrice = bins.find((b) => b.binId === range.upper)?.price ?? 0;
@@ -181,7 +208,7 @@ function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: Distrib
           range={range}
           shape={shape}
           depositUsd={depositUsd}
-          onRangeChange={setRange}
+          onRangeChange={setRangeClamped}
           height={240}
         />
 
@@ -190,14 +217,14 @@ function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: Distrib
             label="Min price"
             price={lowerPrice}
             pct={lowerPct}
-            onAdjust={(d) => setRange((r) => ({ lower: r.lower + d, upper: r.upper }))}
+            onAdjust={(d) => setRangeClamped((r) => ({ lower: r.lower + d, upper: r.upper }))}
           />
           <RangeReadout label="Active" price={activePrice} pct={0} center />
           <RangeReadout
             label="Max price"
             price={upperPrice}
             pct={upperPct}
-            onAdjust={(d) => setRange((r) => ({ lower: r.lower, upper: r.upper + d }))}
+            onAdjust={(d) => setRangeClamped((r) => ({ lower: r.lower, upper: r.upper + d }))}
           />
         </div>
       </div>

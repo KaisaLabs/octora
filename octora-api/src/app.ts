@@ -16,6 +16,7 @@ import { registerWaitlistRoutes } from '#modules/waitlist/waitlist.routes'
 import { registerMixerRoutes } from '#modules/mixer/mixer.routes'
 import { registerExecutorRoutes } from '#modules/executor/executor.routes'
 import { registerDepositsRoutes } from '#modules/deposits'
+import { registerRelayerRoutes } from '#modules/relayer'
 import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
 
 export interface AppRepositories {
@@ -64,6 +65,7 @@ export async function createApp(options: CreateAppOptions = {}) {
         { name: 'Prices', description: 'Realtime token USD prices via Jupiter' },
         { name: 'Waitlist', description: 'Landing page waitlist signups' },
         { name: 'Deposits', description: 'Private deposit orchestration' },
+        { name: 'Relayer', description: 'Mixer relayer (Groth16-proven withdrawals)' },
       ],
     },
   })
@@ -88,6 +90,12 @@ export async function createApp(options: CreateAppOptions = {}) {
     relayerKeypairPath: config.executorRelayerKeypairPath,
   })
   app.register(registerDepositsRoutes)
+  app.register(registerRelayerRoutes, {
+    mixerProgramId: config.mixerProgramId,
+    mixerRelayerKeypairPath: config.mixerRelayerKeypairPath,
+    mixerRelayerFeeLamports: config.mixerRelayerFeeLamports,
+    mixerDenomination: config.mixerDenomination,
+  })
 
   return app
 }

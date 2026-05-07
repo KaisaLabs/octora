@@ -63,19 +63,31 @@ const DEVNET_FALLBACK_DECIMALS = 6;
 
 const STEP_LABELS: Record<DepositStepKey, string> = {
   derive: "Authorize private session",
-  prepare: "Prepare private deposit",
+  "relayer-info": "Fetch mixer config",
+  prepare: "Register privacy intent",
+  "mixer-deposit": "Deposit into mixer",
+  "confirm-deposit": "Record deposit",
+  "build-tree": "Reconstruct Merkle tree",
+  prove: "Generate ZK proof",
+  "relayer-withdraw": "Relayer funds stealth",
   "use-pool": "Load pool state",
   "init-position": "Open private position",
-  "fund-position": "Confirm fund in wallet",
+  "add-liquidity": "Add single-sided SOL",
   done: "Done",
 };
 
 const STEP_ORDER: DepositStepKey[] = [
   "derive",
+  "relayer-info",
   "prepare",
+  "mixer-deposit",
+  "confirm-deposit",
+  "build-tree",
+  "prove",
+  "relayer-withdraw",
   "use-pool",
   "init-position",
-  "fund-position",
+  "add-liquidity",
 ];
 
 export function PrivateDepositModal({
@@ -93,16 +105,23 @@ export function PrivateDepositModal({
   const [pricesError, setPricesError] = useState<string | null>(null);
 
   const [phase, setPhase] = useState<Phase>("preview");
-  const [stepStatuses, setStepStatuses] = useState<
-    Record<DepositStepKey, "pending" | "active" | "ok" | "error">
-  >({
+  const initialStepStatuses = (): Record<DepositStepKey, "pending" | "active" | "ok" | "error"> => ({
     derive: "pending",
+    "relayer-info": "pending",
     prepare: "pending",
+    "mixer-deposit": "pending",
+    "confirm-deposit": "pending",
+    "build-tree": "pending",
+    prove: "pending",
+    "relayer-withdraw": "pending",
     "use-pool": "pending",
     "init-position": "pending",
-    "fund-position": "pending",
+    "add-liquidity": "pending",
     done: "pending",
   });
+  const [stepStatuses, setStepStatuses] = useState<
+    Record<DepositStepKey, "pending" | "active" | "ok" | "error">
+  >(initialStepStatuses);
   const [activeMessage, setActiveMessage] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [result, setResult] = useState<PrivateDepositResult | null>(null);
@@ -113,14 +132,7 @@ export function PrivateDepositModal({
     setPhase("preview");
     setErrorMessage("");
     setResult(null);
-    setStepStatuses({
-      derive: "pending",
-      prepare: "pending",
-      "use-pool": "pending",
-      "init-position": "pending",
-      "fund-position": "pending",
-      done: "pending",
-    });
+    setStepStatuses(initialStepStatuses());
 
     let cancelled = false;
     setPrices(null);
@@ -334,10 +346,6 @@ export function PrivateDepositModal({
           lowerBinId: effective.lowerBinId,
           upperBinId: effective.upperBinId,
           shape,
-          amountUsd: depositUsd,
-          allocation: pool.allocation,
-          amountX: breakdown.amountX,
-          amountY: breakdown.amountY,
         },
         handleStep,
       );
