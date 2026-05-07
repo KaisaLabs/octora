@@ -47,5 +47,11 @@
     "ts-mocha": "^11.1.0",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "underscore@<1.13.8": "^1.13.8",
+      "serialize-javascript@<7.0.5": "^7.0.5"
+    }
   }
 }

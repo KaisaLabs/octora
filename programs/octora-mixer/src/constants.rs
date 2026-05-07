@@ -114,3 +114,25 @@ pub const BN254_FIELD_ORDER: [u8; 32] = [
 pub const MIXER_POOL_SEED: &[u8] = b"mixer_pool";
 pub const NULLIFIER_SEED: &[u8] = b"nullifier";
 pub const COMMITMENT_SEED: &[u8] = b"commitment";
+
+/// Admin pubkey allowed to call `initialize` and set pool authority.
+///
+/// **REPLACE this with the deployer multisig / squads PDA before mainnet.**
+/// `pool.authority` is set from the signer of `initialize` and is the only
+/// key allowed to toggle `is_paused` for the lifetime of the pool — losing
+/// or front-running this key is unrecoverable.
+///
+/// To bypass the address constraint on devnet/local builds, compile with
+/// `--features permissionless-init` (see `instructions/initialize.rs`).
+///
+/// The placeholder below is a deterministic, unspendable pubkey
+/// (`Pubkey::find_program_address(&[b"octora-mixer-admin-placeholder"], &program_id)`
+/// equivalent — really just a clearly fake byte pattern). On mainnet, every
+/// `initialize` will fail-closed until this is overwritten. That is intentional.
+pub const ADMIN_AUTHORITY: anchor_lang::prelude::Pubkey =
+    anchor_lang::prelude::Pubkey::new_from_array([
+        0x4f, 0x43, 0x54, 0x4f, 0x52, 0x41, 0x5f, 0x4d,
+        0x49, 0x58, 0x45, 0x52, 0x5f, 0x41, 0x44, 0x4d,
+        0x49, 0x4e, 0x5f, 0x50, 0x4c, 0x41, 0x43, 0x45,
+        0x48, 0x4f, 0x4c, 0x44, 0x45, 0x52, 0x21, 0x21,
+    ]);

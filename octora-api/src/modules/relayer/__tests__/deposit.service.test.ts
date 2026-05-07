@@ -23,10 +23,16 @@ describe("DepositService", () => {
     expect(commitment.nullifierHash).toBeTypeOf("bigint");
   });
 
+  // Realistic-looking 88-char base58 placeholders so they clear the
+  // recordDeposit guard. Real Solana signatures are 64 bytes / ~88 base58 chars.
+  const FAKE_SIG_1 = "5".repeat(88);
+  const FAKE_SIG_2 = "K".repeat(88);
+  const FAKE_SIG_3 = "M".repeat(88);
+
   it("records deposits and updates Merkle root", () => {
     const rootBefore = service.currentRoot();
 
-    const leafIndex = service.recordDeposit(123456789n, "tx-sig-1", 1700000000);
+    const leafIndex = service.recordDeposit(123456789n, FAKE_SIG_1, 1700000000);
 
     expect(leafIndex).toBe(0);
     expect(service.depositCount()).toBe(1);
@@ -34,8 +40,8 @@ describe("DepositService", () => {
   });
 
   it("finds commitments by value", () => {
-    service.recordDeposit(111n, "tx-1", 1700000000);
-    service.recordDeposit(222n, "tx-2", 1700000001);
+    service.recordDeposit(111n, FAKE_SIG_2, 1700000000);
+    service.recordDeposit(222n, FAKE_SIG_3, 1700000001);
 
     expect(service.findCommitment(111n)).toBe(0);
     expect(service.findCommitment(222n)).toBe(1);

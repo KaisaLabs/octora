@@ -14,7 +14,24 @@ import {
   deriveNullifierPDA,
   type MixerClient,
 } from "./solana-client.js";
-import type { RelayerConfig, RelayerStatus, WithdrawRequest, WithdrawResult } from "./types.js";
+import type {
+  RelayerConfig,
+  RelayerHealth,
+  RelayerHealthIssue,
+  RelayerStatus,
+  WithdrawRequest,
+  WithdrawResult,
+} from "./types.js";
+
+/**
+ * Health-check thresholds. Tuned for the assumption that a relayer
+ * processes O(10s) withdrawals/day in early production; bump these as
+ * traffic ramps up.
+ */
+/** Page when hot wallet has fewer than this many withdrawals' worth of fees left. */
+const LOW_BALANCE_THRESHOLD_WITHDRAWALS = 50;
+/** Page when this many concurrent withdrawals share an in-flight slot. */
+const QUEUE_BACKED_THRESHOLD = 25;
 
 /**
  * Relayer Service — the core engine that:
@@ -31,6 +48,13 @@ export class RelayerService {
   private pendingWithdrawals = 0;
   private client: MixerClient | null = null;
   private mixerPoolPDA: PublicKey | null = null;
+  /**
+   * Per-nullifier in-flight map. We serialize concurrent withdrawal requests
+   * for the same nullifier so two callers can't both pass the `isSpent` cache
+   * miss, both pay gas, and race to the on-chain `init` (only one wins, the
+   * other wastes gas — that's the H-2 attack).
+   */
+  private readonly inFlight = new Map<string, Promise<WithdrawResult>>();
 
   constructor(
     private readonly config: RelayerConfig,
@@ -58,6 +82,75 @@ export class RelayerService {
    * - Mark nullifier as spent
    */
   async processWithdrawal(request: WithdrawRequest): Promise<WithdrawResult> {
+    // Guards that don't need cross-request synchronization run first; after
+    // them we serialize on `nullifierHash` so concurrent submissions for the
+    // same nullifier can't both pay gas (H-2).
+
+    // 0. Sender-side guards before we even talk to the registry:
+
+    // 0a. The proof must be bound to *this* relayer's hot wallet. Without
+    // this check, anyone can submit a proof bound to Relayer A to Relayer
+    // B's API; B's hotWallet signs/pays gas, but on-chain rejects because
+    // `pubkey_to_field_hash(B) != relayer_field` — gas is spent for nothing.
+    // (H-1)
+    const guardResult = this.guardRequest(request);
+    if (guardResult) return guardResult;
+
+    // Serialize on the nullifier — second caller short-circuits to the
+    // first's result (success or failure) instead of racing on-chain.
+    const inflight = this.inFlight.get(request.nullifierHash);
+    if (inflight) return inflight;
+
+    const promise = this.doProcessWithdrawal(request);
+    this.inFlight.set(request.nullifierHash, promise);
+    try {
+      return await promise;
+    } finally {
+      this.inFlight.delete(request.nullifierHash);
+    }
+  }
+
+  /** Synchronous, sender-side checks that don't require RPC or proof verification. */
+  private guardRequest(request: WithdrawRequest): WithdrawResult | null {
+    const failure = (error: string): WithdrawResult => ({
+      success: false,
+      txSignature: null,
+      nullifierHash: request.nullifierHash,
+      recipient: request.recipient,
+      amountLamports: "0",
+      feeLamports: request.fee,
+      error,
+    });
+
+    // H-1: relayer-binding check. We compare base58 strings, so a mismatched
+    // case or extra padding fails closed.
+    if (this.client) {
+      const ours = this.client.hotWallet.publicKey.toBase58();
+      if (request.relayer !== ours) {
+        return failure(
+          "Proof relayer field does not match this relayer's hot wallet — refusing to pay gas for someone else's proof.",
+        );
+      }
+    }
+
+    // H-3: minimum fee. Reject before doing any expensive work.
+    let feeLamports: bigint;
+    try {
+      feeLamports = BigInt(request.fee);
+    } catch {
+      return failure(`Fee is not a valid integer: ${request.fee}`);
+    }
+    if (feeLamports < this.config.minFeeLamports) {
+      return failure(
+        `Fee ${feeLamports} lamports is below the relayer's minimum ${this.config.minFeeLamports}.`,
+      );
+    }
+
+    return null;
+  }
+
+  /** The actual withdrawal pipeline, run under the per-nullifier lock. */
+  private async doProcessWithdrawal(request: WithdrawRequest): Promise<WithdrawResult> {
     // 1. Pre-check: nullifier not already spent
     const alreadySpent = await this.nullifiers.isSpent(request.nullifierHash);
     if (alreadySpent) {
@@ -173,8 +266,58 @@ export class RelayerService {
     };
   }
 
+  /**
+   * Monitoring-shaped health snapshot. Designed to be polled by external
+   * alerting (Grafana, Datadog, Pingdom). The `healthy` flag flips false
+   * when any of the failure conditions in `LOW_BALANCE_*` /
+   * `QUEUE_BACKED_*` thresholds trip — see `relayer.routes.ts` which
+   * maps `healthy === false` to HTTP 503.
+   */
+  async health(): Promise<RelayerHealth> {
+    const issues: RelayerHealthIssue[] = [];
+
+    if (!this.client || !this.mixerPoolPDA) {
+      issues.push("client_uninitialized");
+    }
+
+    const balanceLamports = await this.getHotWalletBalance();
+    const balanceBn = balanceLamports === "0" ? 0n : BigInt(balanceLamports);
+    const minFee = this.config.minFeeLamports;
+    // Below ~10 minFees = "you have a day-or-two worth of gas left".
+    // Operators should top up before this fires; the alert is the floor.
+    const withdrawalsBudget = minFee > 0n ? Number(balanceBn / minFee) : 0;
+    if (withdrawalsBudget < LOW_BALANCE_THRESHOLD_WITHDRAWALS) {
+      issues.push("low_balance");
+    }
+
+    if (this.inFlight.size >= QUEUE_BACKED_THRESHOLD) {
+      issues.push("queue_backed_up");
+    }
+
+    return {
+      healthy: issues.length === 0,
+      issues,
+      publicKey: this.getHotWalletPublicKey(),
+      balanceLamports,
+      withdrawalsBudget,
+      pendingWithdrawals: this.pendingWithdrawals,
+      inFlightNullifiers: this.inFlight.size,
+      totalProcessed: this.totalProcessed,
+      nullifierCount: await this.nullifiers.count(),
+      minFeeLamports: minFee.toString(),
+      poolDenomination: this.config.poolDenomination.toString(),
+    };
+  }
+
   /** Validate a proof without submitting (dry-run for UX). */
   async validateProof(request: WithdrawRequest): Promise<{ valid: boolean; reason?: string }> {
+    // Same sender-side guards as processWithdrawal, so dry-run results
+    // accurately predict whether processWithdrawal would accept the request.
+    const guard = this.guardRequest(request);
+    if (guard) {
+      return { valid: false, reason: guard.error };
+    }
+
     const spent = await this.nullifiers.isSpent(request.nullifierHash);
     if (spent) {
       return { valid: false, reason: "Nullifier already spent." };

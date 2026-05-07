@@ -171,22 +171,17 @@ pub const VERIFYING_KEY: Groth16Verifyingkey = Groth16Verifyingkey {
 
 /// Verify a Groth16 proof against the hardcoded verification key.
 ///
-/// The proof_data contains the raw proof bytes from snarkjs.
-/// IMPORTANT: proof_a (pi_a) must be negated before passing to the pairing check.
-/// This negation is done here — the caller passes the raw snarkjs proof.
+/// `proof_data` is 256 bytes: `pi_a (64) || pi_b (128) || pi_c (64)`.
+/// `public_inputs` is 160 bytes: 5 × 32-byte BN254 field elements (big-endian).
 ///
-/// # Arguments
-/// * `proof_data` - 256 bytes: pi_a (64) || pi_b (128) || pi_c (64)
-/// * `public_inputs` - 160 bytes: 5 x 32-byte BN254 field elements (big-endian)
+/// **`pi_a` must be pre-negated by the caller** (client-side). The pairing
+/// check is `e(-pi_a, pi_b) · e(α, β) · e(IC, γ) · e(pi_c, δ) == 1`, so
+/// `groth16-solana` expects `-pi_a`, not the raw snarkjs `pi_a`. We do
+/// the negation off-chain (in `proof-converter.ts:convertProofToBytes`)
+/// to keep this function a thin wrapper over `groth16-solana`.
 ///
-/// # Returns
-/// * `Ok(true)` if proof is valid
-/// * `Ok(false)` if proof is invalid
-/// * `Err` if verification computation fails
-/// Verify a Groth16 proof against the hardcoded verification key.
-///
-/// IMPORTANT: pi_a must be pre-negated by the caller (client-side).
-/// The proof_data is passed directly to groth16-solana.
+/// Returns `Ok(true)` if the proof verifies, `Ok(false)` if it does not,
+/// and `Err` only if the verifier itself failed to run (malformed inputs).
 pub fn verify_proof(
     proof_data: &[u8; PROOF_SIZE],
     public_inputs: &[u8; PUBLIC_INPUTS_SIZE],

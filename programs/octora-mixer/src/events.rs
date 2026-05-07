@@ -15,3 +15,13 @@ pub struct WithdrawEvent {
     pub fee: u64,
     pub timestamp: i64,
 }
+
+/// Emitted whenever the pool's pause flag is toggled. Off-chain monitors
+/// (status pages, alerting) subscribe to this to surface admin actions.
+#[event]
+pub struct PausedEvent {
+    pub denomination: u64,
+    pub paused: bool,
+    pub authority: Pubkey,
+    pub timestamp: i64,
+}

@@ -95,8 +95,24 @@ export async function pubkeyToFieldHash(pubkey: PublicKey): Promise<bigint> {
 
 /**
  * Convert a bigint to a 32-byte big-endian Buffer.
+ *
+ * Throws if `value` is negative or >= 2^256. `padStart(64, "0")` is a
+ * no-op for values whose hex is already > 64 chars, so without an
+ * explicit guard a too-big input would silently produce a Buffer larger
+ * than 32 bytes — which then `bytes.copy(buf, i*32)` clobbers into the
+ * next public-input slot, corrupting the encoded blob without any
+ * obvious failure mode. Defense in depth against malformed inputs.
  */
+const TWO_POW_256 = 1n << 256n;
 function bigintToBeBytes(value: bigint): Buffer {
+  if (value < 0n) {
+    throw new Error(`bigintToBeBytes: value must be non-negative, got ${value}`);
+  }
+  if (value >= TWO_POW_256) {
+    throw new Error(
+      `bigintToBeBytes: value 0x${value.toString(16)} does not fit in 32 bytes`,
+    );
+  }
   const hex = value.toString(16).padStart(64, "0");
   return Buffer.from(hex, "hex");
 }

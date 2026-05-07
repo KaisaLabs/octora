@@ -1,7 +1,7 @@
 import { AnchorProvider, Program, Wallet } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { join, dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RelayerConfig } from "./types.js";
 
@@ -108,8 +108,16 @@ export async function isNullifierSpentOnChain(
  * Load the hot wallet keypair from a secret.
  *
  * Supported formats:
- *   - JSON keypair file path (e.g. ~/.config/solana/id.json or /etc/octora/hot.json)
- *   - Inline JSON byte array (e.g. "[12,34,...,89]") — useful for env vars
+ *   - Inline JSON byte array (e.g. `"[12,34,...,89]"`).
+ *   - `file:<absolute-path>` to a JSON keypair file with mode 0600 (no
+ *     group/other read or write bits set). The path is resolved against
+ *     the process CWD via `path.resolve`, then required to start with
+ *     OCTORA_HOT_WALLET_DIR if that env var is set (allowlist).
+ *
+ * Bare-string paths are intentionally NOT accepted: an attacker who can
+ * influence the secret value (env override, future config endpoint) could
+ * otherwise coax the relayer into reading arbitrary files. Requiring the
+ * `file:` prefix forces the caller to opt in explicitly.
  *
  * Base58 secret keys are intentionally not supported here to avoid pulling
  * in a base58 dependency just for hot-wallet loading. If you need base58,
@@ -123,20 +131,49 @@ function loadHotWallet(secret: string): Keypair {
     return keypairFromJsonBytes(trimmed, "inline secret");
   }
 
-  // Path to a JSON keypair file
-  const looksLikePath =
-    trimmed.startsWith("/") ||
-    trimmed.startsWith("~") ||
-    trimmed.startsWith("./") ||
-    trimmed.endsWith(".json");
-  if (looksLikePath) {
-    const raw = readFileSync(trimmed, "utf-8");
-    return keypairFromJsonBytes(raw, trimmed);
+  if (trimmed.startsWith("file:")) {
+    const rawPath = trimmed.slice("file:".length);
+    if (!rawPath) {
+      throw new Error("Hot wallet `file:` prefix must be followed by a path.");
+    }
+    const absPath = resolvePath(rawPath);
+
+    // Optional allowlist: if OCTORA_HOT_WALLET_DIR is set, the resolved path
+    // must be inside it. Defense in depth against accidental misconfig.
+    const allowlist = process.env.OCTORA_HOT_WALLET_DIR;
+    if (allowlist) {
+      const allowedRoot = resolvePath(allowlist);
+      const sep = allowedRoot.endsWith("/") ? "" : "/";
+      if (absPath !== allowedRoot && !absPath.startsWith(allowedRoot + sep)) {
+        throw new Error(
+          `Hot wallet path ${absPath} is outside OCTORA_HOT_WALLET_DIR (${allowedRoot}).`,
+        );
+      }
+    }
+
+    // File mode must be 0600 (or stricter — owner-only read). Reject if
+    // group/other bits or anything else allows access.
+    let mode: number;
+    try {
+      mode = statSync(absPath).mode & 0o777;
+    } catch (err) {
+      throw new Error(
+        `Cannot stat hot wallet file ${absPath}: ${err instanceof Error ? err.message : "unknown"}`,
+      );
+    }
+    if ((mode & 0o077) !== 0) {
+      throw new Error(
+        `Hot wallet file ${absPath} has insecure permissions ${mode.toString(8).padStart(3, "0")}; expected 600 (chmod 600 ${absPath}).`,
+      );
+    }
+
+    const raw = readFileSync(absPath, "utf-8");
+    return keypairFromJsonBytes(raw, absPath);
   }
 
   throw new Error(
     "Unrecognised hot wallet secret format. " +
-      "Provide a JSON keypair file path or an inline JSON byte array.",
+      "Provide an inline JSON byte array or a `file:<path>` reference (mode 0600).",
   );
 }
 

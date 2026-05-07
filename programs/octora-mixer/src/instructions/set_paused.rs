@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use crate::constants::*;
 use crate::errors::MixerError;
+use crate::events::PausedEvent;
 use crate::state::MixerPool;
 
 /// Authority-gated emergency pause toggle.
@@ -24,6 +25,15 @@ pub struct SetPaused<'info> {
 pub fn handler(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
     let pool = &mut ctx.accounts.mixer_pool;
     pool.is_paused = paused;
+
+    let clock = Clock::get()?;
+    emit!(PausedEvent {
+        denomination: pool.denomination,
+        paused,
+        authority: ctx.accounts.authority.key(),
+        timestamp: clock.unix_timestamp,
+    });
+
     msg!("Mixer pool denomination {} pause = {}", pool.denomination, paused);
     Ok(())
 }

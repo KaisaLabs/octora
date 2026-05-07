@@ -44,11 +44,56 @@ export interface RelayerStatus {
   nullifierCount: number;
 }
 
+/**
+ * Monitoring-friendly health payload. The `healthy` flag is the single
+ * scalar an alerting system should page on; the breakdown lets a human
+ * see *why* it's unhealthy on the same response.
+ */
+export interface RelayerHealth {
+  healthy: boolean;
+  /** Set of failed health checks. Empty when `healthy === true`. */
+  issues: RelayerHealthIssue[];
+  publicKey: string;
+  balanceLamports: string;
+  /**
+   * Hot-wallet balance expressed in withdrawals' worth of fees, i.e.
+   * `balance / minFeeLamports`. Useful for "we have N withdrawals left
+   * before we run dry" alerting that doesn't require knowing what the
+   * minFee is at query time.
+   */
+  withdrawalsBudget: number;
+  pendingWithdrawals: number;
+  inFlightNullifiers: number;
+  totalProcessed: number;
+  nullifierCount: number;
+  minFeeLamports: string;
+  poolDenomination: string;
+}
+
+export type RelayerHealthIssue =
+  | "client_uninitialized"
+  | "low_balance"
+  | "queue_backed_up";
+
 /** Configuration for the relayer service. */
 export interface RelayerConfig {
   /** Base fee in lamports charged per withdrawal. */
   baseFeelamports: bigint;
-  /** Hot wallet secret key (base58 or byte array path). */
+  /**
+   * Minimum acceptable fee bound in the proof.
+   *
+   * The on-chain program enforces `fee < denomination` but does NOT enforce a
+   * floor — without this guard the relayer can be made to pay gas with no
+   * compensation by submitting fee=0 proofs at scale. Set this to cover the
+   * relayer's worst-case priority fee plus a small margin.
+   */
+  minFeeLamports: bigint;
+  /**
+   * Hot wallet secret. Either:
+   *   - inline JSON byte array (`"[12,34,...,89]"`), or
+   *   - `file:<path>` to a JSON keypair file with mode 0600.
+   * Bare paths are no longer accepted (see solana-client.ts loadHotWallet).
+   */
   hotWalletSecret: string;
   /** RPC endpoint for submitting transactions. */
   rpcUrl: string;
