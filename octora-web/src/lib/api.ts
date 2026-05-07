@@ -131,6 +131,27 @@ export async function getPoolBins(
   return res.json()
 }
 
+export interface PriceInfo {
+  usdPrice: number
+  priceChange24h: number
+  decimals: number
+  blockId: number
+  createdAt: string
+}
+
+export type PriceMap = Record<string, PriceInfo>
+
+export async function getPrices(mints: string[]): Promise<PriceMap> {
+  const ids = mints.filter(Boolean)
+  if (ids.length === 0) return {}
+  const res = await fetch(`${API_BASE}/prices?ids=${encodeURIComponent(ids.join(','))}`)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch prices: ${res.status}`)
+  }
+  const body = await res.json()
+  return (body?.data ?? {}) as PriceMap
+}
+
 export async function getPoolDetail(
   address: string,
   network: 'mainnet' | 'devnet' = 'mainnet'

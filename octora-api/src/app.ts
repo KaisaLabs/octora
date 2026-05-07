@@ -10,6 +10,7 @@ import { createPrismaActivityRepository, type ActivityRepository } from '#module
 import { createPrismaReconciliationRepository, type ReconciliationRepository } from '#modules/indexer/indexer.repository'
 import { registerPositionRoutes } from '#modules/positions/position.routes'
 import { registerDlmmRoutes } from '#modules/dlmm/dlmm.routes'
+import { registerPricesRoutes } from '#modules/prices/prices.routes'
 import { createPrismaWaitlistRepository, type WaitlistRepository } from '#modules/waitlist/waitlist.repository'
 import { registerWaitlistRoutes } from '#modules/waitlist/waitlist.routes'
 import { registerMixerRoutes } from '#modules/mixer/mixer.routes'
@@ -59,6 +60,7 @@ export async function createApp(options: CreateAppOptions = {}) {
       tags: [
         { name: 'Positions', description: 'Position intents and lifecycle' },
         { name: 'DLMM', description: 'Meteora DLMM pool data and analytics' },
+        { name: 'Prices', description: 'Realtime token USD prices via Jupiter' },
         { name: 'Waitlist', description: 'Landing page waitlist signups' },
       ],
     },
@@ -76,6 +78,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   app.get('/health', async () => ({ ok: true }))
   app.register(registerPositionRoutes, { ...repos, meteoraExecutor })
   app.register(registerDlmmRoutes)
+  app.register(registerPricesRoutes)
   app.register(registerWaitlistRoutes, { waitlistRepo: repos.waitlistRepo })
   app.register(registerMixerRoutes)
   app.register(registerExecutorRoutes)

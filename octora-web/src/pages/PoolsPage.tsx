@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
+import { PoolPairPrice } from "@/components/octora/PoolPairPrice";
+import { usePrices } from "@/hooks/usePrices";
 
 type ContentTab = "top" | "trending" | "stable";
 type TimeFrame = "5m" | "30m" | "1h" | "2h" | "4h" | "12h" | "24h";
@@ -248,6 +250,19 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
     setStrategyId(null);
   };
 
+  // Collect every visible mint for one batched price call. usePrices polls
+  // every 5s and dedupes/sorts the keys so identical mint sets don't refetch.
+  const visibleMints = useMemo(() => {
+    const list: string[] = [];
+    for (const p of filteredPools) {
+      if (p.tokenAMint) list.push(p.tokenAMint);
+      if (p.tokenBMint) list.push(p.tokenBMint);
+    }
+    return list;
+  }, [filteredPools]);
+  const pricesQuery = usePrices(visibleMints);
+  const prices = pricesQuery.data;
+
   if (loading) {
     return <PoolsSkeleton />;
   }
@@ -325,11 +340,15 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
 
         {/* Desktop table */}
         <div className="mt-5 hidden overflow-x-auto rounded-xl border border-border lg:block">
-          <div className="min-w-[1100px]">
-            <div className="grid grid-cols-[40px_minmax(220px,2fr)_100px_110px_110px_110px_110px_110px_120px] gap-3 bg-secondary/60 px-4 py-3 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+          <div className="min-w-[1280px]">
+            <div className="grid grid-cols-[40px_minmax(220px,2fr)_100px_minmax(150px,1.2fr)_110px_110px_110px_110px_110px_120px] gap-3 bg-secondary/60 px-4 py-3 text-xs uppercase tracking-[0.18em] text-muted-foreground">
               <span className="text-left">#</span>
               <span className="text-left">Pool</span>
               <span className="text-right">Pool Age</span>
+              <span className="inline-flex items-center justify-end gap-1.5 text-right">
+                <span>Live Price (24h)</span>
+                <LiveDot active={pricesQuery.isFetching} />
+              </span>
               <span className="text-right">TVL</span>
               <span className="text-right">24h Volume</span>
               <span className="text-right">24h Fees</span>
@@ -341,13 +360,20 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
               {filteredPools.map((p, i) => (
                 <div
                   key={p.id}
-                  className="grid grid-cols-[40px_minmax(220px,2fr)_100px_110px_110px_110px_110px_110px_120px] items-center gap-3 bg-card px-4 py-4 text-sm transition-colors hover:bg-surface-elevated"
+                  className="grid grid-cols-[40px_minmax(220px,2fr)_100px_minmax(150px,1.2fr)_110px_110px_110px_110px_110px_120px] items-center gap-3 bg-card px-4 py-4 text-sm transition-colors hover:bg-surface-elevated"
                 >
                   <span className="font-mono text-xs text-muted-foreground tabular-nums">#{i + 1}</span>
                   <PoolPairCell pool={p} />
                   <p className="text-right font-mono text-xs text-muted-foreground tabular-nums">
                     {formatAge(p.createdAt, nowSec)}
                   </p>
+                  <PoolPairPrice
+                    tokenA={p.tokenA}
+                    tokenB={p.tokenB}
+                    tokenAMint={p.tokenAMint}
+                    tokenBMint={p.tokenBMint}
+                    prices={prices}
+                  />
                   <p className="text-right font-mono tabular-nums text-foreground">{p.tvl}</p>
                   <p className="text-right font-mono tabular-nums text-foreground">{p.volume24h}</p>
                   <p className="text-right font-mono tabular-nums text-foreground">{p.fees24h}</p>
@@ -378,6 +404,19 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
                 <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
                   {formatAge(p.createdAt, nowSec)}
                 </span>
+              </div>
+              <div className="mt-3 rounded-lg border border-border/60 bg-secondary/30 px-3 py-2">
+                <p className="mb-1 inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                  <span>Live price · 24h</span>
+                  <LiveDot active={pricesQuery.isFetching} />
+                </p>
+                <PoolPairPrice
+                  tokenA={p.tokenA}
+                  tokenB={p.tokenB}
+                  tokenAMint={p.tokenAMint}
+                  tokenBMint={p.tokenBMint}
+                  prices={prices}
+                />
               </div>
               <div className="mt-3 grid grid-cols-4 gap-3 text-sm">
                 <div>
@@ -702,6 +741,18 @@ function FilterPopover({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function LiveDot({ active }: { active: boolean }) {
+  return (
+    <span
+      title="Polling Jupiter every 5s"
+      aria-hidden
+      className={`h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_6px_hsl(160_84%_55%)] ${
+        active ? "animate-pulse" : "opacity-70"
+      }`}
+    />
   );
 }
 

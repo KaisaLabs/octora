@@ -7,6 +7,7 @@ import { portfolioPositions } from "@/data/octora";
 import { WalletConnectDialog } from "./lp/WalletConnectDialog";
 import { GlowBackground } from "./GlowBackground";
 import { FloatingParticles } from "./FloatingParticles";
+import { LivePriceChip } from "./LivePriceChip";
 
 const parseUsd = (v: string | undefined): number => {
   if (!v) return 0;
@@ -91,6 +92,8 @@ export function AppShell() {
 
           {/* Wallet */}
           <div className="flex items-center gap-2">
+            <LivePriceChip />
+
             {wallet.connected && claimable > 0 && (
               <button
                 type="button"
@@ -107,7 +110,6 @@ export function AppShell() {
                 <span className="text-primary/70">claimable</span>
               </button>
             )}
-
             {!wallet.connected && !wallet.connecting && (
               <Button
                 variant="hero"
