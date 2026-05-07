@@ -30,6 +30,13 @@ export interface OnchainPositionContext {
   positionWidth: number;
 }
 
+export class OnchainExecutorNotWiredError extends Error {
+  constructor(message = "On-chain Meteora executor is not wired") {
+    super(message);
+    this.name = "OnchainExecutorNotWiredError";
+  }
+}
+
 export class OnchainMeteoraExecutor implements MeteoraExecutor {
   constructor(private readonly client: OctoraExecutorClient) {}
 
