@@ -48,21 +48,22 @@ export async function registerMixerRoutes(
 
   // Rehydrate the deposit cache from on-chain DepositEvent logs so a
   // server restart doesn't blank the public deposit history that
-  // browsers rely on for Merkle-tree reconstruction. Best-effort and
-  // non-blocking: kicked off in the background — /mixer/deposits will
-  // still serve whatever is loaded so far, and /mixer/confirm-deposit
-  // can backfill anything we miss.
-  void mixer
-    .hydrateFromChain({ log: (m) => app.log.warn(m) })
-    .then((res) => {
-      app.log.info(
-        { depositsLoaded: res.depositsLoaded, scannedSignatures: res.scannedSignatures },
-        "mixer: hydrated deposit cache from chain",
-      );
-    })
-    .catch((err) => {
-      app.log.warn({ err }, "mixer: hydrateFromChain failed");
-    });
+  // browsers rely on for Merkle-tree reconstruction.
+  //
+  // Awaited (not background): if /mixer/deposits serves a partial leaf set
+  // before hydration finishes, browsers rebuild a tree that doesn't match
+  // the on-chain root and withdrawals fail with RootNotFound. The 5–15s
+  // boot cost is a fair trade for not silently corrupting every deposit
+  // that races a fresh restart.
+  try {
+    const res = await mixer.hydrateFromChain({ log: (m) => app.log.warn(m) });
+    app.log.info(
+      { depositsLoaded: res.depositsLoaded, scannedSignatures: res.scannedSignatures },
+      "mixer: hydrated deposit cache from chain",
+    );
+  } catch (err) {
+    app.log.warn({ err }, "mixer: hydrateFromChain failed");
+  }
 
   const controller = createMixerController(mixer);
 

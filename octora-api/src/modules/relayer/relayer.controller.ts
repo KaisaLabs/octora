@@ -65,25 +65,33 @@ export function createRelayerController(
       const validation = validateWithdrawBody(body, info);
       if (validation) return reply.status(400).send({ error: validation });
 
-      const result = await relayer.processWithdrawal({
-        proof: body.proof,
-        publicSignals: body.publicSignals,
-        root: body.root,
-        nullifierHash: body.nullifierHash,
-        recipient: body.recipient,
-        relayer: info.relayerPubkey,
-        fee: body.fee,
-      });
+      try {
+        const result = await relayer.processWithdrawal({
+          proof: body.proof,
+          publicSignals: body.publicSignals,
+          root: body.root,
+          nullifierHash: body.nullifierHash,
+          recipient: body.recipient,
+          relayer: info.relayerPubkey,
+          fee: body.fee,
+        });
 
-      const response: WithdrawResponse = {
-        success: result.success,
-        txSignature: result.txSignature,
-        recipient: result.recipient,
-        amountLamports: result.amountLamports,
-        feeLamports: result.feeLamports,
-        error: result.error,
-      };
-      return reply.status(result.success ? 200 : 400).send(response);
+        const response: WithdrawResponse = {
+          success: result.success,
+          txSignature: result.txSignature,
+          recipient: result.recipient,
+          amountLamports: result.amountLamports,
+          feeLamports: result.feeLamports,
+          error: result.error,
+        };
+        return reply.status(result.success ? 200 : 400).send(response);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[/relayer/withdraw] failed:", err instanceof Error ? err.stack : err);
+        return reply
+          .status(400)
+          .send({ error: err instanceof Error ? err.message : "withdraw build failed" });
+      }
     },
   };
 }

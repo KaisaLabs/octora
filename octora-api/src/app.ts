@@ -74,6 +74,24 @@ export async function createApp(options: CreateAppOptions = {}) {
     routePrefix: '/docs',
   })
 
+  // Always print stack traces for unhandled 500s, regardless of the request
+  // logger setting. Without this Fastify swallows exceptions to a generic
+  // {"statusCode":500,"message":"..."} body which makes debugging by guesswork.
+  app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
+    const statusCode = err.statusCode ?? 500
+    if (statusCode >= 500) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[api] ${req.method} ${req.url} → ${statusCode} ${err.message}\n${err.stack ?? '<no stack>'}`,
+      )
+    }
+    reply.status(statusCode).send({
+      statusCode,
+      error: err.name ?? 'Error',
+      message: err.message,
+    })
+  })
+
   // Pick the MeteoraExecutor implementation up-front so we can hand the
   // same instance to every position route. Default = mock; switching to
   // the on-chain executor is a single env flag (OCTORA_USE_ONCHAIN_EXECUTOR).
@@ -89,7 +107,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     executorProgramId: config.executorProgramId,
     relayerKeypairPath: config.executorRelayerKeypairPath,
   })
-  app.register(registerDepositsRoutes)
+  app.register(registerDepositsRoutes, { mixerDenomination: config.mixerDenomination })
   app.register(registerRelayerRoutes, {
     mixerProgramId: config.mixerProgramId,
     mixerRelayerKeypairPath: config.mixerRelayerKeypairPath,

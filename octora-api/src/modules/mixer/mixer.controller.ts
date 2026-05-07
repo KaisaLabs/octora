@@ -42,6 +42,8 @@ export function createMixerController(mixer: MixerService) {
         });
         return reply.send(result);
       } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[/mixer/deposit] build failed:", err instanceof Error ? err.stack : err);
         return reply
           .status(400)
           .send({ error: err instanceof Error ? err.message : "deposit build failed" });
@@ -77,14 +79,22 @@ export function createMixerController(mixer: MixerService) {
       reply: FastifyReply,
     ) {
       const { signer, recipient, proofBytes, publicInputsBytes, nullifierHash } = req.body;
-      const result = await mixer.buildWithdrawTransaction(
-        signer,
-        recipient,
-        proofBytes,
-        publicInputsBytes,
-        nullifierHash,
-      );
-      return reply.send(result);
+      try {
+        const result = await mixer.buildWithdrawTransaction(
+          signer,
+          recipient,
+          proofBytes,
+          publicInputsBytes,
+          nullifierHash,
+        );
+        return reply.send(result);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[/mixer/withdraw] build failed:", err instanceof Error ? err.stack : err);
+        return reply
+          .status(400)
+          .send({ error: err instanceof Error ? err.message : "withdraw build failed" });
+      }
     },
   };
 }

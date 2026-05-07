@@ -1,5 +1,6 @@
 import { ComputeBudgetProgram, PublicKey, SystemProgram } from "@solana/web3.js";
 import { verifyWithdrawProof } from "#modules/vault";
+import { bigintToBytes32 } from "#modules/mixer/mixer.service";
 import type { NullifierRegistry } from "./nullifier-registry.js";
 import type { StealthWallet } from "./stealth-wallet.js";
 import { generateStealthWallet } from "./stealth-wallet.js";
@@ -209,15 +210,25 @@ export class RelayerService {
     const { program, hotWallet, programId } = this.client!;
     const mixerPoolKey = this.mixerPoolPDA!;
 
+    // Pre-flight: pool must exist before Anchor's IDL-driven PDA check tries
+    // to read mixer_pool.denomination as a seed. Otherwise the failure
+    // surfaces as Solana's cryptic "Max seed length exceeded".
+    const poolAcct = await this.client!.provider.connection.getAccountInfo(mixerPoolKey);
+    if (!poolAcct) {
+      throw new Error(
+        `Mixer pool ${mixerPoolKey.toBase58()} (denom=${this.config.poolDenomination.toString()}) ` +
+          `not initialized. Run POST /mixer/initialize once before processing withdrawals.`,
+      );
+    }
+
     // Convert proof and public inputs to packed byte format
     const proofBytes = convertProofToBytes(request.proof);
     const publicInputsBytes = convertPublicInputsToBytes(request.publicSignals);
 
-    // Derive nullifier PDA
-    const nullifierHashBuf = Buffer.from(
-      BigInt(request.nullifierHash).toString(16).padStart(64, "0"),
-      "hex",
-    );
+    // Derive nullifier PDA. bigintToBytes32 throws SeedRangeError if the
+    // value doesn't fit in 32 bytes; the controller catches it and returns 400
+    // instead of letting Solana surface "Max seed length exceeded" as a 500.
+    const nullifierHashBuf = bigintToBytes32(BigInt(request.nullifierHash), "nullifierHash");
     const [nullifierPDA] = deriveNullifierPDA(programId, mixerPoolKey, nullifierHashBuf);
 
     const recipientKey = new PublicKey(request.recipient);

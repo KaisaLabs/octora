@@ -95,6 +95,7 @@ export class MixerService {
    * insertion, so we bump the compute budget on the tx.
    */
   async buildDepositTransaction(args: BuildDepositArgs): Promise<{ transaction: string }> {
+    await this.assertPoolInitialized();
     const depositor = new PublicKey(args.depositorPubkey);
     const commitmentBytes = this.bigintToBytes32(args.commitment);
 
@@ -162,6 +163,23 @@ export class MixerService {
     const maxPages = opts.maxPages ?? 50; // up to 50_000 signatures
     const log = opts.log ?? (() => {});
 
+    // Pull the DepositEvent discriminator straight out of the IDL so we
+    // don't depend on Anchor's JS event coder, which has silently dropped
+    // events on us when names normalize differently or the IDL drifts.
+    // Discriminator is canonical (sha256("event:DepositEvent")[..8]) and
+    // pinned in the IDL, so a byte-prefix match is the most reliable signal.
+    const idl = this.program.idl as unknown as {
+      events?: Array<{ name: string; discriminator: number[] }>;
+    };
+    const depositEventEntry = idl.events?.find(
+      (e) => e.name === "DepositEvent" || e.name === "depositEvent",
+    );
+    if (!depositEventEntry) {
+      log("hydrateFromChain: DepositEvent not found in IDL — cannot hydrate");
+      return { scannedSignatures: 0, depositsLoaded: 0 };
+    }
+    const depositDiscriminator = Buffer.from(depositEventEntry.discriminator);
+
     const signatures: ConfirmedSignatureInfo[] = [];
     let before: string | undefined;
 
@@ -190,7 +208,10 @@ export class MixerService {
     // Process oldest-first so leaf indices land in chronological order.
     signatures.reverse();
 
+    let programDataLines = 0;
+    let discriminatorMatches = 0;
     let depositsLoaded = 0;
+
     for (const sig of signatures) {
       if (sig.err) continue;
       let tx: Awaited<ReturnType<Connection["getTransaction"]>>;
@@ -212,26 +233,23 @@ export class MixerService {
       for (const line of tx.meta.logMessages) {
         const m = line.match(/^Program data: (.+)$/);
         if (!m) continue;
-        let decoded: { name: string; data: unknown } | null = null;
+        programDataLines++;
+
+        let payload: Buffer;
         try {
-          decoded = this.program.coder.events.decode(m[1]) as
-            | { name: string; data: unknown }
-            | null;
+          payload = Buffer.from(m[1], "base64");
         } catch {
           continue;
         }
-        if (!decoded || decoded.name !== "DepositEvent") continue;
 
-        // Anchor decodes [u8; 32] as number[]; rebuild as bigint to match
-        // how recordDeposit stores keys.
-        const data = decoded.data as {
-          commitment: number[] | Uint8Array;
-          leafIndex?: number;
-          leaf_index?: number;
-        };
-        const commitmentBuf = Buffer.from(data.commitment as ArrayLike<number>);
+        // Layout: 8-byte discriminator || 32-byte commitment || 4-byte leaf_index (LE) || 8-byte timestamp (LE)
+        if (payload.length < 8 + 32 + 4) continue;
+        if (!payload.subarray(0, 8).equals(depositDiscriminator)) continue;
+        discriminatorMatches++;
+
+        const commitmentBuf = payload.subarray(8, 40);
         const commitment = BigInt("0x" + commitmentBuf.toString("hex"));
-        const leafIndex = data.leafIndex ?? data.leaf_index ?? 0;
+        const leafIndex = payload.readUInt32LE(40);
 
         const key = commitment.toString();
         if (!this.deposits.has(key)) {
@@ -240,6 +258,12 @@ export class MixerService {
         }
       }
     }
+
+    log(
+      `hydrateFromChain: scanned=${signatures.length} programDataLines=${programDataLines} ` +
+        `discriminatorMatches=${discriminatorMatches} depositsLoaded=${depositsLoaded} ` +
+        `cacheSize=${this.deposits.size} pool=${this.poolPDA.toBase58()}`,
+    );
 
     return { scannedSignatures: signatures.length, depositsLoaded };
   }
@@ -256,6 +280,7 @@ export class MixerService {
     publicInputsBytesBase64: string,
     nullifierHash: string,
   ): Promise<{ transaction: string }> {
+    await this.assertPoolInitialized();
     const signer = new PublicKey(signerPubkey);
     const recipient = new PublicKey(recipientPubkey);
     const nullifierHashBuf = this.bigintToBytes32(BigInt(nullifierHash));
@@ -360,7 +385,58 @@ export class MixerService {
   }
 
   private bigintToBytes32(value: bigint): Buffer {
-    const hex = value.toString(16).padStart(64, "0");
-    return Buffer.from(hex, "hex");
+    return bigintToBytes32(value, "commitment");
   }
+
+  /**
+   * Throw a typed error if the on-chain mixer_pool account doesn't exist.
+   *
+   * Without this guard, Anchor's IDL-driven PDA verification (the
+   * mixer_pool PDA seeds reference the account's own `denomination` field)
+   * fails deep inside @coral-xyz/anchor with the cryptic
+   * "Max seed length exceeded" — because the unresolved account body is
+   * passed as a seed when the account doesn't exist.
+   *
+   * Surface a clear 400 instead so the caller knows to run
+   * `POST /mixer/initialize` once for the configured denomination.
+   */
+  async assertPoolInitialized(): Promise<void> {
+    const acct = await this.connection.getAccountInfo(this.poolPDA);
+    if (!acct) throw new MixerPoolNotInitializedError(this.denomination, this.poolPDA.toBase58());
+  }
+}
+
+export class MixerPoolNotInitializedError extends Error {
+  constructor(public readonly denomination: bigint, public readonly poolAddress: string) {
+    super(
+      `Mixer pool for denomination ${denomination.toString()} (${poolAddress}) not initialized. ` +
+        `Run POST /mixer/initialize once with the admin authority before depositing.`,
+    );
+    this.name = "MixerPoolNotInitializedError";
+  }
+}
+
+/**
+ * Pack a bigint into exactly 32 big-endian bytes. Throws SeedRangeError if
+ * the value doesn't fit, instead of letting Solana's findProgramAddressSync
+ * surface a cryptic "Max seed length exceeded" 500 deeper in the stack.
+ */
+export class SeedRangeError extends Error {
+  constructor(public readonly field: string, public readonly value: bigint) {
+    super(`${field} value too large to fit in 32-byte PDA seed: ${value.toString()}`);
+    this.name = "SeedRangeError";
+  }
+}
+
+export function bigintToBytes32(value: bigint, field: string): Buffer {
+  if (value < 0n || value >= 1n << 256n) {
+    throw new SeedRangeError(field, value);
+  }
+  const out = Buffer.alloc(32);
+  let v = value;
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return out;
 }

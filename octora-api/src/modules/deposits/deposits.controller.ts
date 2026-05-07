@@ -6,10 +6,8 @@ import type { PrivacyAdapter, PrivacyReceipt } from "#modules/execution/adapters
 export interface PreparePrivateDepositBody {
   poolAddress: string;
   stealthPubkey: string;
-  amountUsd: number;
   shape: "spot" | "curve" | "bid-ask";
   range: { lower: number; upper: number };
-  allocation: { tokenA: number; tokenB: number };
 }
 
 export interface PreparePrivateDepositResponse {
@@ -17,7 +15,15 @@ export interface PreparePrivateDepositResponse {
   positionId: string;
 }
 
-export function createDepositsController(privacy: PrivacyAdapter) {
+export interface DepositsControllerConfig {
+  /** Fixed mixer pool denomination (lamports) — surfaced on the privacy receipt. */
+  denominationLamports: bigint;
+}
+
+export function createDepositsController(
+  privacy: PrivacyAdapter,
+  config: DepositsControllerConfig,
+) {
   return {
     /**
      * POST /deposits/prepare-private
@@ -26,8 +32,8 @@ export function createDepositsController(privacy: PrivacyAdapter) {
      * derived a stealth keypair from a wallet signature and sends only the
      * pubkey here — the server never sees the seed.
      *
-     * Returns a privacy receipt + a positionId the browser carries through
-     * the executor lifecycle (init-position → add-liquidity).
+     * Single-sided SOL MVP: amount is fixed at the mixer denomination, so
+     * the request carries pool + stealth + shape + range only.
      */
     async preparePrivate(
       req: FastifyRequest<{ Body: PreparePrivateDepositBody }>,
@@ -43,7 +49,7 @@ export function createDepositsController(privacy: PrivacyAdapter) {
         positionId,
         intentId: positionId,
         poolSlug: body.poolAddress,
-        amount: body.amountUsd.toString(),
+        amount: config.denominationLamports.toString(),
         mode: "fast-private",
         stealthPubkey: body.stealthPubkey,
       });
@@ -70,9 +76,6 @@ function validateBody(body: PreparePrivateDepositBody): string | null {
     return "stealthPubkey is not a valid Solana address.";
   }
 
-  if (typeof body.amountUsd !== "number" || body.amountUsd <= 0) {
-    return "amountUsd must be a positive number.";
-  }
   if (!["spot", "curve", "bid-ask"].includes(body.shape)) {
     return "shape must be one of spot|curve|bid-ask.";
   }
@@ -83,13 +86,6 @@ function validateBody(body: PreparePrivateDepositBody): string | null {
     body.range.lower > body.range.upper
   ) {
     return "range must be { lower, upper } with lower <= upper.";
-  }
-  if (
-    !body.allocation ||
-    typeof body.allocation.tokenA !== "number" ||
-    typeof body.allocation.tokenB !== "number"
-  ) {
-    return "allocation.tokenA and allocation.tokenB must be numbers.";
   }
   return null;
 }

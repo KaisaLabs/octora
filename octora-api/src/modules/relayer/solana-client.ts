@@ -3,6 +3,7 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { bigintToBytes32 } from "#modules/mixer/mixer.service";
 import type { RelayerConfig } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -96,9 +97,9 @@ export async function isNullifierSpentOnChain(
   connection: Connection,
   programId: PublicKey,
   mixerPoolKey: PublicKey,
-  nullifierHashHex: string,
+  nullifierHash: string,
 ): Promise<boolean> {
-  const nullifierBuf = Buffer.from(nullifierHashHex.replace(/^0x/, "").padStart(64, "0"), "hex");
+  const nullifierBuf = bigintToBytes32(BigInt(nullifierHash), "nullifierHash");
   const [pda] = deriveNullifierPDA(programId, mixerPoolKey, nullifierBuf);
 
   const account = await connection.getAccountInfo(pda);

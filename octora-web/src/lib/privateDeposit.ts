@@ -180,9 +180,10 @@ interface TestPairConfig {
 }
 
 interface InitPositionResponse {
-  transaction: string;
+  transaction: string | null;
   positionPubkey: string;
   positionAuthority: string;
+  alreadyInitialized: boolean;
 }
 
 interface AddLiquidityResponse {
@@ -243,10 +244,8 @@ export async function runPrivateDeposit(
     prepared = await apiPost<PreparePrivateResponse>("/deposits/prepare-private", {
       poolAddress: input.poolAddress,
       stealthPubkey: stealth.publicKey,
-      amountUsd: 0,
       shape: input.shape,
       range: { lower: input.lowerBinId, upper: input.upperBinId },
-      allocation: { tokenA: 0, tokenB: 100 },
     });
   } catch (err) {
     onStep({ step: "prepare", status: "error", message: describe(err) });
@@ -409,7 +408,7 @@ export async function runPrivateDeposit(
 
   // ── 10. init-position (silent stealth sign) ───────────────────────
   onStep({ step: "init-position", status: "active", message: "Opening private position…" });
-  let initSig: string;
+  let initSig: string | null = null;
   let initResp: InitPositionResponse;
   try {
     initResp = await apiPost<InitPositionResponse>("/executor/init-position-tx", {
@@ -422,13 +421,19 @@ export async function runPrivateDeposit(
       lowerBinId: config.lowerBinId,
       width: config.width,
     });
-    const tx = decodeBase64Tx(initResp.transaction);
-    tx.partialSign(stealth.keypair);
-    initSig = await connection.sendRawTransaction(tx.serialize(), {
-      skipPreflight: false,
-      preflightCommitment: "confirmed",
-    });
-    await waitForConfirmation(connection, initSig, tx.recentBlockhash!);
+    if (initResp.alreadyInitialized || initResp.transaction === null) {
+      // Position already exists for this (stealth, pool) pair — typically
+      // because a prior run created it before failing further down. Skip the
+      // on-chain init and reuse the existing position for add_liquidity.
+    } else {
+      const tx = decodeBase64Tx(initResp.transaction);
+      tx.partialSign(stealth.keypair);
+      initSig = await connection.sendRawTransaction(tx.serialize(), {
+        skipPreflight: false,
+        preflightCommitment: "confirmed",
+      });
+      await waitForConfirmation(connection, initSig, tx.recentBlockhash!);
+    }
   } catch (err) {
     onStep({ step: "init-position", status: "error", message: describe(err) });
     throw err;
@@ -436,7 +441,11 @@ export async function runPrivateDeposit(
   onStep({
     step: "init-position",
     status: "ok",
-    data: { positionPubkey: initResp.positionPubkey, signature: initSig },
+    data: {
+      positionPubkey: initResp.positionPubkey,
+      signature: initSig,
+      reused: initResp.alreadyInitialized,
+    },
   });
 
   // ── 11. add-liquidity (stealth-only signature) ────────────────────

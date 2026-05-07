@@ -216,12 +216,46 @@ export class ExecutorService {
     const activeBin = dlmm.lbPair.activeId;
     const binStep = dlmm.lbPair.binStep;
 
-    const lowerBinId =
+    let lowerBinId =
       args.lowerBinId ?? activeBin - Math.floor(width / 2);
-    const upperBinId = lowerBinId + width - 1;
+    let upperBinId = lowerBinId + width - 1;
 
-    const lowerArrayIdx = binIdToBinArrayIndex(new BN(lowerBinId));
-    const upperArrayIdx = binIdToBinArrayIndex(new BN(upperBinId));
+    let lowerArrayIdx = binIdToBinArrayIndex(new BN(lowerBinId));
+    let upperArrayIdx = binIdToBinArrayIndex(new BN(upperBinId));
+
+    // DLMM's add_liquidity_by_strategy CPI takes bin_array_lower and
+    // bin_array_upper as two distinct writable accounts. When the position
+    // fits inside a single bin array (70 bins), both PDAs resolve to the
+    // same account, the runtime hands DLMM the same RefCell at indices 9
+    // and 10, and the handler fails with AccountBorrowFailed when it tries
+    // to mutably borrow both. Extend the position into a neighbouring array
+    // so the two accounts are always distinct. The new bins stay empty
+    // for single-sided SOL positions, so this widens *capacity* without
+    // changing the liquidity footprint — but the extension must go in the
+    // direction *away* from the active bin, otherwise we cross active and
+    // break the single-sided invariant enforced by `planSingleSidedSol`.
+    if (lowerArrayIdx.eq(upperArrayIdx)) {
+      const aboveActive = lowerBinId > activeBin;
+      const belowActive = upperBinId < activeBin;
+      if (belowActive) {
+        // Y-side single-sided (SOL on Y, all bins below active): extend
+        // lowerBinId down into the previous array.
+        lowerBinId = lowerArrayIdx.toNumber() * 70 - 1;
+        lowerArrayIdx = binIdToBinArrayIndex(new BN(lowerBinId));
+      } else if (aboveActive) {
+        // X-side single-sided (SOL on X, all bins above active): extend
+        // upperBinId up into the next array.
+        upperBinId = upperArrayIdx.add(new BN(1)).toNumber() * 70;
+        upperArrayIdx = binIdToBinArrayIndex(new BN(upperBinId));
+      } else {
+        // Straddles active — extension direction doesn't matter for the
+        // single-sided check; widen upward by convention.
+        upperBinId = upperArrayIdx.add(new BN(1)).toNumber() * 70;
+        upperArrayIdx = binIdToBinArrayIndex(new BN(upperBinId));
+      }
+    }
+    const adjustedWidth = upperBinId - lowerBinId + 1;
+
     const uniqueArrayIdxs =
       lowerArrayIdx.eq(upperArrayIdx) ? [lowerArrayIdx] : [lowerArrayIdx, upperArrayIdx];
 
@@ -244,7 +278,7 @@ export class ExecutorService {
       binArrayUpper: binArrayUpper.toBase58(),
       lowerBinId,
       upperBinId,
-      width,
+      width: adjustedWidth,
       activeBin,
       binStep,
       // baseFactor isn't strictly needed once the pair exists, but we keep
@@ -293,6 +327,13 @@ export class ExecutorService {
    *
    * Returns the partially-signed tx and the position pubkey so the browser
    * can record it for later add_liquidity / withdraw_close calls.
+   *
+   * Idempotent on (stealth, lb_pair): the stealth pubkey is deterministically
+   * derived from (mainWallet sig, pool) on the client, so a retry after a
+   * partial failure produces the same `positionAuthority` PDA. If that PDA
+   * already exists, return the existing position info with `alreadyInitialized:
+   * true` and `transaction: null` so the caller skips the on-chain init step
+   * and proceeds straight to add_liquidity.
    */
   async buildInitPositionTx(args: {
     stealth: PublicKey;
@@ -300,9 +341,26 @@ export class ExecutorService {
     exitRecipient: PublicKey;
     lowerBinId: number;
     width: number;
-  }): Promise<{ transaction: string; positionPubkey: string; positionAuthority: string }> {
-    const positionKeypair = Keypair.generate();
+  }): Promise<{
+    transaction: string | null;
+    positionPubkey: string;
+    positionAuthority: string;
+    alreadyInitialized: boolean;
+  }> {
     const [positionAuthority] = derivePoolAuthorityPda(this.programId, args.stealth, args.lbPair);
+
+    const existing = await this.connection.getAccountInfo(positionAuthority);
+    if (existing) {
+      const positionPubkey = await this.fetchPositionFromAuthority(positionAuthority);
+      return {
+        transaction: null,
+        positionPubkey: positionPubkey.toBase58(),
+        positionAuthority: positionAuthority.toBase58(),
+        alreadyInitialized: true,
+      };
+    }
+
+    const positionKeypair = Keypair.generate();
 
     // The on-chain `dlmm_init_position` ix uses `payer = stealth`, so the
     // stealth account must hold enough lamports to cover the PoolAuthority
@@ -354,6 +412,7 @@ export class ExecutorService {
       transaction: serialized.toString("base64"),
       positionPubkey: positionKeypair.publicKey.toBase58(),
       positionAuthority: positionAuthority.toBase58(),
+      alreadyInitialized: false,
     };
   }
 
@@ -456,7 +515,7 @@ export class ExecutorService {
     const dlmmAccounts: AccountMeta[] = [
       { pubkey: positionPubkey, isSigner: false, isWritable: true },         // 0 position
       { pubkey: lbPair, isSigner: false, isWritable: true },                 // 1 lb_pair
-      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: true },        // 2 bitmap_ext = None
+      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },       // 2 bitmap_ext = None (sentinel)
       { pubkey: pdaAtaX, isSigner: false, isWritable: true },                // 3 user_token_x (PDA-owned)
       { pubkey: pdaAtaY, isSigner: false, isWritable: true },                // 4 user_token_y (PDA-owned)
       { pubkey: reserveX, isSigner: false, isWritable: true },               // 5 reserve_x
@@ -616,7 +675,7 @@ export class ExecutorService {
     const dlmmAccounts: AccountMeta[] = [
       { pubkey: positionPubkey, isSigner: false, isWritable: true },         // 0 position
       { pubkey: lbPair, isSigner: false, isWritable: true },                 // 1 lb_pair
-      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: true },        // 2 bitmap_ext = None
+      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },       // 2 bitmap_ext = None (sentinel)
       { pubkey: exitAtaX, isSigner: false, isWritable: true },               // 3 user_token_x (exit_recipient)
       { pubkey: exitAtaY, isSigner: false, isWritable: true },               // 4 user_token_y (exit_recipient)
       { pubkey: reserveX, isSigner: false, isWritable: true },               // 5 reserve_x
