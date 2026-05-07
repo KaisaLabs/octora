@@ -3,7 +3,9 @@ use anchor_lang::solana_program::instruction::AccountMeta;
 
 use crate::constants::POOL_AUTHORITY_SEED;
 use crate::cpi::dlmm::*;
-use crate::cpi::{require_spl_token_program, require_token_account_owner};
+use crate::cpi::{
+    require_spl_token_program, require_token_account_mint, require_token_account_owner,
+};
 use crate::errors::ExecutorError;
 use crate::state::{PoolAuthority, PoolRef};
 
@@ -19,8 +21,10 @@ pub struct DlmmClaimFees<'info> {
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
 
+    /// CHECK: validated in handler against stored PoolAuthority lb_pair.
     pub lb_pair: UncheckedAccount<'info>,
 
+    /// CHECK: validated in handler against canonical DLMM program ID.
     pub dlmm_program: UncheckedAccount<'info>,
 }
 
@@ -29,7 +33,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>) -> 
 
     let pa = &ctx.accounts.pool_authority;
     let remaining = ctx.remaining_accounts;
-    require!(remaining.len() >= 14, ExecutorError::AccountsTooShort);
+    require!(remaining.len() == 14, ExecutorError::AccountsTooShort);
 
     let (stored_lb_pair, stored_position) = match &pa.pool_ref {
         PoolRef::Dlmm { lb_pair, position } => (*lb_pair, *position),
@@ -48,6 +52,8 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>) -> 
     );
     require_token_account_owner(&remaining[7], &pa.exit_recipient)?;
     require_token_account_owner(&remaining[8], &pa.exit_recipient)?;
+    require_token_account_mint(&remaining[7], &remaining[11], &remaining[9].key())?;
+    require_token_account_mint(&remaining[8], &remaining[11], &remaining[10].key())?;
     require_spl_token_program(&remaining[11])?;
     require_dlmm_event_authority(&remaining[12])?;
     require_dlmm_program(&remaining[13])?;

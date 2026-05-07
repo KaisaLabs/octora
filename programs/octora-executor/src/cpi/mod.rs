@@ -21,7 +21,7 @@ pub fn require_spl_token_program(ai: &AccountInfo) -> Result<()> {
     let k = ai.key();
     require!(
         k == SPL_TOKEN_PROGRAM_ID || k == SPL_TOKEN_2022_PROGRAM_ID,
-        ExecutorError::InvalidTokenProgram,
+        ExecutorError::InvalidTokenProgram
     );
     Ok(())
 }
@@ -41,14 +41,10 @@ pub fn require_rent_sysvar(ai: &AccountInfo) -> Result<()> {
 }
 
 /// Validate SPL token account owner matches expected.
-/// Uses sized deserialization compatible with both SPL Token and Token-2022.
+/// Reads raw bytes at offset 32 (compatible with both SPL Token and Token-2022).
 pub fn require_token_account_owner(token_account: &AccountInfo, expected: &Pubkey) -> Result<()> {
     let data = token_account.try_borrow_data()?;
     require!(data.len() >= 165, ExecutorError::InvalidTokenAccount);
-
-    // owner is at bytes 32-64 in the SplTokenAccount layout (common for both
-    // SPL Token and Token-2022).  Read raw bytes to avoid Pack::unpack issues
-    // with extension accounts.
     let owner_bytes: [u8; 32] = data[32..64].try_into().unwrap();
     let owner = Pubkey::new_from_array(owner_bytes);
     require_keys_eq!(owner, *expected, ExecutorError::ExitRecipientMismatch);
@@ -70,4 +66,19 @@ pub fn invoke_signed_ix(
     signer_seeds: &[&[&[u8]]],
 ) -> Result<()> {
     invoke_signed(ix, account_infos, signer_seeds).map_err(Into::into)
+}
+
+/// Validate a token account's mint matches the expected mint.
+/// Token account layout: mint is at bytes 0-32.
+pub fn require_token_account_mint(
+    token_account: &AccountInfo,
+    _token_program: &AccountInfo,
+    expected_mint: &Pubkey,
+) -> Result<()> {
+    let data = token_account.try_borrow_data()?;
+    require!(data.len() >= 165, ExecutorError::InvalidTokenAccount);
+    let mint_bytes: [u8; 32] = data[0..32].try_into().unwrap();
+    let mint = Pubkey::new_from_array(mint_bytes);
+    require_keys_eq!(mint, *expected_mint, ExecutorError::InvalidTokenAccount);
+    Ok(())
 }

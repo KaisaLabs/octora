@@ -39,7 +39,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const IDL_PATH = join(__dirname, "..", "execution", "clients", "idl", "octora_executor.json");
 
-const POSITION_AUTHORITY_SEED = Buffer.from("position-authority");
+const POOL_AUTHORITY_SEED = Buffer.from("pool-authority");
 const DLMM_PROGRAM_ID = new PublicKey("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
 const DLMM_EVENT_AUTHORITY = new PublicKey("D1ZN9Wj1fRSUQfCjhvnu1hqDMT7hzjzBBpi12nVniYD6");
 // preset_parameter PDA at v2-style seeds with v1 layout — see the
@@ -281,7 +281,7 @@ export class ExecutorService {
   }): Promise<{ transaction: string; positionPubkey: string; positionAuthority: string }> {
     const positionKeypair = Keypair.generate();
     const [positionAuthority] = PublicKey.findProgramAddressSync(
-      [POSITION_AUTHORITY_SEED, args.stealth.toBuffer()],
+      [POOL_AUTHORITY_SEED, args.stealth.toBuffer()],
       this.programId,
     );
 
@@ -349,7 +349,7 @@ export class ExecutorService {
     const binArrayLower = new PublicKey(args.config.binArrayLower);
     const binArrayUpper = new PublicKey(args.config.binArrayUpper);
     const [positionAuthority] = PublicKey.findProgramAddressSync(
-      [POSITION_AUTHORITY_SEED, args.stealth.toBuffer()],
+      [POOL_AUTHORITY_SEED, args.stealth.toBuffer()],
       this.programId,
     );
 
@@ -441,7 +441,7 @@ export class ExecutorService {
     const binArrayLower = new PublicKey(args.config.binArrayLower);
     const binArrayUpper = new PublicKey(args.config.binArrayUpper);
     const [positionAuthority] = PublicKey.findProgramAddressSync(
-      [POSITION_AUTHORITY_SEED, args.stealth.toBuffer()],
+      [POOL_AUTHORITY_SEED, args.stealth.toBuffer()],
       this.programId,
     );
 
@@ -504,7 +504,7 @@ export class ExecutorService {
     exitRecipient: string;
   } | null> {
     const [pda] = PublicKey.findProgramAddressSync(
-      [POSITION_AUTHORITY_SEED, stealth.toBuffer()],
+      [POOL_AUTHORITY_SEED, stealth.toBuffer()],
       this.programId,
     );
     const acct = await (this.program.account as any).positionAuthority.fetchNullable(pda);

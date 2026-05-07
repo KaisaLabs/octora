@@ -8,46 +8,24 @@
   },
   "instructions": [
     {
-      "name": "add_liquidity",
-      "docs": [
-        "Add liquidity to a previously-initialised DLMM position. The stealth",
-        "wallet authorises; the PDA signs the inner Meteora CPI as position",
-        "owner.",
-        "",
-        "`liquidity_params` is the Borsh-encoded `LiquidityParameterByStrategy`",
-        "blob expected by DLMM. We forward bytes verbatim to stay decoupled",
-        "from Meteora's strategy enum."
-      ],
+      "name": "damm_claim_fees",
       "discriminator": [
-        181,
-        157,
-        89,
-        67,
-        143,
-        182,
-        52,
-        72
+        114,
+        41,
+        120,
+        208,
+        35,
+        117,
+        34,
+        212
       ],
       "accounts": [
         {
           "name": "stealth",
-          "docs": [
-            "Stealth wallet authorising the deposit. Outer signer only."
-          ],
           "signer": true
         },
         {
-          "name": "position_authority",
-          "docs": [
-            "PDA that owns the Meteora position. Must already exist (created via",
-            "`init_position`).",
-            "",
-            "`seeds` re-derives the address from the stealth signer, so the only",
-            "way to land on this PDA is to sign with the wallet it was created",
-            "for. The explicit `constraint` is belt-and-braces: even if a future",
-            "change adds an index byte to the seeds, the on-account",
-            "`stealth_pubkey` field still has to match."
-          ],
+          "name": "pool_authority",
           "pda": {
             "seeds": [
               {
@@ -55,12 +33,8 @@
                 "value": [
                   112,
                   111,
-                  115,
-                  105,
-                  116,
-                  105,
                   111,
-                  110,
+                  108,
                   45,
                   97,
                   117,
@@ -76,15 +50,307 @@
               {
                 "kind": "account",
                 "path": "stealth"
+              },
+              {
+                "kind": "account",
+                "path": "pool_authority.pool_ref",
+                "account": "PoolAuthority"
               }
             ]
           }
         },
         {
-          "name": "dlmm_program",
+          "name": "pool"
+        },
+        {
+          "name": "damm_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "max_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "damm_deposit",
+      "discriminator": [
+        211,
+        243,
+        140,
+        9,
+        229,
+        228,
+        174,
+        0
+      ],
+      "accounts": [
+        {
+          "name": "stealth",
+          "signer": true
+        },
+        {
+          "name": "pool_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stealth"
+              },
+              {
+                "kind": "account",
+                "path": "pool_authority.pool_ref",
+                "account": "PoolAuthority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "damm_program"
+        },
+        {
+          "name": "pool"
+        }
+      ],
+      "args": [
+        {
+          "name": "pool_token_amount",
+          "type": "u64"
+        },
+        {
+          "name": "max_sol",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "damm_init",
+      "discriminator": [
+        213,
+        25,
+        65,
+        229,
+        98,
+        220,
+        66,
+        143
+      ],
+      "accounts": [
+        {
+          "name": "stealth",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool_authority",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stealth"
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
           "docs": [
-            "The DLMM program — verified by program ID."
+            "DAMM pool account"
           ]
+        },
+        {
+          "name": "lp_mint",
+          "docs": [
+            "LP mint for this DAMM pool"
+          ]
+        },
+        {
+          "name": "damm_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "exit_recipient",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "damm_withdraw",
+      "discriminator": [
+        150,
+        57,
+        252,
+        139,
+        232,
+        99,
+        118,
+        164
+      ],
+      "accounts": [
+        {
+          "name": "stealth",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool_authority",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stealth"
+              },
+              {
+                "kind": "account",
+                "path": "pool_authority.pool_ref",
+                "account": "PoolAuthority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "damm_program"
+        },
+        {
+          "name": "pool"
+        }
+      ],
+      "args": [
+        {
+          "name": "pool_token_amount",
+          "type": "u64"
+        },
+        {
+          "name": "min_sol_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "dlmm_add_liquidity",
+      "discriminator": [
+        107,
+        95,
+        217,
+        93,
+        54,
+        116,
+        29,
+        166
+      ],
+      "accounts": [
+        {
+          "name": "stealth",
+          "signer": true
+        },
+        {
+          "name": "pool_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stealth"
+              },
+              {
+                "kind": "account",
+                "path": "lb_pair"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dlmm_program"
+        },
+        {
+          "name": "lb_pair"
         }
       ],
       "args": [
@@ -95,35 +361,24 @@
       ]
     },
     {
-      "name": "claim_fees",
-      "docs": [
-        "Claim accrued swap fees on the position into ATAs whose owner is",
-        "pinned to `PositionAuthority.exit_recipient`."
-      ],
+      "name": "dlmm_claim_fees",
       "discriminator": [
-        82,
-        251,
-        233,
-        156,
-        12,
-        52,
-        184,
-        202
+        243,
+        185,
+        58,
+        187,
+        208,
+        145,
+        170,
+        154
       ],
       "accounts": [
         {
           "name": "stealth",
-          "docs": [
-            "Stealth wallet authorising the claim. Outer signer only."
-          ],
           "signer": true
         },
         {
-          "name": "position_authority",
-          "docs": [
-            "PDA that owns the Meteora position. Position + lb_pair + exit_recipient",
-            "are read from here and enforced against the forwarded accounts."
-          ],
+          "name": "pool_authority",
           "pda": {
             "seeds": [
               {
@@ -131,12 +386,8 @@
                 "value": [
                   112,
                   111,
-                  115,
-                  105,
-                  116,
-                  105,
                   111,
-                  110,
+                  108,
                   45,
                   97,
                   117,
@@ -152,9 +403,16 @@
               {
                 "kind": "account",
                 "path": "stealth"
+              },
+              {
+                "kind": "account",
+                "path": "lb_pair"
               }
             ]
           }
+        },
+        {
+          "name": "lb_pair"
         },
         {
           "name": "dlmm_program"
@@ -163,37 +421,25 @@
       "args": []
     },
     {
-      "name": "init_position",
-      "docs": [
-        "Initialise a Meteora DLMM position owned by a `PositionAuthority` PDA",
-        "derived from the stealth wallet. Forwards account list to DLMM's",
-        "`initialize_position` ix."
-      ],
+      "name": "dlmm_init_position",
       "discriminator": [
-        197,
-        20,
-        10,
-        1,
-        97,
-        160,
-        177,
-        91
+        83,
+        27,
+        224,
+        110,
+        12,
+        71,
+        127,
+        19
       ],
       "accounts": [
         {
           "name": "stealth",
-          "docs": [
-            "The stealth wallet that authorises this position. It is the outer",
-            "signer; it does NOT sign the inner DLMM CPI — the PDA does."
-          ],
           "writable": true,
           "signer": true
         },
         {
-          "name": "position_authority",
-          "docs": [
-            "PDA created here. Owns the Meteora position from DLMM's perspective."
-          ],
+          "name": "pool_authority",
           "writable": true,
           "pda": {
             "seeds": [
@@ -202,12 +448,8 @@
                 "value": [
                   112,
                   111,
-                  115,
-                  105,
-                  116,
-                  105,
                   111,
-                  110,
+                  108,
                   45,
                   97,
                   117,
@@ -223,15 +465,19 @@
               {
                 "kind": "account",
                 "path": "stealth"
+              },
+              {
+                "kind": "account",
+                "path": "lb_pair"
               }
             ]
           }
         },
         {
-          "name": "dlmm_program",
-          "docs": [
-            "The Meteora DLMM program. Verified against `DLMM_PROGRAM_ID`."
-          ]
+          "name": "lb_pair"
+        },
+        {
+          "name": "dlmm_program"
         },
         {
           "name": "system_program",
@@ -254,35 +500,25 @@
       ]
     },
     {
-      "name": "withdraw_close",
-      "docs": [
-        "Remove `bps_to_remove` basis points of liquidity from the inclusive",
-        "bin range `[from_bin_id, to_bin_id]` and close the position. Tokens",
-        "flow to ATAs constrained to `exit_recipient`; the position rent",
-        "rebate goes to the same address."
-      ],
+      "name": "dlmm_withdraw_close",
       "discriminator": [
-        84,
-        247,
-        1,
+        231,
         99,
-        135,
-        143,
-        165,
-        105
+        171,
+        101,
+        63,
+        194,
+        27,
+        212
       ],
       "accounts": [
         {
           "name": "stealth",
-          "docs": [
-            "Mut so Anchor can rebate the PositionAuthority's rent here when we",
-            "`close = stealth` it below."
-          ],
           "writable": true,
           "signer": true
         },
         {
-          "name": "position_authority",
+          "name": "pool_authority",
           "writable": true,
           "pda": {
             "seeds": [
@@ -291,12 +527,8 @@
                 "value": [
                   112,
                   111,
-                  115,
-                  105,
-                  116,
-                  105,
                   111,
-                  110,
+                  108,
                   45,
                   97,
                   117,
@@ -312,9 +544,16 @@
               {
                 "kind": "account",
                 "path": "stealth"
+              },
+              {
+                "kind": "account",
+                "path": "lb_pair"
               }
             ]
           }
+        },
+        {
+          "name": "lb_pair"
         },
         {
           "name": "dlmm_program"
@@ -338,16 +577,16 @@
   ],
   "accounts": [
     {
-      "name": "PositionAuthority",
+      "name": "PoolAuthority",
       "discriminator": [
-        14,
-        241,
-        184,
-        186,
-        212,
-        213,
-        96,
-        192
+        3,
+        210,
+        229,
+        243,
+        75,
+        92,
+        62,
+        254
       ]
     }
   ],
@@ -359,80 +598,187 @@
     },
     {
       "code": 6001,
-      "name": "PositionMismatch",
-      "msg": "Position account passed in does not match PositionAuthority.position"
+      "name": "DammProgramMismatch",
+      "msg": "DAMM program account does not match the configured program ID"
     },
     {
       "code": 6002,
-      "name": "LbPairMismatch",
-      "msg": "LB pair account passed in does not match PositionAuthority.lb_pair"
+      "name": "PositionMismatch",
+      "msg": "Position account passed in does not match PoolAuthority position ref"
     },
     {
       "code": 6003,
-      "name": "StealthMismatch",
-      "msg": "Stealth signer does not match PositionAuthority.stealth_pubkey"
+      "name": "LbPairMismatch",
+      "msg": "LB pair account passed in does not match PoolAuthority pool ref"
     },
     {
       "code": 6004,
-      "name": "ExitRecipientMismatch",
-      "msg": "Token account owner does not match PositionAuthority.exit_recipient"
+      "name": "DammPoolMismatch",
+      "msg": "DAMM pool account passed in does not match PoolAuthority pool ref"
     },
     {
       "code": 6005,
+      "name": "StealthMismatch",
+      "msg": "Stealth signer does not match PoolAuthority.stealth_pubkey"
+    },
+    {
+      "code": 6006,
+      "name": "ExitRecipientMismatch",
+      "msg": "Token account owner does not match PoolAuthority.exit_recipient"
+    },
+    {
+      "code": 6007,
       "name": "InvalidTokenAccount",
       "msg": "Failed to deserialize SPL token account"
+    },
+    {
+      "code": 6008,
+      "name": "InvalidTokenProgram",
+      "msg": "Forwarded token_program is not SPL Token or Token-2022"
+    },
+    {
+      "code": 6009,
+      "name": "InvalidSysAccount",
+      "msg": "Forwarded system_program / rent sysvar mismatch"
+    },
+    {
+      "code": 6010,
+      "name": "DlmmEventAuthorityMismatch",
+      "msg": "DLMM event_authority PDA mismatch — possible IDL drift"
+    },
+    {
+      "code": 6011,
+      "name": "DammEventAuthorityMismatch",
+      "msg": "DAMM event_authority PDA mismatch — possible IDL drift"
+    },
+    {
+      "code": 6012,
+      "name": "ArgOutOfRange",
+      "msg": "Argument out of range (bin id ordering or basis points)"
+    },
+    {
+      "code": 6013,
+      "name": "AccountsTooShort",
+      "msg": "Forwarded remaining_accounts list is too short for this instruction"
+    },
+    {
+      "code": 6014,
+      "name": "MissingPositionSigner",
+      "msg": "DLMM position account must sign initialization"
+    },
+    {
+      "code": 6015,
+      "name": "InvalidPoolRefType",
+      "msg": "PoolAuthority pool ref type does not match instruction expected type"
+    },
+    {
+      "code": 6016,
+      "name": "DammLockEscrowMismatch",
+      "msg": "DAMM lock_escrow account does not match the derived PDA"
+    },
+    {
+      "code": 6017,
+      "name": "DammPoolStoredMismatch",
+      "msg": "DAMM pool account passed does not match the one stored in PoolAuthority"
+    },
+    {
+      "code": 6018,
+      "name": "DammVaultMismatch",
+      "msg": "DAMM vault account validation failed"
+    },
+    {
+      "code": 6019,
+      "name": "DammLpMintMismatch",
+      "msg": "DAMM lp_mint account does not match the one stored in PoolAuthority"
+    },
+    {
+      "code": 6020,
+      "name": "DammSolOwnerMismatch",
+      "msg": "DAMM owner account does not match the PoolAuthority PDA"
+    },
+    {
+      "code": 6021,
+      "name": "LockEscrowMismatch",
+      "msg": "Lock escrow account does not match PoolAuthority lock_escrow"
+    },
+    {
+      "code": 6022,
+      "name": "TokenMintMismatch",
+      "msg": "SPL token account mint does not match the expected mint"
     }
   ],
   "types": [
     {
-      "name": "PositionAuthority",
+      "name": "PoolAuthority",
       "docs": [
-        "PDA that owns a Meteora DLMM position on behalf of a stealth wallet.",
+        "PDA that owns a pool position on behalf of a stealth wallet.",
         "",
-        "The PDA is the position's `owner` field as far as Meteora is concerned;",
-        "only this program can sign for it, and only when the outer instruction",
-        "is signed by the matching `stealth_pubkey`."
+        "Works for both DLMM and DAMM pools. The PDA is derived from",
+        "[POOL_AUTHORITY_SEED, stealth_pubkey, pool_pubkey]."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "stealth_pubkey",
-            "docs": [
-              "Stealth wallet that authorises actions against this position."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "lb_pair",
-            "docs": [
-              "Meteora `LbPair` this position is opened against."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "position",
-            "docs": [
-              "Meteora `Position` account owned by this PDA."
-            ],
             "type": "pubkey"
           },
           {
             "name": "exit_recipient",
-            "docs": [
-              "Where claim/withdraw outflows are allowed to land. Set at init and",
-              "immutable afterwards: every `claim_fees` and `withdraw_close` checks",
-              "that the destination ATAs (and rent receiver) resolve to this owner,",
-              "so a leaked stealth key still can't redirect funds elsewhere."
-            ],
             "type": "pubkey"
           },
           {
+            "name": "pool_ref",
+            "type": {
+              "defined": {
+                "name": "PoolRef"
+              }
+            }
+          },
+          {
             "name": "bump",
-            "docs": [
-              "PDA bump for `[POSITION_AUTHORITY_SEED, stealth_pubkey]`."
-            ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PoolRef",
+      "docs": [
+        "Identifies which pool type a PoolAuthority references."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Dlmm",
+            "fields": [
+              {
+                "name": "lb_pair",
+                "type": "pubkey"
+              },
+              {
+                "name": "position",
+                "type": "pubkey"
+              }
+            ]
+          },
+          {
+            "name": "Damm",
+            "fields": [
+              {
+                "name": "pool",
+                "type": "pubkey"
+              },
+              {
+                "name": "lp_mint",
+                "type": "pubkey"
+              },
+              {
+                "name": "lock_escrow",
+                "type": "pubkey"
+              }
+            ]
           }
         ]
       }

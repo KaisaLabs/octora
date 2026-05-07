@@ -44,6 +44,9 @@ pub enum ExecutorError {
     #[msg("Forwarded remaining_accounts list is too short for this instruction")]
     AccountsTooShort,
 
+    #[msg("DLMM position account must sign initialization")]
+    MissingPositionSigner,
+
     #[msg("PoolAuthority pool ref type does not match instruction expected type")]
     InvalidPoolRefType,
 
@@ -64,4 +67,7 @@ pub enum ExecutorError {
 
     #[msg("Lock escrow account does not match PoolAuthority lock_escrow")]
     LockEscrowMismatch,
+
+    #[msg("SPL token account mint does not match the expected mint")]
+    TokenMintMismatch,
 }

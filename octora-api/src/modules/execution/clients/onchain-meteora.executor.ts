@@ -6,61 +6,95 @@ import type {
   WithdrawCloseInput,
 } from "./meteora-executor.js";
 import type { OctoraExecutorClient } from "./octora-executor.client.js";
+import type { AccountMeta, Keypair, PublicKey } from "@solana/web3.js";
 
 /**
- * Bridges the existing `MeteoraExecutor` interface to the on-chain
- * `octora-executor` program.
- *
- * Why the bridge currently throws on every method:
- *   The `MeteoraExecutor` interface only carries `podId`, `positionId`,
- *   and `amountSol` — none of the rich state the on-chain executor
- *   needs (LB pair pubkey, position keypair, stealth keypair, DLMM bin
- *   arrays, exit_recipient, etc.). Wiring the on-chain calls in for real
- *   is Phase 4 of the executor rollout: the position repository must
- *   start storing per-position DLMM context, and the position-service
- *   needs a session-scoped accessor for the (encrypted) stealth keypair
- *   to sign the outer ix.
- *
- *   Until then, enabling `OCTORA_USE_ONCHAIN_EXECUTOR=true` flips the
- *   adapter to this class and any LP-side method call surfaces a clear
- *   error rather than silently returning a fake receipt — useful in
- *   staging to make sure no caller is depending on mock behaviour.
+ * Rich context the on-chain executor needs for each operation.
+ * Populated from the position record at call time.
  */
+export interface OnchainPositionContext {
+  stealthKeypair: Keypair;
+  positionKeypair: Keypair;
+  lbPair: PublicKey;
+  exitRecipient: PublicKey;
+  /** DLMM `add_liquidity_by_strategy` remaining_accounts (16 entries) */
+  dlmmAddLiquidityAccounts: AccountMeta[];
+  /** DLMM `claim_fee` remaining_accounts (14 entries) */
+  dlmmClaimAccounts: AccountMeta[];
+  /** DLMM remove+close union remaining_accounts (17 entries) */
+  dlmmWithdrawCloseAccounts: AccountMeta[];
+  /** Borsh-encoded liquidity params for add_liquidity */
+  liquidityParams: Buffer;
+  lowerBinId: number;
+  upperBinId: number;
+  positionWidth: number;
+}
+
 export class OnchainMeteoraExecutor implements MeteoraExecutor {
   constructor(private readonly client: OctoraExecutorClient) {}
 
-  async addLiquidity(input: AddLiquidityInput): Promise<MeteoraExecutionReceipt> {
-    throw new OnchainExecutorNotWiredError("addLiquidity", input.podId);
+  async addLiquidity(
+    input: AddLiquidityInput,
+    ctx: OnchainPositionContext,
+  ): Promise<MeteoraExecutionReceipt> {
+    const ix = await this.client.buildAddLiquidityIx({
+      stealth: ctx.stealthKeypair.publicKey,
+      lbPair: ctx.lbPair,
+      dlmmRemainingAccounts: ctx.dlmmAddLiquidityAccounts,
+      liquidityParams: ctx.liquidityParams,
+    });
+
+    const sig = await this.client.sendIx(ix, [
+      ctx.stealthKeypair,
+    ], { computeUnits: 1_400_000 });
+
+    return { signature: sig, success: true };
   }
 
-  async claim(input: ClaimInput): Promise<MeteoraExecutionReceipt> {
-    throw new OnchainExecutorNotWiredError("claim", input.podId);
+  async claim(
+    input: ClaimInput,
+    ctx: OnchainPositionContext,
+  ): Promise<MeteoraExecutionReceipt> {
+    const ix = await this.client.buildClaimFeesIx({
+      stealth: ctx.stealthKeypair.publicKey,
+      lbPair: ctx.lbPair,
+      dlmmRemainingAccounts: ctx.dlmmClaimAccounts,
+    });
+
+    const sig = await this.client.sendIx(ix, [
+      ctx.stealthKeypair,
+    ], { computeUnits: 600_000 });
+
+    return { signature: sig, success: true };
   }
 
-  async withdrawClose(input: WithdrawCloseInput): Promise<MeteoraExecutionReceipt> {
-    throw new OnchainExecutorNotWiredError("withdrawClose", input.podId);
+  async withdrawClose(
+    input: WithdrawCloseInput,
+    ctx: OnchainPositionContext,
+  ): Promise<MeteoraExecutionReceipt> {
+    const ix = await this.client.buildWithdrawCloseIx({
+      stealth: ctx.stealthKeypair.publicKey,
+      lbPair: ctx.lbPair,
+      dlmmRemainingAccounts: ctx.dlmmWithdrawCloseAccounts,
+      fromBinId: ctx.lowerBinId,
+      toBinId: ctx.upperBinId,
+      bpsToRemove: 10000, // 100%
+    });
+
+    const sig = await this.client.sendIx(ix, [
+      ctx.stealthKeypair,
+    ], { computeUnits: 1_400_000 });
+
+    return { signature: sig, success: true };
   }
 
-  /** Underlying low-level client. Use this directly until the bridge is fleshed out. */
   get raw(): OctoraExecutorClient {
     return this.client;
   }
 }
 
-export class OnchainExecutorNotWiredError extends Error {
-  constructor(method: string, podId: string) {
-    super(
-      `OnchainMeteoraExecutor.${method} is not wired yet (pod=${podId}). ` +
-        `The on-chain executor needs LB pair + position keypair + stealth signer ` +
-        `that the position service does not currently surface. Use the low-level ` +
-        `OctoraExecutorClient builders for tests, or wait for Phase 4 plumbing.`,
-    );
-    this.name = "OnchainExecutorNotWiredError";
-  }
-}
-
 export function createOnchainMeteoraExecutor(
   client: OctoraExecutorClient,
-): MeteoraExecutor {
+): OnchainMeteoraExecutor {
   return new OnchainMeteoraExecutor(client);
 }
