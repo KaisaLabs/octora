@@ -36,6 +36,7 @@ export function createMixerClient(config: RelayerConfig): MixerClient {
 
   const idl = JSON.parse(readFileSync(IDL_PATH, "utf-8"));
   const programId = new PublicKey(config.mixerProgramId);
+  idl.address = programId.toBase58();
   const program = new Program(idl, provider);
 
   return { program, provider, hotWallet, programId };

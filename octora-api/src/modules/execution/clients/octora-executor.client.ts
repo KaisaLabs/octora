@@ -81,6 +81,7 @@ export class OctoraExecutorClient {
       commitment: "confirmed",
     });
     const idl = opts.idl ?? loadDefaultIdl();
+    (idl as { address: string }).address = opts.programId.toBase58();
     this.program = new Program(idl as any, provider);
     this.programId = opts.programId;
     this.provider = provider;

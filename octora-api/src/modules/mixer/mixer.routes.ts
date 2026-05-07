@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { PublicKey } from "@solana/web3.js";
 import { MixerService } from "./mixer.service.js";
 import { createMixerController } from "./mixer.controller.js";
 import { makeRateLimiter } from "./rate-limit.js";
@@ -30,12 +31,20 @@ const READ_LIMIT = { windowMs: 60_000, max: 120 };
  *
  * The browser-side equivalents live in octora-web/src/lib/mixer/.
  */
-export async function registerMixerRoutes(app: FastifyInstance) {
+export interface MixerRoutesOptions {
+  mixerProgramId: string;
+}
+
+export async function registerMixerRoutes(
+  app: FastifyInstance,
+  opts: MixerRoutesOptions,
+) {
   const tags = ["Mixer"];
 
   const mixer = new MixerService({
     rpcUrl: RPC_URL,
     denomination: DENOMINATION,
+    programId: new PublicKey(opts.mixerProgramId),
   });
 
   // Rehydrate the deposit cache from on-chain DepositEvent logs so a

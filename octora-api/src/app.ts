@@ -82,8 +82,11 @@ export async function createApp(options: CreateAppOptions = {}) {
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)
   app.register(registerWaitlistRoutes, { waitlistRepo: repos.waitlistRepo })
-  app.register(registerMixerRoutes)
-  app.register(registerExecutorRoutes)
+  app.register(registerMixerRoutes, { mixerProgramId: config.mixerProgramId })
+  app.register(registerExecutorRoutes, {
+    executorProgramId: config.executorProgramId,
+    relayerKeypairPath: config.executorRelayerKeypairPath,
+  })
   app.register(registerDepositsRoutes)
 
   return app

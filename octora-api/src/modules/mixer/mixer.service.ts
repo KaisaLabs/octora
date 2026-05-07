@@ -15,7 +15,6 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const IDL_PATH = join(__dirname, "..", "relayer", "idl", "octora_mixer.json");
 
-const PROGRAM_ID = new PublicKey("Ao58tvHj3FTwFMiGts5HAc5mastNE61Puiw4ER3rA3NJ");
 const MIXER_POOL_SEED = Buffer.from("mixer_pool");
 const COMMITMENT_SEED = Buffer.from("commitment");
 const NULLIFIER_SEED = Buffer.from("nullifier");
@@ -23,6 +22,7 @@ const NULLIFIER_SEED = Buffer.from("nullifier");
 export interface MixerServiceConfig {
   rpcUrl: string;
   denomination: bigint;
+  programId: PublicKey;
 }
 
 export interface PublicDepositRecord {
@@ -51,6 +51,7 @@ interface BuildDepositArgs {
 export class MixerService {
   private connection: Connection;
   private denomination: bigint;
+  private programId: PublicKey;
   private poolPDA: PublicKey;
   private program: Program;
 
@@ -63,12 +64,13 @@ export class MixerService {
   constructor(config: MixerServiceConfig) {
     this.connection = new Connection(config.rpcUrl, "confirmed");
     this.denomination = config.denomination;
+    this.programId = config.programId;
 
     const denomBuf = Buffer.alloc(8);
     denomBuf.writeBigUInt64LE(config.denomination);
     [this.poolPDA] = PublicKey.findProgramAddressSync(
       [MIXER_POOL_SEED, denomBuf],
-      PROGRAM_ID,
+      this.programId,
     );
 
     // Read-only provider — we never sign on the server.
@@ -76,6 +78,7 @@ export class MixerService {
     const wallet = new Wallet(dummyKeypair);
     const provider = new AnchorProvider(this.connection, wallet, { commitment: "confirmed" });
     const idl = JSON.parse(readFileSync(IDL_PATH, "utf-8"));
+    idl.address = this.programId.toBase58();
     this.program = new Program(idl, provider);
   }
 
@@ -97,7 +100,7 @@ export class MixerService {
 
     const [commitmentPDA] = PublicKey.findProgramAddressSync(
       [COMMITMENT_SEED, this.poolPDA.toBuffer(), commitmentBytes],
-      PROGRAM_ID,
+      this.programId,
     );
 
     const ix = await this.program.methods
@@ -262,7 +265,7 @@ export class MixerService {
 
     const [nullifierPDA] = PublicKey.findProgramAddressSync(
       [NULLIFIER_SEED, this.poolPDA.toBuffer(), nullifierHashBuf],
-      PROGRAM_ID,
+      this.programId,
     );
 
     const ix = await this.program.methods

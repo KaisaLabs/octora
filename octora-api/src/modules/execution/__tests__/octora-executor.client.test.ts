@@ -18,7 +18,7 @@ import {
   POOL_AUTHORITY_SEED,
 } from "../clients/octora-executor.client.js";
 
-const PROGRAM_ID = new PublicKey("86zj6EvHxMywP4Bw4EyZ2VcAjLm1pfGsc6ZjsZbrWwwc");
+const PROGRAM_ID = new PublicKey("4n47TYP2hQ2bwS8GiU3a1EVyF9mgeSbKWBvAVmUjaUtK");
 
 function anchorDiscriminator(name: string): Buffer {
   return createHash("sha256").update(`global:${name}`).digest().subarray(0, 8);

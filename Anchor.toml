@@ -5,12 +5,8 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-octora_executor = "86zj6EvHxMywP4Bw4EyZ2VcAjLm1pfGsc6ZjsZbrWwwc"
-octora_mixer = "Ao58tvHj3FTwFMiGts5HAc5mastNE61Puiw4ER3rA3NJ"
-
-[programs.localnet]
-octora_executor = "86zj6EvHxMywP4Bw4EyZ2VcAjLm1pfGsc6ZjsZbrWwwc"
-octora_mixer = "Ao58tvHj3FTwFMiGts5HAc5mastNE61Puiw4ER3rA3NJ"
+octora_executor = "4n47TYP2hQ2bwS8GiU3a1EVyF9mgeSbKWBvAVmUjaUtK"
+octora_mixer = "BHxT3jyWJ1mRLyMjywQoiSXBqo7YpTiGWC1oVr2Ppnzx"
 
 [registry]
 url = "https://api.apr.dev"

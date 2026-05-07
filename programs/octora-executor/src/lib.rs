@@ -8,7 +8,7 @@ pub mod state;
 
 use instructions::*;
 
-declare_id!("86zj6EvHxMywP4Bw4EyZ2VcAjLm1pfGsc6ZjsZbrWwwc");
+declare_id!("4n47TYP2hQ2bwS8GiU3a1EVyF9mgeSbKWBvAVmUjaUtK");
 
 #[program]
 pub mod octora_executor {
