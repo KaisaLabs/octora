@@ -154,7 +154,7 @@ export async function getPrices(mints: string[]): Promise<PriceMap> {
 
 export async function getPoolDetail(
   address: string,
-  network: 'mainnet' | 'devnet' = 'mainnet'
+  network: 'mainnet' | 'devnet' = 'devnet'
 ): Promise<PoolDetail> {
   const params = new URLSearchParams()
   params.set('network', network)

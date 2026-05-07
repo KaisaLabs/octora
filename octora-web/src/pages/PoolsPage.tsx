@@ -169,7 +169,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
   const searchQuery = useQuery({
     queryKey: ["pools", "search", debouncedQuery],
     queryFn: () =>
-      listPools({ network: "mainnet", search: debouncedQuery, pageSize: 50 }).then((s) =>
+      listPools({ network: "devnet", search: debouncedQuery, pageSize: 50 }).then((s) =>
         s.map(mapPoolSummary),
       ),
     enabled: debouncedQuery.length > 0,

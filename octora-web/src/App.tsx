@@ -39,7 +39,7 @@ function AppRoutes() {
     setLoading(true);
     setError(null);
 
-    listPools({ network: "mainnet", pageSize: 50 })
+    listPools({ network: "devnet", pageSize: 50 })
       .then((summaries) => {
         if (!cancelled) {
           setRawPools(summaries.map(mapPoolSummary));

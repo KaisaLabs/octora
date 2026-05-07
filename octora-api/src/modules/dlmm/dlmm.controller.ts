@@ -57,7 +57,7 @@ export async function listPoolsHandler(
   request: FastifyRequest<{ Querystring: ListPoolsQuery }>,
   reply: FastifyReply
 ) {
-  const { network = 'mainnet', search, page, pageSize, sortBy, filterBy } = request.query
+  const { network = 'devnet', search, page, pageSize, sortBy, filterBy } = request.query
   const result = await listPools(network, { search, page, pageSize, sortBy, filterBy })
   return reply.send(result)
 }
@@ -66,7 +66,7 @@ export async function getPoolHandler(
   request: FastifyRequest<{ Params: AddressParams; Querystring: NetworkQuery }>,
   reply: FastifyReply
 ) {
-  const pool = await getPool(request.params.address, request.query.network ?? 'mainnet')
+  const pool = await getPool(request.params.address, request.query.network ?? 'devnet')
   if (!pool) return reply.code(404).send({ message: 'Pool not found' })
   return reply.send(pool)
 }
@@ -75,7 +75,7 @@ export async function listGroupsHandler(
   request: FastifyRequest<{ Querystring: PaginationQuery }>,
   reply: FastifyReply
 ) {
-  const { network = 'mainnet', page, pageSize } = request.query
+  const { network = 'devnet', page, pageSize } = request.query
   const result = await listGroups(network, { page, pageSize })
   return reply.send(result)
 }
@@ -85,7 +85,7 @@ export async function getGroupHandler(
   reply: FastifyReply
 ) {
   try {
-    const { network = 'mainnet', page, pageSize } = request.query
+    const { network = 'devnet', page, pageSize } = request.query
     const result = await getGroup(request.params.mintPair, network, { page, pageSize })
     return reply.send(result)
   } catch (err) {
@@ -97,7 +97,7 @@ export async function getOhlcvHandler(
   request: FastifyRequest<{ Params: AddressParams; Querystring: TimeRangeQuery }>,
   reply: FastifyReply
 ) {
-  const { network = 'mainnet', startTime, endTime, resolution } = request.query
+  const { network = 'devnet', startTime, endTime, resolution } = request.query
   const candles = await getOhlcv(request.params.address, network, { startTime, endTime, resolution })
   return reply.send({ data: candles })
 }
@@ -106,7 +106,7 @@ export async function getVolumeHistoryHandler(
   request: FastifyRequest<{ Params: AddressParams; Querystring: TimeRangeQuery }>,
   reply: FastifyReply
 ) {
-  const { network = 'mainnet', startTime, endTime, resolution } = request.query
+  const { network = 'devnet', startTime, endTime, resolution } = request.query
   const buckets = await getVolumeHistory(request.params.address, network, { startTime, endTime, resolution })
   return reply.send({ data: buckets })
 }
@@ -116,7 +116,7 @@ export async function getPoolBinsHandler(
   reply: FastifyReply
 ) {
   try {
-    const { network = 'mainnet', count } = request.query
+    const { network = 'devnet', count } = request.query
     const result = await getPoolBins(request.params.address, network, { count })
     return reply.send(result)
   } catch (err) {
@@ -128,6 +128,6 @@ export async function getProtocolMetricsHandler(
   request: FastifyRequest<{ Querystring: NetworkQuery }>,
   reply: FastifyReply
 ) {
-  const metrics = await getProtocolMetrics(request.query.network ?? 'mainnet')
+  const metrics = await getProtocolMetrics(request.query.network ?? 'devnet')
   return reply.send(metrics)
 }

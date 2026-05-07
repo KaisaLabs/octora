@@ -22,7 +22,7 @@ export function usePoolBins(pool: Pool, count = 61): UsePoolBinsResult {
 
   const query = useQuery({
     queryKey: ["pool-bins", pool.address, count],
-    queryFn: () => getPoolBins(pool.address, { network: "mainnet", count }),
+    queryFn: () => getPoolBins(pool.address, { network: "devnet", count }),
     enabled: Boolean(pool.address),
     staleTime: 30_000,
     refetchOnWindowFocus: false,

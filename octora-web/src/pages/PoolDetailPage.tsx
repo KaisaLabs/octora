@@ -20,7 +20,7 @@ export function PoolDetailPage() {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["pool", address],
-    queryFn: () => getPoolDetail(address, "mainnet"),
+    queryFn: () => getPoolDetail(address, "devnet"),
     enabled: !!address,
     staleTime: 30_000,
   });

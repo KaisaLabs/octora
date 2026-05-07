@@ -5,7 +5,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-octora_executor = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+octora_executor = "86zj6EvHxMywP4Bw4EyZ2VcAjLm1pfGsc6ZjsZbrWwwc"
 octora_mixer = "Ao58tvHj3FTwFMiGts5HAc5mastNE61Puiw4ER3rA3NJ"
 
 [programs.localnet]
@@ -16,7 +16,7 @@ octora_mixer = "Ao58tvHj3FTwFMiGts5HAc5mastNE61Puiw4ER3rA3NJ"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
@@ -30,15 +30,3 @@ upgradeable = false
 [[test.genesis]]
 address = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo"
 program = "tests/fixtures/meteora_dlmm.so"
-
-# Mainnet state cloned at validator startup so init_position can land on a
-# real LB pair. Top SOL/USDC pair (`5rCf1…`) is small enough to clone fast and
-# active enough that its state stays a useful integration target.
-[test.validator]
-url = "https://api.mainnet-beta.solana.com"
-
-[[test.validator.clone]]
-address = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6"   # SOL/USDC LB pair
-
-[[test.validator.clone]]
-address = "D1ZN9Wj1fRSUQfCjhvnu1hqDMT7hzjzBBpi12nVniYD6"   # DLMM event_authority PDA
