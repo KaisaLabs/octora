@@ -64,7 +64,13 @@
     "feeBps": 25, // Trading fee in basis points (25 = 0.25%). NOTE: DLMM enforces valid (binStep,feeBps) presets — keep them paired.
     "initialPrice": 0.001, // Initial price in quote/base (e.g. 0.001 SOL per OCTT)
     "activationType": 1, // 0 - Slot | 1 - Timestamp
-    "activationPoint": 1779408000, // 2026-05-22T00:00:00Z. Pool must NOT be activated yet for dlmm-seed-liquidity-single-bin to work — keep this in the future until seeding is done. unix seconds (activationType=1) or slot number (activationType=0); null = activate immediately.
+    /* null = activate immediately so swaps work right after pool creation —
+     * required for end-to-end fee/claim testing. Trade-off: the
+     * `dlmm-seed-liquidity-single-bin` action only works on a NOT-YET-activated
+     * pool, so if you switch to that flow set this to a future unix-seconds
+     * (activationType=1) or future slot (activationType=0) until seeding is done.
+     */
+    "activationPoint": 1778224382,
     "priceRounding": "up", // Price calculation rounding direction for bin ID conversion
     "creatorPoolOnOffControl": true, // Pool creator permission to enable/disable trading for permissionless pools
     "hasAlphaVault": false // If true, the alpha vault will be created after the pool is created

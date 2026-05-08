@@ -41,6 +41,8 @@ export type DistributionShape = "spot" | "curve" | "bid-ask";
 
 export type PortfolioPosition = {
   id: string;
+  /** LB pair address — needed by the Claim/Withdraw lifecycle. */
+  poolAddress: string;
   poolName: string;
   protocol: string;
   deposited: string;

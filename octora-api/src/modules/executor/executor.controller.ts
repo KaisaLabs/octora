@@ -188,6 +188,41 @@ export function createExecutorController(executor: ExecutorService) {
       return reply.send({ pools: slim });
     },
 
+    /**
+     * GET /executor/position-state?lbPair=...&positionPubkey=...
+     *
+     * Returns on-chain Meteora DLMM position state (range, totals, fees)
+     * with USD conversions so the portfolio UI can render claimable/value
+     * from the chain instead of the deposit-time snapshot.
+     */
+    async positionState(
+      req: FastifyRequest<{ Querystring: { lbPair: string; positionPubkey: string } }>,
+      reply: FastifyReply,
+    ) {
+      if (!req.query.lbPair || !req.query.positionPubkey) {
+        return reply
+          .status(400)
+          .send({ error: "lbPair and positionPubkey query params are required" });
+      }
+      try {
+        const result = await executor.getPositionState({
+          lbPair: new PublicKey(req.query.lbPair),
+          positionPubkey: new PublicKey(req.query.positionPubkey),
+        });
+        if (!result) return reply.status(404).send({ error: "position not found" });
+        return reply.send(result);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(
+          "[/executor/position-state] failed:",
+          err instanceof Error ? err.stack : err,
+        );
+        return reply
+          .status(400)
+          .send({ error: err instanceof Error ? err.message : "position-state failed" });
+      }
+    },
+
     /** POST /executor/use-pool — body: { lbPair, width?, lowerBinId? } */
     async usePool(
       req: FastifyRequest<{

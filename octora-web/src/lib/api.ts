@@ -162,6 +162,46 @@ export async function getPrices(mints: string[]): Promise<PriceMap> {
   return (body?.data ?? {}) as PriceMap
 }
 
+export interface PositionStateView {
+  positionPubkey: string
+  lbPair: string
+  lowerBinId: number
+  upperBinId: number
+  activeBinId: number
+  tokenXMint: string
+  tokenYMint: string
+  decimalsX: number
+  decimalsY: number
+  feeXLamports: string
+  feeYLamports: string
+  totalXLamports: string
+  totalYLamports: string
+  feeUsd: number
+  valueUsd: number
+  priceXUsd: number
+  priceYUsd: number
+}
+
+/**
+ * Fetch on-chain Meteora DLMM position state for the portfolio. Returns
+ * `null` when the position has been closed (404 from the API).
+ */
+export async function getPositionState(args: {
+  lbPair: string
+  positionPubkey: string
+}): Promise<PositionStateView | null> {
+  const params = new URLSearchParams({
+    lbPair: args.lbPair,
+    positionPubkey: args.positionPubkey,
+  })
+  const res = await fetch(`${API_BASE}/executor/position-state?${params.toString()}`)
+  if (res.status === 404) return null
+  if (!res.ok) {
+    throw new Error(`Failed to fetch position state: ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function getPoolDetail(
   address: string,
   network: 'mainnet' | 'devnet' | 'localnet' = 'devnet'

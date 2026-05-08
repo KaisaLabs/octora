@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 
 import type { DistributionShape, Pool, PortfolioPosition } from "@/components/octora/types";
-import { getPoolBins, NETWORK } from "@/lib/api";
+import { getPoolBins, getPositionState, NETWORK, type PositionStateView } from "@/lib/api";
 import {
   listLocalPositions,
   POSITIONS_CHANGED_EVENT,
@@ -76,16 +76,43 @@ export function usePortfolioPositions(
     return map;
   }, [uniquePoolAddresses, binQueries]);
 
+  // Fan out one on-chain position-state query per stored position. This is
+  // what gives us real `value`, `feesEarned`, and `claimable` numbers
+  // instead of the deposit-time snapshot. 15s stale time so the portfolio
+  // refreshes at a reasonable cadence without hammering the RPC.
+  const stateQueries = useQueries({
+    queries: stored.map((s) => ({
+      queryKey: ["position-state", s.poolAddress, s.positionPubkey],
+      queryFn: () =>
+        getPositionState({
+          lbPair: s.poolAddress,
+          positionPubkey: s.positionPubkey,
+        }),
+      staleTime: 15_000,
+      refetchInterval: 30_000,
+      retry: 1,
+    })),
+  });
+
   return useMemo(
-    () => stored.map((s) => mapStoredToPortfolio(s, poolByAddress.get(s.poolAddress), activeBinByAddress.get(s.poolAddress))),
-    [stored, poolByAddress, activeBinByAddress],
+    () =>
+      stored.map((s, i) =>
+        mapStoredToPortfolio(
+          s,
+          poolByAddress.get(s.poolAddress),
+          activeBinByAddress.get(s.poolAddress),
+          stateQueries[i]?.data ?? null,
+        ),
+      ),
+    [stored, poolByAddress, activeBinByAddress, stateQueries],
   );
 }
 
 function mapStoredToPortfolio(
   s: StoredPosition,
   pool: Pool | undefined,
-  activeBinId: number | undefined,
+  binsActiveBinId: number | undefined,
+  state: PositionStateView | null,
 ): PortfolioPosition {
   const poolName = pool?.name ?? `${s.poolAddress.slice(0, 6)}…${s.poolAddress.slice(-4)}`;
   const protocol = pool?.protocol ?? "Meteora DLMM";
@@ -93,33 +120,45 @@ function mapStoredToPortfolio(
   const binStep = pool?.binStep;
   const depositedFmt = formatUsd(s.depositedUsd);
 
-  // Position is in range when the live active bin sits inside [lower, upper].
-  // Undefined while the bins query is in flight or the pool isn't in the list.
+  // Prefer on-chain reads when available — the stored snapshot decays
+  // the moment any swap or fee accrual lands on the position.
+  const lowerBinId = state?.lowerBinId ?? s.lowerBinId;
+  const upperBinId = state?.upperBinId ?? s.upperBinId;
+  const activeBinId = state?.activeBinId ?? binsActiveBinId;
+
   const inRange =
     activeBinId === undefined
       ? undefined
-      : activeBinId >= s.lowerBinId && activeBinId <= s.upperBinId;
+      : activeBinId >= lowerBinId && activeBinId <= upperBinId;
+
+  // Value/fees come from chain when the state query has resolved.
+  // Pre-resolve we fall back to the deposit snapshot for value (so the
+  // card isn't blank) and $0.00 for fees (truthful for fresh positions).
+  const valueFmt = state ? formatUsd(state.valueUsd) : depositedFmt;
+  const feesFmt = state ? formatUsd(state.feeUsd) : "$0.00";
+  const pnlAmount = state ? state.valueUsd + state.feeUsd - s.depositedUsd : 0;
+  const pnlDirection: PortfolioPosition["pnlDirection"] =
+    pnlAmount > 0.005 ? "up" : pnlAmount < -0.005 ? "down" : "flat";
 
   return {
     id: s.positionId,
+    poolAddress: s.poolAddress,
     poolName,
     protocol,
     deposited: depositedFmt,
-    // Until we read on-chain stealth-position state, value tracks the deposit.
-    // Fees / claimable / pnl are zero for fresh positions, so showing $0.00 is truthful.
-    value: depositedFmt,
-    feesEarned: "$0.00",
+    value: valueFmt,
+    feesEarned: feesFmt,
     apr,
     status: inRange === false ? "Out of range" : "Active",
-    rangeLowerBin: s.lowerBinId,
-    rangeUpperBin: s.upperBinId,
+    rangeLowerBin: lowerBinId,
+    rangeUpperBin: upperBinId,
     activeBinId,
     binStep,
     shape: s.shape as DistributionShape,
     inRange,
-    claimable: "$0.00",
-    pnl: "$0.00",
-    pnlDirection: "flat",
+    claimable: feesFmt,
+    pnl: state ? formatUsdSigned(pnlAmount) : "$0.00",
+    pnlDirection,
     openedAt: formatRelativeTime(s.ts),
   };
 }
@@ -132,6 +171,12 @@ function formatUsd(n: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+function formatUsdSigned(n: number): string {
+  if (!Number.isFinite(n)) return "$0.00";
+  const sign = n < 0 ? "-" : n > 0 ? "+" : "";
+  return `${sign}${formatUsd(Math.abs(n))}`;
 }
 
 function formatRelativeTime(ts: number): string {

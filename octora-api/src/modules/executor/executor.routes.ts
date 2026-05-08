@@ -43,6 +43,7 @@ export async function registerExecutorRoutes(
   app.get("/executor/pool-authority", { schema: { tags } }, controller.poolAuthority);
   app.get("/executor/devnet-pools", { schema: { tags } }, controller.devnetPools);
   app.post("/executor/use-pool", { schema: { tags } }, controller.usePool);
+  app.get("/executor/position-state", { schema: { tags } }, controller.positionState);
 }
 
 function loadKeypair(path: string): Keypair {

@@ -1,10 +1,13 @@
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import type { PortfolioPosition } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
 import { PositionCard } from "@/components/octora/lp/PositionCard";
 import { PnLCalendar } from "@/components/octora/lp/PnLCalendar";
 import { PortfolioStatsPanel } from "@/components/octora/lp/PortfolioStatsPanel";
 import { generateDailyPnL, summarizePnL } from "@/lib/pnl";
+import { useSolana } from "@/providers/SolanaProvider";
+import { runClaimFees } from "@/lib/privateLifecycle";
 
 interface PortfolioPageProps {
   positions: PortfolioPosition[];
@@ -20,6 +23,34 @@ const parseUsd = (v: string | undefined): number => {
 
 export function PortfolioPage({ positions }: PortfolioPageProps) {
   const [filter, setFilter] = useState<Filter>("all");
+  const { wallet } = useSolana();
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+
+  const handleClaim = async (position: PortfolioPosition) => {
+    if (!wallet.address) {
+      toast.error("Connect your wallet first.");
+      return;
+    }
+    if (claimingId) return;
+    setClaimingId(position.id);
+    const t = toast.loading("Claiming fees…");
+    try {
+      const res = await runClaimFees({
+        mainWalletAddress: wallet.address,
+        poolAddress: position.poolAddress,
+        lowerBinId: position.rangeLowerBin,
+        upperBinId: position.rangeUpperBin,
+      });
+      toast.success(`Claimed. Funds → ${shortenPk(res.exitRecipient)}`, {
+        id: t,
+        description: shortenPk(res.signature),
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Claim failed.", { id: t });
+    } finally {
+      setClaimingId(null);
+    }
+  };
 
   const totals = useMemo(() => {
     const value = positions.reduce((s, p) => s + parseUsd(p.value), 0);
@@ -124,13 +155,22 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
         ) : (
           <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {filtered.map((p) => (
-              <PositionCard key={p.id} position={p} />
+              <PositionCard
+                key={p.id}
+                position={p}
+                onClaim={() => handleClaim(p)}
+              />
             ))}
           </div>
         )}
       </section>
     </div>
   );
+}
+
+function shortenPk(pk: string): string {
+  if (pk.length <= 12) return pk;
+  return `${pk.slice(0, 6)}…${pk.slice(-4)}`;
 }
 
 function FilterChip({

@@ -45,6 +45,7 @@ import DLMM, {
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { getPrices } from "#modules/prices";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const IDL_PATH = join(__dirname, "..", "execution", "clients", "idl", "octora_executor.json");
@@ -846,6 +847,109 @@ export class ExecutorService {
     if (!dlmm) throw new Error("PoolAuthority is not a DLMM position.");
     return dlmm.position as PublicKey;
   }
+
+  /**
+   * Read on-chain Meteora DLMM position state for the portfolio UI.
+   *
+   * Returns raw amounts plus USD-denominated value/fees so the client can
+   * render `value`, `feesEarned`, and `claimable` from real chain state
+   * instead of relying on the deposit-time snapshot. Prices come from the
+   * existing Jupiter price service; decimals from the mint accounts.
+   *
+   * Returns `null` when the position account doesn't exist (e.g. closed).
+   */
+  async getPositionState(args: {
+    lbPair: PublicKey;
+    positionPubkey: PublicKey;
+  }): Promise<PositionStateView | null> {
+    const dlmm = await DLMM.create(this.connection, args.lbPair);
+    let lbPosition;
+    try {
+      lbPosition = await dlmm.getPosition(args.positionPubkey);
+    } catch {
+      // Closed or never-existed → treat as gone so the UI can drop it.
+      return null;
+    }
+
+    const data = lbPosition.positionData;
+    const tokenXMint = dlmm.lbPair.tokenXMint;
+    const tokenYMint = dlmm.lbPair.tokenYMint;
+
+    const [decimalsX, decimalsY] = await Promise.all([
+      getMintDecimals(this.connection, tokenXMint),
+      getMintDecimals(this.connection, tokenYMint),
+    ]);
+
+    const prices = await getPrices([tokenXMint.toBase58(), tokenYMint.toBase58()]).catch(
+      () => ({}) as Awaited<ReturnType<typeof getPrices>>,
+    );
+    const priceX = prices[tokenXMint.toBase58()]?.usdPrice ?? 0;
+    const priceY = prices[tokenYMint.toBase58()]?.usdPrice ?? 0;
+
+    const feeXRaw = BigInt(data.feeX.toString());
+    const feeYRaw = BigInt(data.feeY.toString());
+    const totalXRaw = BigInt(data.totalXAmount.split(".")[0]); // SDK returns string with optional decimal
+    const totalYRaw = BigInt(data.totalYAmount.split(".")[0]);
+
+    const feeUsdX = rawToUsd(feeXRaw, decimalsX, priceX);
+    const feeUsdY = rawToUsd(feeYRaw, decimalsY, priceY);
+    const valueUsdX = rawToUsd(totalXRaw, decimalsX, priceX);
+    const valueUsdY = rawToUsd(totalYRaw, decimalsY, priceY);
+
+    return {
+      positionPubkey: args.positionPubkey.toBase58(),
+      lbPair: args.lbPair.toBase58(),
+      lowerBinId: data.lowerBinId,
+      upperBinId: data.upperBinId,
+      activeBinId: dlmm.lbPair.activeId,
+      tokenXMint: tokenXMint.toBase58(),
+      tokenYMint: tokenYMint.toBase58(),
+      decimalsX,
+      decimalsY,
+      feeXLamports: feeXRaw.toString(),
+      feeYLamports: feeYRaw.toString(),
+      totalXLamports: totalXRaw.toString(),
+      totalYLamports: totalYRaw.toString(),
+      feeUsd: feeUsdX + feeUsdY,
+      valueUsd: valueUsdX + valueUsdY,
+      priceXUsd: priceX,
+      priceYUsd: priceY,
+    };
+  }
+}
+
+export interface PositionStateView {
+  positionPubkey: string;
+  lbPair: string;
+  lowerBinId: number;
+  upperBinId: number;
+  activeBinId: number;
+  tokenXMint: string;
+  tokenYMint: string;
+  decimalsX: number;
+  decimalsY: number;
+  feeXLamports: string;
+  feeYLamports: string;
+  totalXLamports: string;
+  totalYLamports: string;
+  feeUsd: number;
+  valueUsd: number;
+  priceXUsd: number;
+  priceYUsd: number;
+}
+
+async function getMintDecimals(connection: Connection, mint: PublicKey): Promise<number> {
+  const info = await connection.getAccountInfo(mint);
+  if (!info || info.data.length < 45) return 0;
+  // SPL Token mint layout: decimals at byte offset 44 (u8).
+  return info.data[44];
+}
+
+function rawToUsd(raw: bigint, decimals: number, priceUsd: number): number {
+  if (raw === 0n || priceUsd === 0) return 0;
+  // Lose precision past 1e15 via Number — fine for display USD numbers.
+  const divisor = 10 ** decimals;
+  return (Number(raw) / divisor) * priceUsd;
 }
 
 /**
