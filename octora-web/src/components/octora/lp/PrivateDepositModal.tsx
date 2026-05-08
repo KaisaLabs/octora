@@ -18,6 +18,8 @@ import {
   type DepositStepKey,
   type PrivateDepositResult,
 } from "@/lib/privateDeposit";
+import { addLocalPosition } from "@/lib/localPositions";
+import { NETWORK } from "@/lib/api";
 
 interface Props {
   open: boolean;
@@ -351,6 +353,28 @@ export function PrivateDepositModal({
       );
       setResult(res);
       setPhase("success");
+      // Record the deposit in the wallet's local index so the portfolio
+      // can render it. The chain doesn't link main wallet → stealth, so
+      // the browser is the only place that knows about this position.
+      try {
+        addLocalPosition(wallet.address, {
+          positionId: res.positionId,
+          poolAddress: effective.address,
+          positionPubkey: res.positionPubkey,
+          stealthPubkey: res.stealthPubkey,
+          fundedLamports: res.fundedLamports,
+          depositedUsd: depositUsd,
+          lowerBinId: effective.lowerBinId,
+          upperBinId: effective.upperBinId,
+          shape,
+          ts: Date.now(),
+          network: NETWORK,
+        });
+      } catch (err) {
+        // Non-fatal: portfolio just won't show this entry until next deposit.
+        // eslint-disable-next-line no-console
+        console.warn("[PrivateDepositModal] failed to persist position to local index:", err);
+      }
     } catch {
       setPhase("error");
     }

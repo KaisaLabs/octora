@@ -25,7 +25,9 @@ const IntegratedTestPage = lazy(() =>
 );
 import type { Pool } from "@/components/octora/types";
 import { listPools, mapPoolSummary, NETWORK } from "@/lib/api";
-import { portfolioActivity, portfolioPositions } from "@/data/octora";
+import { portfolioActivity } from "@/data/octora";
+import { usePortfolioPositions } from "@/hooks/usePortfolioPositions";
+import { useSolana } from "@/providers/SolanaProvider";
 
 const queryClient = new QueryClient();
 
@@ -62,6 +64,8 @@ function AppRoutes() {
   }, []);
 
   const pools = useMemo(() => rawPools, [rawPools]);
+  const { wallet } = useSolana();
+  const portfolioPositions = usePortfolioPositions(wallet.address, pools);
 
   return (
     <Routes>

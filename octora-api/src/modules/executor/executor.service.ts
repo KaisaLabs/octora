@@ -247,6 +247,12 @@ export class ExecutorService {
     // changing the liquidity footprint — but the extension must go in the
     // direction *away* from the active bin, otherwise we cross active and
     // break the single-sided invariant enforced by `planSingleSidedSol`.
+    // Meteora DLMM: position width must be in [1, MAX_BIN_PER_POSITION].
+    // MAX is 70 (one bin array). Our extension adds 1 bin in the neighbour
+    // array, so we must trim the original side by 1 in the worst case
+    // (when the user's range already fills its bin array end-to-end) to
+    // stay within the cap.
+    const MAX_WIDTH = 70;
     if (lowerArrayIdx.eq(upperArrayIdx)) {
       const aboveActive = lowerBinId > activeBin;
       const belowActive = upperBinId < activeBin;
@@ -254,16 +260,28 @@ export class ExecutorService {
         // Y-side single-sided (SOL on Y, all bins below active): extend
         // lowerBinId down into the previous array.
         lowerBinId = lowerArrayIdx.toNumber() * 70 - 1;
+        if (upperBinId - lowerBinId + 1 > MAX_WIDTH) {
+          upperBinId = lowerBinId + MAX_WIDTH - 1;
+        }
         lowerArrayIdx = binIdToBinArrayIndex(new BN(lowerBinId));
+        upperArrayIdx = binIdToBinArrayIndex(new BN(upperBinId));
       } else if (aboveActive) {
         // X-side single-sided (SOL on X, all bins above active): extend
         // upperBinId up into the next array.
         upperBinId = upperArrayIdx.add(new BN(1)).toNumber() * 70;
+        if (upperBinId - lowerBinId + 1 > MAX_WIDTH) {
+          lowerBinId = upperBinId - MAX_WIDTH + 1;
+        }
+        lowerArrayIdx = binIdToBinArrayIndex(new BN(lowerBinId));
         upperArrayIdx = binIdToBinArrayIndex(new BN(upperBinId));
       } else {
         // Straddles active — extension direction doesn't matter for the
         // single-sided check; widen upward by convention.
         upperBinId = upperArrayIdx.add(new BN(1)).toNumber() * 70;
+        if (upperBinId - lowerBinId + 1 > MAX_WIDTH) {
+          lowerBinId = upperBinId - MAX_WIDTH + 1;
+        }
+        lowerArrayIdx = binIdToBinArrayIndex(new BN(lowerBinId));
         upperArrayIdx = binIdToBinArrayIndex(new BN(upperBinId));
       }
     }

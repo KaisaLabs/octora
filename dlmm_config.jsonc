@@ -1,0 +1,125 @@
+{
+  /* rpcUrl is required. You can switch between mainnet, devnet and localnet or use your own RPC URL. */
+  "rpcUrl": "https://api.devnet.solana.com", // mainnet: https://api.mainnet-beta.solana.com | devnet: https://api.devnet.solana.com | localnet: http://localhost:8899
+
+  /* dryRun is required. If true, transactions will be simulated and not executed. If false, transactions will be executed. */
+  "dryRun": false, // Set to false only after you understand what will happen
+
+  /* keypairFilePath is required and will be the payer + signer for all transactions */
+  "keypairFilePath": "./keypair.json",
+
+  /* computeUnitPriceMicroLamports is required and can be adjusted to fit your needs */
+  "computeUnitPriceMicroLamports": 100000,
+
+  /* quoteMint is required for the following actions:
+   * 1. dlmm-create-pool
+   * 2. dlmm-seed-liquidity-lfg
+   * 3. dlmm-seed-liquidity-single-bin
+   * 4. dlmm-set-pool-status
+   * SOL: So11111111111111111111111111111111111111112 | USDC: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v | any other token address
+   */
+  "quoteMint": "So11111111111111111111111111111111111111112",
+
+  /* If you have a baseMint already created, you can specify it in the cli command via --baseMint flag. If you don't have a baseMint, you can create a new one using createBaseToken.
+   * Either use --baseMint flag or createBaseToken, but not both.
+   */
+  "createBaseToken": {
+    "supply": 1000000000, // total amount of base token to be minted
+    "decimals": 6, // decimals of the base token
+    // "tokenMintKeypairFilePath": "./mint-keypair.json", // path to token mint keypair if you have a specific keypair for the token mint. If not provided, a new keypair will be generated.
+    "name": "Octora Test Token", // token name
+    "symbol": "OCTT", // token symbol
+    "authorities": {
+      "mint": "H8HWuYQzwGqh6UpuhFTT27UnJEDc7bLUiL4FyLiu9hfr", // token mint authority address. <PublicKey | null>
+      "freeze": null, // token freeze authority address. <PublicKey | null>
+      "update": "H8HWuYQzwGqh6UpuhFTT27UnJEDc7bLUiL4FyLiu9hfr" // token update authority address. <PublicKey | null>
+    },
+    /* Optional Metaplex Token Metadata Properties
+     * Read more about the properties here: https://developers.metaplex.com/token-metadata
+     */
+    "sellerFeeBasisPoints": 0, // Royalty fee in basis points (0-10000)
+    "creators": null, // Array of creator objects of the token (optional)
+    "collection": null, // Collection info (optional)
+    "uses": null, // Usage restrictions (optional)
+    "metadata": {
+      /* On localnet, prefer providing an existing metadata `uri` to skip Irys upload (Irys still works
+       * but adds an external dependency you don't need for integration tests). Swap to the image/description
+       * block below if you want a fresh upload.
+       */
+      "uri": "https://gateway.irys.xyz/placeholder-octora-test-token-metadata"
+
+      // "image": "./data/image/test-token.jpg", // this can be a URL of the image address (e.g. https://example.com/token-image.png) or the image file path (e.g. ./data/image/test-token.jpg)
+      // "description": "Octora integration test token on localnet",
+      // "website": "https://octora.local",
+      // "twitter": "https://x.com/octora",
+      // "telegram": "https://t.me/octora"
+    }
+  },
+
+  /* dlmmConfig is only used in the following actions:
+   * 1. dlmm-create-pool
+   */
+  "dlmmConfig": {
+    "binStep": 25, // Price increment/decrement percentage in basis points (25 = 0.25% price step between bins)
+    "feeBps": 25, // Trading fee in basis points (25 = 0.25%). NOTE: DLMM enforces valid (binStep,feeBps) presets — keep them paired.
+    "initialPrice": 0.001, // Initial price in quote/base (e.g. 0.001 SOL per OCTT)
+    "activationType": 1, // 0 - Slot | 1 - Timestamp
+    "activationPoint": 1779408000, // 2026-05-22T00:00:00Z. Pool must NOT be activated yet for dlmm-seed-liquidity-single-bin to work — keep this in the future until seeding is done. unix seconds (activationType=1) or slot number (activationType=0); null = activate immediately.
+    "priceRounding": "up", // Price calculation rounding direction for bin ID conversion
+    "creatorPoolOnOffControl": true, // Pool creator permission to enable/disable trading for permissionless pools
+    "hasAlphaVault": false // If true, the alpha vault will be created after the pool is created
+  },
+
+  /* lfgSeedLiquidity is only used in the following actions:
+   * 1. dlmm-seed-liquidity-lfg
+   * https://ilm.jup.ag/
+   */
+  "lfgSeedLiquidity": {
+    "minPrice": 0.0008, // Minimum price boundary for liquidity distribution range
+    "maxPrice": 0.0015, // Maximum price boundary for liquidity distribution range
+    "curvature": 0.6, // Distribution curvature factor (1/k) controlling liquidity concentration (0-1, lower = more concentrated)
+    "seedAmount": "200000", // Total amount of base token to seed (in token units, NOT raw)
+    "operatorKeypairFilepath": "./keypair.json", // File path to operator's private key for signing seeding transactions
+    "positionOwner": "H8HWuYQzwGqh6UpuhFTT27UnJEDc7bLUiL4FyLiu9hfr", // Public key of the position owner who controls the liquidity
+    "feeOwner": "H8HWuYQzwGqh6UpuhFTT27UnJEDc7bLUiL4FyLiu9hfr", // Public key entitled to claim trading fees from this position
+    "lockReleasePoint": 0, // Timestamp/slot when position becomes withdrawable (0 = immediately unlocked)
+    "seedTokenXToPositionOwner": true // Whether to send 1 lamport of token X to position owner as ownership proof
+  },
+
+  /* singleBinSeedLiquidity is only used in the following actions:
+   * 1. dlmm-seed-liquidity-single-bin
+   */
+  "singleBinSeedLiquidity": {
+    "price": 0.001, // Exact price where liquidity will be concentrated in a single bin
+    "priceRounding": "up", // Price calculation rounding direction for bin ID conversion. "up" = round up, "down" = round down
+    "seedAmount": "500000000", // Amount of token X (base token) to seed into the single bin (in token units)
+    "operatorKeypairFilepath": "./keypair.json", // File path to operator's private key for signing seeding transactions
+    "positionOwner": "H8HWuYQzwGqh6UpuhFTT27UnJEDc7bLUiL4FyLiu9hfr", // Public key of the position owner who controls the liquidity
+    "feeOwner": "H8HWuYQzwGqh6UpuhFTT27UnJEDc7bLUiL4FyLiu9hfr", // Public key entitled to claim trading fees from this position
+    "lockReleasePoint": 0, // Timestamp/slot when position becomes withdrawable (0 = immediately unlocked)
+    "seedTokenXToPositionOwner": true // Whether to send 1 lamport of token X to position owner as ownership proof
+  },
+
+  /* setDlmmPoolStatus is only used in the following actions:
+   * 1. dlmm-set-pool-status
+   */
+  "setDlmmPoolStatus": {
+    "enabled": true // true = enable trading | false = disable trading
+  },
+
+  /* alphaVault is only used in the following actions:
+   * 1. dlmm-create-pool
+   * Disabled here (hasAlphaVault: false above). Leaving the block as a reference only.
+   */
+  "alphaVault": {
+    "poolType": "dlmm", // DLMM = dlmm | DAMM v1 = dynamic | DAMM v2 = damm2
+    "alphaVaultType": "fcfs", // FCFS = fcfs | Prorata = prorata
+    "maxDepositCap": 10000, // Maximum total amount (in quote token) that can be deposited across all users in the vault
+    "individualDepositingCap": 1, // Maximum amount (in quote token) that each individual user can deposit
+    "depositingPoint": 1755421200, // When users can start depositing depending on pool's activationType
+    "startVestingPoint": 1755507600, // When token vesting begins
+    "endVestingPoint": 1755507600, // When token vesting ends
+    "escrowFee": 0, // Fee amount (in quote token) charged when creating a stake escrow account
+    "whitelistMode": "permissionless" // Whitelist mode: permissionless | permissioned_with_merkle_proof | permissioned_with_authority
+  }
+}

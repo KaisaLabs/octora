@@ -313,26 +313,75 @@ export class RelayerService {
     const relayerKey = hotWallet.publicKey;
 
     // Build and send the withdraw instruction
-    const tx = await program.methods
-      .withdraw(
-        Array.from(proofBytes) as number[],
-        Array.from(publicInputsBytes) as number[],
-      )
-      .accounts({
-        signer: hotWallet.publicKey,
-        mixerPool: mixerPoolKey,
-        nullifierAccount: nullifierPDA,
-        recipient: recipientKey,
-        relayer: relayerKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .preInstructions([
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-      ])
-      .signers([hotWallet])
-      .rpc({ commitment: "confirmed" });
+    try {
+      const tx = await program.methods
+        .withdraw(
+          Array.from(proofBytes) as number[],
+          Array.from(publicInputsBytes) as number[],
+        )
+        .accounts({
+          signer: hotWallet.publicKey,
+          mixerPool: mixerPoolKey,
+          nullifierAccount: nullifierPDA,
+          recipient: recipientKey,
+          relayer: relayerKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+        ])
+        .signers([hotWallet])
+        .rpc({ commitment: "confirmed" });
 
-    return tx;
+      return tx;
+    } catch (err) {
+      // RootNotFound is the most common on-chain failure here, and the bare
+      // AnchorError message gives the operator no actionable info. Decorate
+      // with on-chain root-history vs submitted-root so we can tell whether
+      // the client's tree is stale, the pool was re-initialised, or a hash
+      // mismatch is producing roots the program never saw.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("RootNotFound") || msg.includes("6003")) {
+        const diag = await this.diagnoseRootNotFound(mixerPoolKey, request.root).catch(
+          (e) => `(diag failed: ${e instanceof Error ? e.message : "unknown"})`,
+        );
+        throw new Error(`${msg} | ${diag}`);
+      }
+      throw err;
+    }
+  }
+
+  private async diagnoseRootNotFound(
+    mixerPoolKey: PublicKey,
+    submittedRootDecimal: string,
+  ): Promise<string> {
+    const { program } = this.client!;
+    const accountNs = program.account as Record<string, { fetch: (k: PublicKey) => Promise<unknown> }>;
+    const pool = (await accountNs.mixerPool.fetch(mixerPoolKey)) as {
+      nextLeafIndex: number;
+      currentRootIndex: number;
+      rootHistory: number[][];
+    };
+
+    const submittedHex = bigintToBytes32(BigInt(submittedRootDecimal), "root").toString("hex");
+    const onchainHex = pool.rootHistory.map((r) =>
+      Buffer.from(r as number[]).toString("hex"),
+    );
+    const idx = pool.currentRootIndex;
+    const recent: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const j = (idx - i + onchainHex.length) % onchainHex.length;
+      recent.push(`[${j}]=${onchainHex[j].slice(0, 16)}…`);
+    }
+    const present = onchainHex.includes(submittedHex);
+    return [
+      `pool=${mixerPoolKey.toBase58()}`,
+      `nextLeafIndex=${pool.nextLeafIndex}`,
+      `currentRootIndex=${idx}`,
+      `submittedRoot=${submittedHex.slice(0, 16)}…`,
+      `submittedInHistory=${present}`,
+      `recentRoots=${recent.join(", ")}`,
+    ].join(" ");
   }
 
   private getHotWalletPublicKey(): string {

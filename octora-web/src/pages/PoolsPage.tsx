@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Gem, Loader2, Rocket, Search, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import { Loader2, Search, SlidersHorizontal, X } from "lucide-react";
 
-import type { DistributionShape, Pool } from "@/components/octora/types";
+import type { Pool } from "@/components/octora/types";
 import { listPools, mapPoolSummary, NETWORK } from "@/lib/api";
 import { DEFAULT_CLUSTER } from "@/lib/solana/config";
 import { Button } from "@/components/ui/button";
@@ -76,42 +76,6 @@ function countActiveFilters(f: FilterState): number {
   if (f.hideLowTvl !== DEFAULT_FILTERS.hideLowTvl) c++;
   return c;
 }
-type Strategy = {
-  id: "stable" | "trending" | "blue-chip";
-  title: string;
-  blurb: string;
-  icon: React.ComponentType<{ className?: string }>;
-  shape: DistributionShape;
-  matchTokens: string[];
-};
-
-const STRATEGIES: Strategy[] = [
-  {
-    id: "stable",
-    title: "Stable yield",
-    blurb: "Tight curve, USDC pairs.",
-    icon: ShieldCheck,
-    shape: "curve",
-    matchTokens: ["USDC", "USDT", "USD"],
-  },
-  {
-    id: "trending",
-    title: "Trending memecoin",
-    blurb: "Wide spot, high volatility.",
-    icon: Rocket,
-    shape: "spot",
-    matchTokens: ["WIF", "BONK", "POPCAT", "MEW"],
-  },
-  {
-    id: "blue-chip",
-    title: "Blue-chip range",
-    blurb: "Bid-ask edges on majors.",
-    icon: Gem,
-    shape: "bid-ask",
-    matchTokens: ["SOL", "JUP", "JTO", "PYTH"],
-  },
-];
-
 const parseUsd = (v: string | number) => {
   if (typeof v === "number") return v;
   if (typeof v !== "string") return 0;
@@ -158,7 +122,6 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
   const [contentTab, setContentTab] = useState<ContentTab>("top");
   const [timeframe, setTimeframe] = useState<TimeFrame>("4h");
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
-  const [strategyId, setStrategyId] = useState<Strategy["id"] | null>(null);
 
   // Debounce search input to avoid hammering the API on every keystroke.
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -180,13 +143,10 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
     staleTime: 30_000,
   });
 
-  const activeStrategy = useMemo(() => STRATEGIES.find((s) => s.id === strategyId) ?? null, [strategyId]);
   const filterCount = countActiveFilters(filters);
 
   const openPool = (pool: Pool) => {
-    navigate(`/pool/${pool.address}`, {
-      state: activeStrategy ? { presetShape: activeStrategy.shape } : undefined,
-    });
+    navigate(`/pool/${pool.address}`);
   };
 
   const nowSec = useMemo(() => Math.floor(Date.now() / 1000), []);
@@ -213,11 +173,6 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
       if (contentTab === "stable") {
         const upper = [p.tokenA, p.tokenB].map((t) => t.toUpperCase());
         if (!upper.some((t) => t === "USDC" || t === "USDT")) return false;
-      }
-      if (activeStrategy) {
-        const upper = [p.tokenA, p.tokenB].map((t) => t.toUpperCase());
-        const wanted = activeStrategy.matchTokens.map((t) => t.toUpperCase());
-        if (!upper.some((t) => wanted.includes(t))) return false;
       }
       if (!q) return true;
       return [
@@ -247,11 +202,10 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
       return parseUsd(b.tvl) - parseUsd(a.tvl);
     });
     return list;
-  }, [pools, debouncedQuery, searchQuery.data, contentTab, filters, activeStrategy, nowSec]);
+  }, [pools, debouncedQuery, searchQuery.data, contentTab, filters, nowSec]);
 
   const resetFilters = () => {
     setFilters(DEFAULT_FILTERS);
-    setStrategyId(null);
   };
 
   // Collect every visible mint for one batched price call. usePrices polls
@@ -281,8 +235,6 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
 
   return (
     <div className="space-y-5">
-      <FeaturedStrategies activeId={strategyId} onSelect={setStrategyId} />
-
       <section className="panel-shell rounded-2xl p-4 sm:p-6">
         {/* Header row: tabs (left), timeframe + search + filter (right) */}
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -324,23 +276,6 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
             />
           </div>
         </div>
-
-        {/* Active strategy chip — only when one is selected */}
-        {activeStrategy && (
-          <div className="mt-4 flex items-center gap-2">
-            <span className="inline-flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-xs text-primary">
-              {activeStrategy.title}
-              <button
-                type="button"
-                onClick={() => setStrategyId(null)}
-                className="-mr-1 text-primary/70 transition-colors hover:text-primary"
-                aria-label="Clear strategy"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </span>
-          </div>
-        )}
 
         {/* Desktop table */}
         <div className="mt-5 hidden overflow-x-auto rounded-xl border border-border lg:block">
@@ -474,67 +409,6 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
         )}
       </section>
     </div>
-  );
-}
-
-function FeaturedStrategies({
-  activeId,
-  onSelect,
-}: {
-  activeId: Strategy["id"] | null;
-  onSelect: (id: Strategy["id"] | null) => void;
-}) {
-  return (
-    <section className="panel-shell rounded-2xl p-4 sm:p-5">
-      <div className="mb-3 flex items-end justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Featured</p>
-          <h3 className="mt-1 font-display text-lg font-semibold tracking-tight text-foreground">
-            Curated LP playbooks
-          </h3>
-        </div>
-        <p className="hidden text-xs text-muted-foreground sm:block">
-          Tap one to filter pools and preset the deposit shape.
-        </p>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        {STRATEGIES.map((s) => {
-          const Icon = s.icon;
-          const active = activeId === s.id;
-          return (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => onSelect(active ? null : s.id)}
-              className={`group flex items-center gap-3 rounded-xl border p-4 text-left transition-all ${
-                active
-                  ? "border-primary/50 bg-primary/5 shadow-[0_0_0_1px_hsl(160_84%_45%_/_0.25)]"
-                  : "border-border bg-card hover:border-primary/30 hover:bg-surface-elevated/40"
-              }`}
-            >
-              <span
-                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border ${
-                  active ? "border-primary/40 bg-primary/10 text-primary" : "border-border bg-secondary/60 text-foreground/80"
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="font-medium text-foreground">{s.title}</p>
-                <p className="mt-0.5 truncate text-xs text-muted-foreground">{s.blurb}</p>
-              </div>
-              <span
-                className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] ${
-                  active ? "border-primary/40 bg-primary/10 text-primary" : "border-border bg-secondary/60 text-muted-foreground"
-                }`}
-              >
-                {s.shape}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </section>
   );
 }
 
