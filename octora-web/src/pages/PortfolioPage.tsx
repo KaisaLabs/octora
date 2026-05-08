@@ -53,12 +53,17 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
   };
 
   const totals = useMemo(() => {
-    const value = positions.reduce((s, p) => s + parseUsd(p.value), 0);
-    const fees = positions.reduce((s, p) => s + parseUsd(p.feesEarned), 0);
-    const deposited = positions.reduce((s, p) => s + parseUsd(p.deposited), 0);
-    const claimable = positions.reduce((s, p) => s + parseUsd(p.claimable), 0);
-    const inRange = positions.filter((p) => p.inRange).length;
-    return { value, fees, deposited, claimable, inRange };
+    // Closed positions contribute nothing to the totals (value/fees zeroed,
+    // no claimable). Skip them up front so the math reflects what the user
+    // actually sees on the page.
+    const live = positions.filter((p) => !p.closed);
+    const value = live.reduce((s, p) => s + parseUsd(p.value), 0);
+    const fees = live.reduce((s, p) => s + parseUsd(p.feesEarned), 0);
+    const deposited = live.reduce((s, p) => s + parseUsd(p.deposited), 0);
+    const claimable = live.reduce((s, p) => s + parseUsd(p.claimable), 0);
+    const inRange = live.filter((p) => p.inRange).length;
+    const open = live.length;
+    return { value, fees, deposited, claimable, inRange, open };
   }, [positions]);
 
   const today = useMemo(() => new Date(), []);
@@ -79,14 +84,19 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
     [daily, totals],
   );
 
+  // Live positions only — closed-pending-sweep entries are tracked via the
+  // Activity feed and accessible by URL for the sweep flow, so they don't
+  // need to clutter the portfolio grid.
+  const livePositions = useMemo(() => positions.filter((p) => !p.closed), [positions]);
+
   const filtered = useMemo(() => {
-    return positions.filter((p) => {
+    return livePositions.filter((p) => {
       if (filter === "in-range") return p.inRange === true;
       if (filter === "out-of-range") return p.inRange === false;
-      if (filter === "claimable") return parseUsd(p.claimable) > 0;
+      if (filter === "claimable") return p.hasClaimableFees === true;
       return true;
     });
-  }, [positions, filter]);
+  }, [livePositions, filter]);
 
   return (
     <div className="space-y-5">
@@ -98,9 +108,17 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
             Your private LP
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {positions.length} position{positions.length === 1 ? "" : "s"} ·{" "}
-            <span className={totals.inRange === positions.length ? "text-primary" : "text-amber-400"}>
-              {totals.inRange}/{positions.length} in range
+            {livePositions.length} position{livePositions.length === 1 ? "" : "s"} ·{" "}
+            <span
+              className={
+                totals.open === 0
+                  ? "text-muted-foreground"
+                  : totals.inRange === totals.open
+                    ? "text-primary"
+                    : "text-amber-400"
+              }
+            >
+              {totals.inRange}/{totals.open} in range
             </span>
           </p>
         </div>
@@ -135,7 +153,7 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Filter</span>
           <FilterChip active={filter === "all"} onClick={() => setFilter("all")}>
-            All ({positions.length})
+            All ({livePositions.length})
           </FilterChip>
           <FilterChip active={filter === "in-range"} onClick={() => setFilter("in-range")}>
             In range

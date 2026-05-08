@@ -26,6 +26,29 @@ export interface StoredPosition {
   /** ms since epoch — when the deposit completed. */
   ts: number;
   network: "mainnet" | "devnet" | "localnet";
+  /** True once `runWithdrawClose` has settled and the on-chain position has
+   *  been closed. The entry stays in the index in this state so the user can
+   *  still see (and act on) the SOL sitting at the stealth wallet — call
+   *  `removeLocalPosition` only after the funds have been swept out. */
+  closed?: boolean;
+  /** ms since epoch — when the withdraw_close tx confirmed. Drives the
+   *  Activity feed's Withdraw row timestamp. */
+  closedAt?: number;
+  /** withdraw_close tx signature — surfaced to the Activity feed so the row
+   *  links out to an explorer. */
+  withdrawSignature?: string;
+  /** exit_recipient pubkey returned by the withdraw_close response (where the
+   *  funds actually landed before the sweep — usually the stealth itself). */
+  withdrawRecipient?: string;
+  /** Optional tx signatures captured at deposit time so the Activity page can
+   *  link out to an explorer. All four are recorded when available; `fund` is
+   *  the canonical "liquidity landed" marker the UI prefers. */
+  signatures?: {
+    mixerDeposit?: string;
+    relayerWithdraw?: string;
+    init?: string;
+    fund?: string;
+  };
 }
 
 const KEY_PREFIX = "octora.positions.v1.";
@@ -72,6 +95,37 @@ export function addLocalPosition(walletAddress: string, position: StoredPosition
   const current = listLocalPositions(walletAddress);
   // Idempotent: dedupe by positionId so a retry doesn't double-record.
   const next = [position, ...current.filter((p) => p.positionId !== position.positionId)];
+  window.localStorage.setItem(storageKey(walletAddress), JSON.stringify(next));
+  notifyChanged();
+}
+
+export interface CloseMetadata {
+  signature?: string;
+  recipient?: string;
+  /** Override the close timestamp; defaults to Date.now(). */
+  ts?: number;
+}
+
+export function markLocalPositionClosed(
+  walletAddress: string,
+  positionId: string,
+  meta: CloseMetadata = {},
+): void {
+  if (!walletAddress || typeof window === "undefined") return;
+  const current = listLocalPositions(walletAddress);
+  let changed = false;
+  const next = current.map((p) => {
+    if (p.positionId !== positionId || p.closed) return p;
+    changed = true;
+    return {
+      ...p,
+      closed: true,
+      closedAt: meta.ts ?? Date.now(),
+      withdrawSignature: meta.signature,
+      withdrawRecipient: meta.recipient,
+    };
+  });
+  if (!changed) return;
   window.localStorage.setItem(storageKey(walletAddress), JSON.stringify(next));
   notifyChanged();
 }

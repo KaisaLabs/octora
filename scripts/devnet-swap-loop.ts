@@ -7,13 +7,16 @@
  * swaps through bins where you have liquidity do.
  *
  * Usage:
- *   LB_PAIR=<addr> \
- *   KEYPAIR_PATH=~/.config/solana/id.json \
- *   ITERATIONS=10 \
- *   AMOUNT_LAMPORTS=1000000 \
- *   DIRECTION=both \                # xy | yx | both (default: both)
- *   RPC_URL=https://api.devnet.solana.com \
- *   pnpm tsx scripts/devnet-swap-loop.ts
+ *   npx tsx scripts/devnet-swap-loop.ts
+ *
+ * Configuration is read from the repo-root `.env`. Required keys:
+ *   LB_PAIR              Meteora DLMM pair address
+ *   KEYPAIR_PATH         path to a Solana keypair JSON (e.g. ~/.config/solana/id.json)
+ * Optional keys (defaults shown):
+ *   ITERATIONS=5
+ *   AMOUNT_LAMPORTS=1000000
+ *   DIRECTION=both       xy | yx | both
+ *   RPC_URL=https://api.devnet.solana.com
  *
  * Notes:
  *   - Single-sided SOL deposits only support X→Y swaps (SOL is on Y, no X
@@ -31,8 +34,17 @@
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 import DLMM from "@meteora-ag/dlmm";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+
+// Auto-load the repo-root .env so `npx tsx scripts/devnet-swap-loop.ts` works
+// with no CLI flags. Resolved against cwd because tsx's CJS transform leaves
+// `import.meta.dirname` undefined — the script's contract is "run from the
+// repo root", so cwd-based resolution is the simplest reliable path.
+const ENV_FILE = resolve(process.cwd(), ".env");
+if (existsSync(ENV_FILE)) {
+  process.loadEnvFile(ENV_FILE);
+}
 
 function requireEnv(name: string): string {
   const v = process.env[name];

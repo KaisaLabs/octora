@@ -369,6 +369,12 @@ export function PrivateDepositModal({
           shape,
           ts: Date.now(),
           network: NETWORK,
+          signatures: {
+            mixerDeposit: res.mixerDepositSignature,
+            relayerWithdraw: res.relayerWithdrawSignature,
+            init: res.initSignature,
+            fund: res.fundSignature,
+          },
         });
       } catch (err) {
         // Non-fatal: portfolio just won't show this entry until next deposit.

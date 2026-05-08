@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Coins, Copy, Minus, Plus, Repeat } from "lucide-react";
+import { ArrowLeft, ArrowRight, Coins, Copy, Loader2, Minus, Repeat } from "lucide-react";
+import { toast } from "sonner";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Connection, PublicKey } from "@solana/web3.js";
 
 import type { DistributionShape, LiquidityBin, PortfolioPosition } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BinLiquidityChart } from "@/components/octora/lp/BinLiquidityChart";
 import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
@@ -13,6 +15,14 @@ import { PnLBreakdownChart } from "@/components/octora/lp/PnLBreakdownChart";
 import { Reveal } from "@/components/octora/lp/Reveal";
 import { projectUserShape } from "@/lib/bins";
 import { generatePositionPnLSeries } from "@/lib/pnl";
+import {
+  runClaimFees,
+  runPrivateExitToMain,
+  runSweepStealthToMain,
+  runWithdrawClose,
+} from "@/lib/privateLifecycle";
+import { markLocalPositionClosed, removeLocalPosition } from "@/lib/localPositions";
+import { useSolana } from "@/providers/SolanaProvider";
 
 interface Props {
   positions: PortfolioPosition[];
@@ -102,7 +112,7 @@ export function PositionDetailPage({ positions }: Props) {
               <span className="rounded-full border border-border bg-secondary/70 px-2.5 py-1 text-[11px] text-muted-foreground">
                 Opened {position.openedAt ?? "—"}
               </span>
-              <PositionStatusPill inRange={position.inRange} size="sm" />
+              <PositionStatusPill inRange={position.inRange} closed={position.closed} size="sm" />
             </div>
 
             <h1 className="font-display text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
@@ -178,6 +188,42 @@ export function PositionDetailPage({ positions }: Props) {
 
 function ClaimSummary({ position }: { position: PortfolioPosition }) {
   const claimable = parseUsd(position.claimable);
+  const canClaim = position.hasClaimableFees === true;
+  const { wallet } = useSolana();
+  const queryClient = useQueryClient();
+  const [claiming, setClaiming] = useState(false);
+
+  const handleClaim = async () => {
+    if (!wallet.address) {
+      toast.error("Connect your wallet to claim.");
+      return;
+    }
+    setClaiming(true);
+    try {
+      const res = await runClaimFees({
+        mainWalletAddress: wallet.address,
+        poolAddress: position.poolAddress,
+        // Range is optional — runClaimFees can recover it from the on-chain
+        // PoolAuthority — but passing it skips an RPC round trip when known.
+        lowerBinId: position.rangeLowerBin,
+        upperBinId: position.rangeUpperBin,
+      });
+      toast.success("Fees claimed", {
+        description: `Routed to ${shorten(res.exitRecipient)} · ${shorten(res.signature)}`,
+      });
+      // Refresh on-chain state so claimable drops to $0 in the UI.
+      await queryClient.invalidateQueries({ queryKey: ["position-state", position.poolAddress] });
+    } catch (err) {
+      toast.error("Claim failed", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setClaiming(false);
+    }
+  };
+
+  const disabled = !canClaim || claiming || !wallet.connected;
+
   return (
     <div className="flex flex-col justify-between gap-4 rounded-2xl border border-border bg-card p-5">
       <div>
@@ -192,19 +238,34 @@ function ClaimSummary({ position }: { position: PortfolioPosition }) {
         <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Claimable now</p>
         <p
           className={`mt-1 font-mono text-xl font-semibold tabular-nums ${
-            claimable > 0 ? "text-primary" : "text-foreground/70"
+            canClaim ? "text-primary" : "text-foreground/70"
           }`}
         >
           {position.claimable ?? "$0.00"}
         </p>
+        {canClaim && claimable <= 0 && (
+          <p className="mt-1 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+            Fees pending · USD price unavailable on devnet
+          </p>
+        )}
         <Button
           variant="hero"
           size="sm"
-          disabled={claimable <= 0}
+          disabled={disabled}
+          onClick={handleClaim}
           className="mt-3 w-full justify-center rounded-xl"
         >
-          <Coins className="h-4 w-4" />
-          Claim privately
+          {claiming ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Claiming…
+            </>
+          ) : (
+            <>
+              <Coins className="h-4 w-4" />
+              Claim privately
+            </>
+          )}
         </Button>
       </div>
 
@@ -213,6 +274,11 @@ function ClaimSummary({ position }: { position: PortfolioPosition }) {
       </p>
     </div>
   );
+}
+
+function shorten(s: string): string {
+  if (s.length <= 12) return s;
+  return `${s.slice(0, 6)}…${s.slice(-4)}`;
 }
 
 function ActionDrawer({
@@ -228,142 +294,289 @@ function ActionDrawer({
   initialUpper: number;
   center: number;
 }) {
-  const [tab, setTab] = useState("rebalance");
+  const [tab, setTab] = useState("withdraw");
 
   return (
     <section className="panel-shell rounded-2xl p-5 sm:p-6">
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-lg border border-border bg-secondary/60 p-1 sm:w-auto">
-          <TabsTrigger value="add" className="rounded-md px-4 py-2 text-sm data-[state=active]:bg-surface-elevated">
-            <Plus className="h-3.5 w-3.5" />
-            Add liquidity
-          </TabsTrigger>
           <TabsTrigger value="withdraw" className="rounded-md px-4 py-2 text-sm data-[state=active]:bg-surface-elevated">
             <Minus className="h-3.5 w-3.5" />
-            Withdraw
+            {position.closed ? "Sweep" : "Withdraw"}
           </TabsTrigger>
-          <TabsTrigger value="rebalance" className="rounded-md px-4 py-2 text-sm data-[state=active]:bg-surface-elevated">
-            <Repeat className="h-3.5 w-3.5" />
-            Rebalance
-          </TabsTrigger>
+          {!position.closed && (
+            <TabsTrigger value="rebalance" className="rounded-md px-4 py-2 text-sm data-[state=active]:bg-surface-elevated">
+              <Repeat className="h-3.5 w-3.5" />
+              Rebalance
+            </TabsTrigger>
+          )}
         </TabsList>
 
-        <TabsContent value="add" className="mt-5">
-          <AddLiquidityPanel position={position} />
-        </TabsContent>
         <TabsContent value="withdraw" className="mt-5">
-          <WithdrawPanel position={position} />
+          {position.closed ? (
+            <SweepPanel position={position} />
+          ) : (
+            <WithdrawPanel position={position} />
+          )}
         </TabsContent>
-        <TabsContent value="rebalance" className="mt-5">
-          <RebalancePanel
-            position={position}
-            bins={bins}
-            initialLower={initialLower}
-            initialUpper={initialUpper}
-            center={center}
-          />
-        </TabsContent>
+        {!position.closed && (
+          <TabsContent value="rebalance" className="mt-5">
+            <RebalancePanel
+              position={position}
+              bins={bins}
+              initialLower={initialLower}
+              initialUpper={initialUpper}
+              center={center}
+            />
+          </TabsContent>
+        )}
       </Tabs>
     </section>
   );
 }
 
-function AddLiquidityPanel({ position }: { position: PortfolioPosition }) {
-  const [usd, setUsd] = useState(1000);
-  return (
-    <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
-      <div className="space-y-4">
-        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Top up existing range</p>
-        <Input
-          type="number"
-          min={50}
-          step={50}
-          value={usd}
-          onChange={(e) => setUsd(Number(e.target.value))}
-          className="h-12 rounded-xl border-border bg-background font-mono text-base tabular-nums"
-        />
-        <div className="flex flex-wrap gap-2">
-          {[100, 500, 1000, 5000].map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setUsd(v)}
-              className="rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              ${v.toLocaleString()}
-            </button>
-          ))}
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Your existing distribution ({position.shape ?? "spot"}) and range stay the same.
-        </p>
-      </div>
-
-      <div className="rounded-2xl border border-border bg-card p-5">
-        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Summary</p>
-        <Row label="Amount" value={`$${usd.toLocaleString()}`} />
-        <Row label="Position after" value={`$${(parseUsd(position.value) + usd).toLocaleString()}`} />
-        <Row label="Execution" value="Private relay" />
-        <Button variant="hero" size="lg" className="mt-4 w-full justify-center rounded-xl">
-          Add privately
-          <ArrowRight />
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 function WithdrawPanel({ position }: { position: PortfolioPosition }) {
-  const [pct, setPct] = useState(50);
-  const value = parseUsd(position.value);
-  const withdrawValue = (value * pct) / 100;
+  const [pending, setPending] = useState(false);
+  const { wallet } = useSolana();
+  const queryClient = useQueryClient();
+
+  const handleWithdraw = async () => {
+    if (!wallet.address) {
+      toast.error("Connect your wallet to withdraw.");
+      return;
+    }
+    setPending(true);
+    const t = toast.loading("Deriving stealth + closing position…");
+    try {
+      const res = await runWithdrawClose({
+        mainWalletAddress: wallet.address,
+        poolAddress: position.poolAddress,
+        lowerBinId: position.rangeLowerBin,
+        upperBinId: position.rangeUpperBin,
+      });
+      // Position is closed on-chain but funds now sit at the stealth wallet.
+      // Mark closed (don't remove yet) so the user can sweep them out from
+      // this same page — `removeLocalPosition` runs after the sweep lands.
+      // Captured metadata feeds the Activity feed's Withdraw row.
+      markLocalPositionClosed(wallet.address, position.id, {
+        signature: res.signature,
+        recipient: res.exitRecipient,
+      });
+      // Belt-and-braces: also bust the on-chain state cache for this pool,
+      // so any stale read returns 404 (handled by getPositionState).
+      await queryClient.invalidateQueries({
+        queryKey: ["position-state", position.poolAddress],
+      });
+      toast.success(`Closed. Funds → ${shorten(res.exitRecipient)}`, {
+        id: t,
+        description: shorten(res.signature),
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err), { id: t });
+    } finally {
+      setPending(false);
+    }
+  };
 
   return (
     <div className="space-y-5">
-      <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">Withdraw amount</p>
-          <p className="font-mono text-sm font-medium tabular-nums text-foreground">{pct}%</p>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={pct}
-          onChange={(e) => setPct(Number(e.target.value))}
-          className="mt-3 w-full accent-[hsl(var(--primary))]"
-        />
-        <div className="mt-3 flex flex-wrap gap-2">
-          {[25, 50, 75, 100].map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setPct(v)}
-              className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-                pct === v
-                  ? "border-primary/40 bg-surface-elevated text-foreground"
-                  : "border-border bg-card text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {v}%
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Receive" value={`$${withdrawValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-        <Stat label="Remaining" value={`$${(value - withdrawValue).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} muted />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Stat label="Receive" value={position.value} />
         <Stat label="Execution" value="Private route" muted />
       </div>
 
-      <Button variant="hero" size="lg" className="w-full justify-center rounded-xl">
-        Withdraw privately
-        <ArrowRight />
+      <Button
+        variant="hero"
+        size="lg"
+        className="w-full justify-center rounded-xl"
+        onClick={handleWithdraw}
+        disabled={pending || !wallet.connected}
+      >
+        {pending ? <Loader2 className="animate-spin" /> : null}
+        {pending ? "Withdrawing…" : "Withdraw privately"}
+        {!pending && <ArrowRight />}
       </Button>
       <p className="text-xs leading-5 text-muted-foreground">
         Funds return through the private route — your main wallet stays hidden from on-chain observers.
       </p>
+    </div>
+  );
+}
+
+const SWEEP_RPC_URL =
+  (import.meta.env.VITE_RPC_URL as string | undefined) ?? "https://api.devnet.solana.com";
+
+function SweepPanel({ position }: { position: PortfolioPosition }) {
+  const { wallet } = useSolana();
+  const navigate = useNavigate();
+  const [pendingDirect, setPendingDirect] = useState(false);
+  const [pendingPrivate, setPendingPrivate] = useState(false);
+
+  // Live stealth balance. Polled so the user can see the funds land after
+  // close, and watch the row drop to ~0 after a sweep without a manual reload.
+  const balanceQuery = useQuery({
+    queryKey: ["stealth-balance", position.stealthPubkey],
+    enabled: !!position.stealthPubkey,
+    queryFn: async () => {
+      const conn = new Connection(SWEEP_RPC_URL, "confirmed");
+      const lamports = await conn.getBalance(new PublicKey(position.stealthPubkey!), "confirmed");
+      return BigInt(lamports);
+    },
+    staleTime: 5_000,
+    refetchInterval: 8_000,
+  });
+
+  const lamports = balanceQuery.data ?? 0n;
+  const sol = Number(lamports) / 1e9;
+  // Mirrors STEALTH_SWEEP_FEE_LAMPORTS in privateLifecycle.ts. After a clean
+  // sweep the stealth account is reaped (0 lamports); any non-zero residue
+  // below the sig-fee floor means there's nothing transferable left.
+  const swept = lamports <= 5_000n;
+
+  const handleDirect = async () => {
+    if (!wallet.address) {
+      toast.error("Connect your wallet to sweep.");
+      return;
+    }
+    setPendingDirect(true);
+    const t = toast.loading("Sweeping stealth → main wallet…");
+    try {
+      const res = await runSweepStealthToMain({
+        mainWalletAddress: wallet.address,
+        poolAddress: position.poolAddress,
+      });
+      if (res.signature == null) {
+        toast.message("Nothing to sweep — stealth balance is already at the floor.", { id: t });
+      } else {
+        toast.success(
+          `Swept ${(Number(res.sweptLamports) / 1e9).toFixed(6)} SOL → ${shorten(res.recipient)}`,
+          { id: t, description: shorten(res.signature) },
+        );
+      }
+      // Position is fully wound down: drop the local entry and head back to
+      // the portfolio. The hook's storage listener will refresh the list.
+      removeLocalPosition(wallet.address, position.id);
+      navigate("/portfolio");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err), { id: t });
+    } finally {
+      setPendingDirect(false);
+    }
+  };
+
+  const handlePrivate = async () => {
+    if (!wallet.address) {
+      toast.error("Connect your wallet to exit privately.");
+      return;
+    }
+    setPendingPrivate(true);
+    try {
+      await runPrivateExitToMain({
+        mainWalletAddress: wallet.address,
+        poolAddress: position.poolAddress,
+      });
+    } catch (err) {
+      // Currently always throws — surface as info rather than an error so the
+      // CTA reads as "coming soon" instead of "broken".
+      toast.message("Private exit not implemented yet", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setPendingPrivate(false);
+    }
+  };
+
+  const stealthShort = position.stealthPubkey ? shorten(position.stealthPubkey) : "—";
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4 sm:p-5">
+        <p className="text-[11px] uppercase tracking-[0.22em] text-amber-300">Position closed · funds at stealth</p>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          Withdraw landed on chain. Tokens + reclaimed rent now sit at the stealth wallet you derived
+          for this pool. Pick how to recover them.
+        </p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Stat label="Stealth balance" value={`${sol.toFixed(6)} SOL`} />
+        <Stat
+          label="Stealth address"
+          value={stealthShort}
+          muted
+        />
+        <Stat
+          label="Status"
+          value={swept ? "Already swept" : "Awaiting sweep"}
+          tone={swept ? undefined : "up"}
+        />
+      </div>
+
+      {position.stealthPubkey && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-mono">{position.stealthPubkey}</span>
+          <button
+            type="button"
+            onClick={() => navigator.clipboard?.writeText(position.stealthPubkey ?? "")}
+            className="inline-flex items-center gap-1 text-foreground/80 transition-colors hover:text-foreground"
+          >
+            <Copy className="h-3 w-3" /> Copy
+          </button>
+        </div>
+      )}
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        {/* Option 1 — direct sweep, link-revealing */}
+        <div className="rounded-2xl border border-border bg-card p-4 sm:p-5">
+          <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Direct sweep</p>
+          <p className="mt-2 text-sm leading-6 text-foreground">
+            Send the stealth wallet's SOL straight to your connected main wallet. Single tx, no
+            mixer round-trip — fastest, but creates an on-chain link
+            <span className="font-mono"> stealth → main</span>.
+          </p>
+          <Button
+            variant="hero"
+            size="lg"
+            className="mt-4 w-full justify-center rounded-xl"
+            onClick={handleDirect}
+            disabled={pendingDirect || !wallet.connected || swept || balanceQuery.isLoading}
+          >
+            {pendingDirect ? <Loader2 className="animate-spin" /> : null}
+            {pendingDirect
+              ? "Sweeping…"
+              : swept
+                ? "Already swept"
+                : `Sweep ${sol.toFixed(4)} SOL to main`}
+            {!pendingDirect && !swept && <ArrowRight />}
+          </Button>
+        </div>
+
+        {/* Option 2 — mixer round-trip, currently a stub */}
+        <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 sm:p-5">
+          <p className="text-xs uppercase tracking-[0.22em] text-primary/80">Private exit</p>
+          <p className="mt-2 text-sm leading-6 text-foreground">
+            Mirror of the deposit: stealth → mixer → relayer → main wallet. Breaks the
+            <span className="font-mono"> stealth → main</span> link the way the deposit broke
+            <span className="font-mono"> main → stealth</span>. Implementation coming next.
+          </p>
+          <Button
+            variant="subtle"
+            size="lg"
+            className="mt-4 w-full justify-center rounded-xl"
+            onClick={handlePrivate}
+            disabled={pendingPrivate || !wallet.connected || swept}
+          >
+            {pendingPrivate ? <Loader2 className="animate-spin" /> : null}
+            Private exit (coming soon)
+          </Button>
+        </div>
+      </div>
+
+      {balanceQuery.isError && (
+        <p className="text-xs text-destructive">
+          Couldn't read stealth balance: {(balanceQuery.error as Error).message}
+        </p>
+      )}
     </div>
   );
 }

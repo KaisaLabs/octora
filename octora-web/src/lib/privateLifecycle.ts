@@ -1,4 +1,9 @@
-import { Connection, Transaction } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+} from "@solana/web3.js";
 import { deriveStealthForPool, type DerivedStealth } from "./stealthVault";
 
 /**
@@ -168,4 +173,130 @@ export async function runClaimFees(input: ClaimFeesInput): Promise<ClaimFeesResu
 export async function runWithdrawClose(input: ClaimFeesInput): Promise<WithdrawCloseResult> {
   const { signature, exitRecipient } = await deriveAndConfirm(input, "/executor/withdraw-close-tx");
   return { signature, exitRecipient };
+}
+
+export interface SweepStealthInput {
+  mainWalletAddress: string;
+  poolAddress: string;
+}
+
+export interface SweepStealthResult {
+  /** Transfer signature; null when nothing was transferred (balance below floor). */
+  signature: string | null;
+  recipient: string;
+  /** Lamports moved from stealth → main wallet. 0 when the balance was below the floor. */
+  sweptLamports: string;
+  /** Lamports left at the stealth wallet to keep it usable / cover sig fees. */
+  remainingLamports: string;
+  stealthPubkey: string;
+}
+
+/** Solana base fee per signature. Our sweep tx is one signature (the stealth)
+ *  with no priority fee, so this is exactly what the runtime will deduct. The
+ *  transfer amount is set to `balance − fee` so the stealth lands at 0
+ *  lamports — required because any final balance between 0 and the
+ *  rent-exempt minimum (~890_880) fails simulation with
+ *  "insufficient funds for rent". A 0-lamport account is reaped, which is
+ *  fine: the keypair is deterministic and the next deposit re-funds it. */
+const STEALTH_SWEEP_FEE_LAMPORTS = 5_000n;
+
+/**
+ * Option 1: link-revealing direct sweep stealth → main wallet.
+ *
+ * Re-derives the stealth keypair locally (one wallet sig), reads the SOL
+ * balance, and signs a SystemProgram.transfer of (balance − fee reserve) to
+ * the connected main wallet. After this lands an on-chain observer can link
+ * `mainWallet ↔ stealth ↔ position`, so it should only be offered as the
+ * "quick recovery" option — `runPrivateExitToMain` is the privacy-preserving
+ * counterpart that mirrors the deposit's mixer round-trip.
+ */
+export async function runSweepStealthToMain(
+  input: SweepStealthInput,
+): Promise<SweepStealthResult> {
+  const connection = new Connection(RPC_URL, "confirmed");
+  const stealth = await deriveStealthForPool({
+    mainWalletAddress: input.mainWalletAddress,
+    poolAddress: input.poolAddress,
+  });
+  const stealthPubkey = new PublicKey(stealth.publicKey);
+  const recipient = new PublicKey(input.mainWalletAddress);
+
+  const balance = BigInt(await connection.getBalance(stealthPubkey, "confirmed"));
+  if (balance <= STEALTH_SWEEP_FEE_LAMPORTS) {
+    // Nothing transferable: the only lamports here can't even cover a single
+    // signature. Surface a successful no-op so the caller can show "already
+    // swept" rather than throwing — this is the natural state after a sweep
+    // (account reaped at 0) or before any close has landed.
+    return {
+      signature: null,
+      recipient: recipient.toBase58(),
+      sweptLamports: "0",
+      remainingLamports: balance.toString(),
+      stealthPubkey: stealth.publicKey,
+    };
+  }
+
+  // Drain to zero. transfer = balance − fee leaves balance − transfer = fee,
+  // which the runtime then deducts as the sig fee, ending at 0. Anything
+  // between 0 and rent_exempt (~890_880) would fail simulation.
+  const transferLamports = balance - STEALTH_SWEEP_FEE_LAMPORTS;
+
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+  const tx = new Transaction({ feePayer: stealthPubkey, blockhash, lastValidBlockHeight });
+  tx.add(
+    SystemProgram.transfer({
+      fromPubkey: stealthPubkey,
+      toPubkey: recipient,
+      // Number coerce is safe up to ~9_007_000 SOL — well past any real balance.
+      lamports: Number(transferLamports),
+    }),
+  );
+  tx.partialSign(stealth.keypair);
+
+  const signature = await connection.sendRawTransaction(tx.serialize(), {
+    skipPreflight: false,
+    preflightCommitment: "confirmed",
+  });
+  await connection.confirmTransaction(
+    { signature, blockhash, lastValidBlockHeight },
+    "confirmed",
+  );
+
+  return {
+    signature,
+    recipient: recipient.toBase58(),
+    sweptLamports: transferLamports.toString(),
+    remainingLamports: STEALTH_SWEEP_FEE_RESERVE.toString(),
+    stealthPubkey: stealth.publicKey,
+  };
+}
+
+/**
+ * Option 2 (NOT IMPLEMENTED): privacy-preserving exit that mirrors the deposit
+ * mixer round-trip in reverse — stealth → mixer.deposit (one denomination) →
+ * ZK proof → relayer.withdraw → main wallet. Resists the stealth ↔ main link
+ * that `runSweepStealthToMain` reveals.
+ *
+ * Implementation sketch (uses primitives already in `privateDeposit.ts`):
+ *   1. Read stealth balance; require ≥ denomination + relayer fee + sig fee.
+ *   2. Build mixer.deposit (commitment generated client-side; stealth signs).
+ *   3. POST `/deposits/confirm-private` so the indexer captures the new leaf.
+ *   4. Reconstruct the merkle tree, generate the ZK withdraw proof.
+ *   5. POST `/relayer/withdraw` with `recipient = mainWalletAddress` so the
+ *      relayer pays the user without ever signing as the stealth wallet.
+ *   6. Optionally sweep the residual (balance − denomination) via a follow-up
+ *      direct transfer — at that point the privacy of the denomination is
+ *      already secured and the residual is dust.
+ *
+ * The mixer's fixed denomination means partial-balance hand-off needs the
+ * residual sweep step; that's a UX call (accept dust loss, or do a second
+ * round-trip) rather than a missing primitive.
+ */
+export async function runPrivateExitToMain(
+  _input: SweepStealthInput,
+): Promise<SweepStealthResult> {
+  throw new Error(
+    "Private exit (mixer round-trip) is not implemented yet. Use runSweepStealthToMain " +
+      "for now — see the comment on runPrivateExitToMain for the sketch.",
+  );
 }

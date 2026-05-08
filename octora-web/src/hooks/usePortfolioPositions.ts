@@ -134,33 +134,58 @@ function mapStoredToPortfolio(
   // Value/fees come from chain when the state query has resolved.
   // Pre-resolve we fall back to the deposit snapshot for value (so the
   // card isn't blank) and $0.00 for fees (truthful for fresh positions).
-  const valueFmt = state ? formatUsd(state.valueUsd) : depositedFmt;
-  const feesFmt = state ? formatUsd(state.feeUsd) : "$0.00";
+  // After close: position no longer exists on-chain, so everything zeros out
+  // and the user is funnelled toward the Sweep flow.
+  const closed = s.closed === true;
+  const valueFmt = closed ? "$0.00" : state ? formatUsd(state.valueUsd) : depositedFmt;
+  const feesFmt = closed ? "$0.00" : state ? formatUsd(state.feeUsd) : "$0.00";
+  // Raw-lamports gate: enables Claim even when Jupiter has no devnet prices
+  // and `feeUsd` rounds to $0.
+  const hasClaimableFees = !closed && !!state && (
+    safeBigInt(state.feeXLamports) > 0n || safeBigInt(state.feeYLamports) > 0n
+  );
   const pnlAmount = state ? state.valueUsd + state.feeUsd - s.depositedUsd : 0;
   const pnlDirection: PortfolioPosition["pnlDirection"] =
     pnlAmount > 0.005 ? "up" : pnlAmount < -0.005 ? "down" : "flat";
 
+  const status = closed
+    ? "Closed · awaiting sweep"
+    : inRange === false
+      ? "Out of range"
+      : "Active";
+
   return {
     id: s.positionId,
     poolAddress: s.poolAddress,
+    stealthPubkey: s.stealthPubkey,
+    closed,
     poolName,
     protocol,
     deposited: depositedFmt,
     value: valueFmt,
     feesEarned: feesFmt,
     apr,
-    status: inRange === false ? "Out of range" : "Active",
+    status,
     rangeLowerBin: lowerBinId,
     rangeUpperBin: upperBinId,
     activeBinId,
     binStep,
     shape: s.shape as DistributionShape,
-    inRange,
+    inRange: closed ? undefined : inRange,
     claimable: feesFmt,
-    pnl: state ? formatUsdSigned(pnlAmount) : "$0.00",
+    hasClaimableFees,
+    pnl: closed ? "$0.00" : state ? formatUsdSigned(pnlAmount) : "$0.00",
     pnlDirection,
     openedAt: formatRelativeTime(s.ts),
   };
+}
+
+function safeBigInt(s: string): bigint {
+  try {
+    return BigInt(s);
+  } catch {
+    return 0n;
+  }
 }
 
 function formatUsd(n: number): string {

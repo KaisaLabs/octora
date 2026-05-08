@@ -43,6 +43,12 @@ export type PortfolioPosition = {
   id: string;
   /** LB pair address — needed by the Claim/Withdraw lifecycle. */
   poolAddress: string;
+  /** Stealth pubkey that owns the on-chain position. Surfaced to the UI so
+   *  it can read the wallet balance for the post-close sweep flow. */
+  stealthPubkey?: string;
+  /** True after `runWithdrawClose` settles. Position no longer exists on-chain
+   *  but funds may still be sitting at `stealthPubkey` waiting to be swept. */
+  closed?: boolean;
   poolName: string;
   protocol: string;
   deposited: string;
@@ -58,6 +64,11 @@ export type PortfolioPosition = {
   shape?: DistributionShape;
   inRange?: boolean;
   claimable?: string;
+  /** True when the on-chain position has non-zero raw `feeX`/`feeY` lamports.
+   *  Independent of USD pricing — devnet pools rarely have Jupiter prices, so
+   *  `claimable` reads "$0.00" even when fees have actually accrued. The
+   *  Claim button gates on this flag so the user can still trigger the tx. */
+  hasClaimableFees?: boolean;
   pnl?: string;
   pnlDirection?: "up" | "down" | "flat";
   openedAt?: string;

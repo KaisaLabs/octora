@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Activity, BriefcaseBusiness, Coins, Compass, Loader2, LogOut, Sparkles, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSolana, type WalletProviderId } from "@/providers/SolanaProvider";
-import { portfolioPositions } from "@/data/octora";
+import { usePortfolioPositions } from "@/hooks/usePortfolioPositions";
 import { WalletConnectDialog } from "./lp/WalletConnectDialog";
 import { GlowBackground } from "./GlowBackground";
 import { FloatingParticles } from "./FloatingParticles";
@@ -39,9 +39,13 @@ export function AppShell() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pendingId, setPendingId] = useState<WalletProviderId | null>(null);
 
+  // Live claimable across all wallet-owned positions. Pools list is unused
+  // here (we only need feeUsd from on-chain state); shared react-query cache
+  // dedupes the actual fetch with the portfolio page's call.
+  const positions = usePortfolioPositions(wallet.address, []);
   const claimable = useMemo(
-    () => portfolioPositions.reduce((s, p) => s + parseUsd(p.claimable), 0),
-    [],
+    () => positions.reduce((s, p) => s + parseUsd(p.claimable), 0),
+    [positions],
   );
 
   const handlePick = async (id: WalletProviderId) => {

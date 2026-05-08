@@ -39,7 +39,7 @@ export function PositionCard({ position, onManage, onClaim }: Props) {
     () => projectUserShape(bins, lower, upper, position.shape ?? "spot", 100),
     [bins, lower, upper, position.shape],
   );
-  const claimable = parseFloat((position.claimable ?? "0").replace(/[^0-9.-]/g, "")) || 0;
+  const canClaim = position.hasClaimableFees === true;
 
   return (
     <article className="group relative overflow-hidden rounded-2xl border border-border bg-card transition-colors hover:border-primary/30">
@@ -47,7 +47,11 @@ export function PositionCard({ position, onManage, onClaim }: Props) {
       <span
         aria-hidden
         className={`absolute left-0 top-0 h-full w-[2px] ${
-          position.inRange ? "bg-primary/70" : "bg-amber-500/70"
+          position.closed
+            ? "bg-muted-foreground/40"
+            : position.inRange
+              ? "bg-primary/70"
+              : "bg-amber-500/70"
         }`}
       />
 
@@ -61,7 +65,7 @@ export function PositionCard({ position, onManage, onClaim }: Props) {
               {position.protocol} · {position.openedAt ?? "—"}
             </p>
           </div>
-          <PositionStatusPill inRange={position.inRange} size="sm" />
+          <PositionStatusPill inRange={position.inRange} closed={position.closed} size="sm" />
         </header>
 
         {/* Mini bin chart */}
@@ -99,7 +103,7 @@ export function PositionCard({ position, onManage, onClaim }: Props) {
               size="sm"
               variant="premium"
               onClick={onClaim}
-              disabled={claimable <= 0}
+              disabled={!canClaim}
               className="rounded-full"
             >
               Claim
