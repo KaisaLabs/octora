@@ -422,7 +422,50 @@ Each new test file calls out the TC-IDs it covers in its file header. Index:
   to confirm whether the constraint is enforced; tracked here so future
   program work picks it up.
 
-## 14. Maintenance rules
+## 14. Pre-mainnet blocker checklist
+
+Greppable inventory of `MAINNET_BLOCKER` annotations stamped in the codebase. Every item below has a comment in the source pointing back to this section. Do **not** ship to mainnet with any of the **must-fix** items unchecked.
+
+### Must-fix (functional or security)
+
+- [ ] **Token-2022 ATA branching** — `octora-api/src/modules/executor/executor.service.ts` lines ~541, ~625, ~707. `TOKEN_PROGRAM_ID` is hardcoded in `dlmm_add_liquidity`, `dlmm_claim_fees`, and `dlmm_withdraw_close` account layouts; `getAssociatedTokenAddressSync(mint, owner)` defaults to classic ATA derivation. Mainnet has Token-2022 DLMM pools (some PYUSD, JUP-extension pairs) — these CPIs will fail on those. Fix: read `mint.owner` per side, branch ATA derivation, pass per-side token program ID. Add an integration test on a mainnet-cloned Token-2022 pool fixture.
+
+- [ ] **Mixer admin keypair governance** — `scripts/init-mixer-pool.ts:76`. The first signer of `initialize` becomes the `set_paused` authority forever; the program has no transfer-authority instruction. Mainnet pool init MUST go through a multisig (Squads, etc.) from the first transaction.
+
+- [ ] **`/positions/:id/{claim,withdraw-close}` lifecycle still mocked** — `octora-api/src/modules/positions/position.service.ts:281, :354`. The `meteoraExecutor` interface returns the mock unless `OCTORA_USE_ONCHAIN_EXECUTOR=true`, **and** the `OnchainMeteoraExecutor` interface is widened to carry `OnchainPositionContext` (stealth keypair, 14/17-account remaining_accounts). The pool-detail UI works today because it bypasses this path entirely via `/executor/{claim-fees,withdraw-close}-tx`; the managed lifecycle endpoints still record fake signatures. Either bridge them or delete them — don't ship a half-on-half-off surface.
+
+- [ ] **Mainnet RPC provider** — `octora-api/src/modules/mixer/mixer.routes.ts:7`, `relayer.routes.ts`, `executor.routes.ts`, `common/config.ts:49`. All four default to `https://api.devnet.solana.com`. Forgetting to set `SOLANA_RPC_URL`/`OCTORA_EXECUTOR_RPC_URL` on a mainnet deploy points the API at devnet for read paths — silent footgun. Fix: either remove the default (require the env var) or change the default to throw with a clear error when `NODE_ENV=production` and no URL is set.
+
+### Should-fix (UX, hygiene, observability)
+
+- [ ] **Partial withdraw** — `octora-web/src/components/octora/lp/PoolDetailView.tsx` (`WithdrawPanel`). The slider is cosmetic; `runWithdrawClose` always sends `bps_to_remove=10000`. Fix: thread the slider value through `runWithdrawClose` → `/executor/withdraw-close-tx` (it already accepts the param on the program side).
+
+- [ ] **MET rewards claim** — `octora-web/src/components/octora/lp/PoolDetailView.tsx` (`ClaimPanel`). Button is correctly disabled with a tooltip; the executor program has no `claim_rewards` instruction yet. Either implement the on-chain handler + bridge, or remove the button before mainnet so it doesn't read as a missing feature.
+
+- [ ] **Privacy delay tunability** — `octora-api/src/common/config.ts` (`mixerPrivacyDelayMs`, default 13_000). 13s ≈ 32 slots is a starting point; raise to 60–90s on mainnet once anonymity-set growth is observable. Track via a metric on the relayer.
+
+- [ ] **`/positions/:id/*` 4xx vs 500 mapping** — `octora-api/src/modules/positions/position.service.ts:463` throws plain `Error` for state-machine violations; Fastify maps to 500. Per `test-plan.md` §13 this should be a typed `StateTransitionError` with `statusCode: 409`.
+
+- [ ] **`OCTORA_USE_ONCHAIN_EXECUTOR=true` failure mode** — when set true today, `position.service.ts:281` calls `meteoraExecutor.claim({podId, positionId})` but `OnchainMeteoraExecutor.claim` requires `OnchainPositionContext` as a second arg. The on-chain executor will throw at runtime. Fix is the same as the lifecycle bridge above.
+
+### Nice-to-have
+
+- [ ] **Compute budget headroom on `withdraw_close`** — `executor.service.ts:719` requests 1.4M CUs, the per-tx cap. Any future expansion (more bin arrays, transfer hooks) overflows.
+
+- [ ] **Position-presence prefetch** — currently the pool-detail UI only learns about position presence on first Claim/Withdraw click. Acceptable, but a background fetch on tab-switch would prevent the user from clicking a button that's about to error.
+
+- [ ] **Fee-bumping / priority fees** — `relayer.service.ts` and `executor.service.ts` send transactions without compute-unit-price hints. Congested mainnet days will surface generic timeout errors.
+
+- [ ] **Withdrawal blockhash horizon** — `getLatestBlockhash` then sign + broadcast. On a slow signing flow, blockhash expires. Consider durable nonces for withdrawals.
+
+### Wired today (no action needed)
+
+- [x] **Privacy delay gate** — `relayer.service.ts:checkPrivacyDelay`. Default 13s, configurable via `OCTORA_MIXER_PRIVACY_DELAY_MS`, set to 0 for tests/localnet.
+- [x] **Position-presence guard in UI** — `PoolDetailView` greys out Claim/Withdraw when `/executor/pool-authority` returns 404 or after a successful withdraw-close.
+
+---
+
+## 15. Maintenance rules
 
 1. Every PR that changes behaviour must either map to existing `TC-*` IDs or add new ones in the same PR.
 2. When a bug is fixed, add a regression case here with a new ID and a `Origin: <commit/issue>` note in the row.

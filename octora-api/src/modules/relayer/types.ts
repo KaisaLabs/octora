@@ -56,4 +56,15 @@ export interface RelayerConfig {
   mixerProgramId: string;
   /** Denomination in lamports for the fixed-amount pool. */
   poolDenomination: bigint;
+  /**
+   * Privacy delay gate, in milliseconds. The relayer rejects a withdrawal
+   * whose Merkle root the relayer first observed less than this many ms ago.
+   * This prevents the trivial "deposit, withdraw next slot" timing
+   * correlation that collapses the anonymity set on a low-traffic pool.
+   *
+   * Defaults to 13_000 (~32 Solana slots @ 400ms). Set to 0 to disable
+   * (tests, localnet smoke). The cap is intentionally low — meaningful
+   * privacy comes from anonymity-set growth, not delay alone.
+   */
+  privacyDelayMs?: number;
 }

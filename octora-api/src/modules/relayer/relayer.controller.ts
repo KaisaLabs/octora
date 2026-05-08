@@ -55,10 +55,13 @@ export function createRelayerController(
      * together inside the proof's public signals; the relayer only adds
      * gas and a small fee.
      *
-     * TODO(mainnet): enforce a minimum slot delay between the deposit
-     * that produced this commitment and the withdrawal that spends it.
-     * MVP runs back-to-back to keep dev tests fast — this is a privacy
-     * footgun on a busy pool and must be gated before mainnet launch.
+     * Privacy delay is enforced by RelayerService.checkPrivacyDelay (see
+     * relayer.service.ts). The first time the relayer sees a Merkle root,
+     * it arms a wall-clock timestamp and rejects with a typed error; only
+     * subsequent withdrawals against the same root, after the configured
+     * delay (`OCTORA_MIXER_PRIVACY_DELAY_MS`, default 13s ≈ 32 slots),
+     * are accepted. This blocks the trivial deposit-then-withdraw-next-slot
+     * timing correlation that collapses anonymity on a low-traffic pool.
      */
     async withdraw(req: FastifyRequest<{ Body: WithdrawBody }>, reply: FastifyReply) {
       const body = req.body;

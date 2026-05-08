@@ -17,6 +17,7 @@ export interface RelayerRoutesOptions {
   mixerRelayerKeypairPath: string;
   mixerRelayerFeeLamports: bigint;
   mixerDenomination: bigint;
+  mixerPrivacyDelayMs?: number;
 }
 
 /**
@@ -55,6 +56,7 @@ export async function registerRelayerRoutes(
       rpcUrl: RPC_URL,
       mixerProgramId: opts.mixerProgramId,
       poolDenomination: opts.mixerDenomination,
+      privacyDelayMs: opts.mixerPrivacyDelayMs,
     },
     nullifierRegistry,
   );

@@ -113,6 +113,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     mixerRelayerKeypairPath: config.mixerRelayerKeypairPath,
     mixerRelayerFeeLamports: config.mixerRelayerFeeLamports,
     mixerDenomination: config.mixerDenomination,
+    mixerPrivacyDelayMs: config.mixerPrivacyDelayMs,
   })
 
   return app

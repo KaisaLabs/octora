@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Coins, Copy, Flame, Minus } from "lucide-react";
+import { ArrowLeft, ArrowRight, Coins, Copy, Flame, Loader2, Minus } from "lucide-react";
+import { toast } from "sonner";
 
 import type { DistributionShape, Pool } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,8 @@ import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
 import { PositionStatusPill } from "@/components/octora/lp/PositionStatusPill";
 import { PrivateDepositModal } from "@/components/octora/lp/PrivateDepositModal";
 import { usePoolBins } from "@/hooks/usePoolBins";
+import { useSolana } from "@/providers/SolanaProvider";
+import { runClaimFees, runWithdrawClose } from "@/lib/privateLifecycle";
 
 interface Props {
   pool: Pool;
@@ -17,8 +20,21 @@ interface Props {
   onBack: () => void;
 }
 
+/**
+ * Tri-state position presence shared by Claim and Withdraw panels.
+ *
+ * - "unknown" = haven't checked yet (no wallet click).
+ * - "missing" = either /executor/pool-authority returned 404 on a previous
+ *   click, OR the user just closed the position via withdraw-close.
+ *   Both panels grey out their action button and show empty-state copy.
+ * - "exists"  = at least one successful CPI happened this session against a
+ *   live PoolAuthority. Buttons stay enabled.
+ */
+type PositionStatus = "unknown" | "missing" | "exists";
+
 export function PoolDetailView({ pool, presetShape, onBack }: Props) {
   const [detailTab, setDetailTab] = useState("deposit");
+  const [positionStatus, setPositionStatus] = useState<PositionStatus>("unknown");
 
   return (
     <div className="space-y-5">
@@ -91,10 +107,10 @@ export function PoolDetailView({ pool, presetShape, onBack }: Props) {
           <DepositPanel pool={pool} presetShape={presetShape} />
         </TabsContent>
         <TabsContent value="claim" className="mt-4">
-          <ClaimPanel pool={pool} />
+          <ClaimPanel pool={pool} positionStatus={positionStatus} setPositionStatus={setPositionStatus} />
         </TabsContent>
         <TabsContent value="withdraw" className="mt-4">
-          <WithdrawPanel pool={pool} />
+          <WithdrawPanel pool={pool} positionStatus={positionStatus} setPositionStatus={setPositionStatus} />
         </TabsContent>
       </Tabs>
     </div>
@@ -312,8 +328,53 @@ function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: Distrib
   );
 }
 
-function ClaimPanel({ pool }: { pool: Pool }) {
+function ClaimPanel({
+  pool,
+  positionStatus,
+  setPositionStatus,
+}: {
+  pool: Pool;
+  positionStatus: PositionStatus;
+  setPositionStatus: (s: PositionStatus) => void;
+}) {
+  const { wallet } = useSolana();
   const fees = (parseFloat(pool.apr) / 365) * 30 * 100;
+  const [pending, setPending] = useState(false);
+  const [lastSig, setLastSig] = useState<string | null>(null);
+
+  const handleClaim = async () => {
+    if (!wallet.address) {
+      toast.error("Connect your wallet first.");
+      return;
+    }
+    setPending(true);
+    const t = toast.loading("Deriving stealth + locating your position…");
+    try {
+      const res = await runClaimFees({
+        mainWalletAddress: wallet.address,
+        poolAddress: pool.address,
+      });
+      setPositionStatus("exists");
+      setLastSig(res.signature);
+      toast.success(`Claimed. Funds → ${shorten(res.exitRecipient)}`, {
+        id: t,
+        description: shorten(res.signature),
+      });
+    } catch (err) {
+      if (isPositionMissingError(err)) {
+        setPositionStatus("missing");
+        toast.error(
+          "No private position in this pool yet. Open one from the Add Liquidity tab.",
+          { id: t },
+        );
+      } else {
+        toast.error(describeErr(err), { id: t });
+      }
+    } finally {
+      setPending(false);
+    }
+  };
+
   return (
     <section className="space-y-5">
       <div className="flex items-start justify-between gap-3">
@@ -331,27 +392,105 @@ function ClaimPanel({ pool }: { pool: Pool }) {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <Button variant="hero" size="lg" className="w-full justify-center rounded-xl">
-          <Coins />
-          Claim fees
+        <Button
+          variant="hero"
+          size="lg"
+          className="w-full justify-center rounded-xl"
+          onClick={handleClaim}
+          disabled={pending || !wallet.connected || positionStatus === "missing"}
+        >
+          {pending ? <Loader2 className="animate-spin" /> : <Coins />}
+          {pending ? "Claiming…" : positionStatus === "missing" ? "No position to claim" : "Claim fees"}
         </Button>
-        <Button variant="premium" size="lg" className="w-full justify-center rounded-xl">
+        <Button
+          variant="premium"
+          size="lg"
+          className="w-full justify-center rounded-xl"
+          disabled
+          // MAINNET_BLOCKER: MET rewards CPI not implemented. Disable and
+          // explain rather than wire to a fake handler. Pre-mainnet sweep:
+          // implement claim_rewards on the executor program + bridge here.
+          title="MET rewards claim is coming soon — for now this only claims swap fees."
+        >
           <Flame />
           Claim rewards
         </Button>
       </div>
 
+      {lastSig && (
+        <p className="text-xs leading-5 text-muted-foreground">
+          Last tx: <span className="font-mono text-foreground">{shorten(lastSig)}</span>
+        </p>
+      )}
       <p className="text-xs leading-5 text-muted-foreground">
-        Claims settle to your session wallet, then are forwarded through the private route to your funding address.
+        {!wallet.connected
+          ? "Connect your wallet to claim fees from your private position in this pool."
+          : positionStatus === "missing"
+            ? "No private position detected here. Open one from the Add Liquidity tab and try again."
+            : "Claim runs the on-chain dlmm_claim_fees CPI from your stealth wallet. Fees settle to your private exit address."}
       </p>
     </section>
   );
 }
 
-function WithdrawPanel({ pool }: { pool: Pool }) {
-  const [pct, setPct] = useState(50);
+function WithdrawPanel({
+  pool,
+  positionStatus,
+  setPositionStatus,
+}: {
+  pool: Pool;
+  positionStatus: PositionStatus;
+  setPositionStatus: (s: PositionStatus) => void;
+}) {
+  const { wallet } = useSolana();
+  const [pct, setPct] = useState(100);
+  const [pending, setPending] = useState(false);
+  const [lastSig, setLastSig] = useState<string | null>(null);
   const positionValue = 12480;
   const withdrawValue = (positionValue * pct) / 100;
+
+  const handleWithdraw = async () => {
+    if (!wallet.address) {
+      toast.error("Connect your wallet first.");
+      return;
+    }
+    if (pct !== 100) {
+      // MAINNET_BLOCKER: partial withdraws not implemented. The slider is
+      // cosmetic — runWithdrawClose always closes 100%. Pre-mainnet sweep:
+      // pass bps_to_remove from UI through to /executor/withdraw-close-tx.
+      toast.message("MVP exits 100% of the position. Partial withdraws are coming.");
+    }
+    setPending(true);
+    const t = toast.loading("Deriving stealth + locating your position…");
+    try {
+      const res = await runWithdrawClose({
+        mainWalletAddress: wallet.address,
+        poolAddress: pool.address,
+      });
+      // The position account is closed on a 100% bps exit, so the next
+      // claim/withdraw against this (wallet, pool) MUST find nothing on
+      // chain. Mark missing immediately so the UI doesn't have to wait
+      // for the next click to discover that.
+      setPositionStatus("missing");
+      setLastSig(res.signature);
+      toast.success(`Closed. Funds → ${shorten(res.exitRecipient)}`, {
+        id: t,
+        description: shorten(res.signature),
+      });
+    } catch (err) {
+      if (isPositionMissingError(err)) {
+        setPositionStatus("missing");
+        toast.error(
+          "No private position in this pool yet. Open one from the Add Liquidity tab.",
+          { id: t },
+        );
+      } else {
+        toast.error(describeErr(err), { id: t });
+      }
+    } finally {
+      setPending(false);
+    }
+  };
 
   return (
     <section className="space-y-5">
@@ -408,15 +547,55 @@ function WithdrawPanel({ pool }: { pool: Pool }) {
         />
       </div>
 
-      <Button variant="hero" size="lg" className="w-full justify-center rounded-xl">
-        Withdraw privately
-        <ArrowRight />
+      <Button
+        variant="hero"
+        size="lg"
+        className="w-full justify-center rounded-xl"
+        onClick={handleWithdraw}
+        disabled={pending || !wallet.connected || positionStatus === "missing"}
+      >
+        {pending ? <Loader2 className="animate-spin" /> : null}
+        {pending
+          ? "Withdrawing…"
+          : positionStatus === "missing"
+            ? "No position to withdraw"
+            : "Withdraw privately"}
+        {!pending && positionStatus !== "missing" && <ArrowRight />}
       </Button>
+      {lastSig && (
+        <p className="text-xs leading-5 text-muted-foreground">
+          Last tx: <span className="font-mono text-foreground">{shorten(lastSig)}</span>
+        </p>
+      )}
       <p className="text-xs leading-5 text-muted-foreground">
-        Funds return through the private route — your main wallet remains hidden from on-chain observers.
+        {!wallet.connected
+          ? "Connect your wallet to withdraw your private position in this pool."
+          : positionStatus === "missing"
+            ? "No private position detected (or it has been closed). Open a new one from the Add Liquidity tab."
+            : "Withdraw runs the on-chain dlmm_withdraw_close CPI from your stealth wallet. Funds return to your private exit address — your main wallet stays unlinked."}
       </p>
     </section>
   );
+}
+
+function shorten(addr: string): string {
+  if (!addr || addr.length <= 12) return addr;
+  return `${addr.slice(0, 6)}…${addr.slice(-6)}`;
+}
+
+function describeErr(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/**
+ * Recognise the "PoolAuthority not initialised" 404 from /executor/pool-authority
+ * surfaced through privateLifecycle.ts as `Error("API 404: ...")`. Anything
+ * else (network errors, tx failures, RPC outages) keeps the generic toast.
+ */
+function isPositionMissingError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /\b404\b/.test(err.message) || /not initialised|not initialized|PoolAuthority/i.test(err.message);
 }
 
 function formatPrice(p: number): string {

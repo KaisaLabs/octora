@@ -74,6 +74,9 @@ async function main() {
   console.log(`  denom:      ${denom.toString()} lamports`);
   console.log(`  pool PDA:   ${poolPda.toBase58()}`);
   console.log(`  authority:  ${admin.publicKey.toBase58()}  <-- becomes admin FOREVER`);
+  // MAINNET_BLOCKER: this authority controls `set_paused` on the pool and
+  // is permanent — there is no transfer-authority instruction. On mainnet
+  // it MUST be a multisig from the start. See docs/test-plan.md §14.
   console.log();
   console.log("Press Ctrl+C in the next 5s to abort...");
   await new Promise((r) => setTimeout(r, 5000));

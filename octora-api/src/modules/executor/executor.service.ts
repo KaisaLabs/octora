@@ -538,8 +538,8 @@ export class ExecutorService {
       { pubkey: binArrayLower, isSigner: false, isWritable: true },          // 9 bin_array_lower
       { pubkey: binArrayUpper, isSigner: false, isWritable: true },          // 10 bin_array_upper
       { pubkey: positionAuthority, isSigner: false, isWritable: false },     // 11 sender
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 12 token_x_program
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 13 token_y_program
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 12 token_x_program  // MAINNET_BLOCKER: Token-2022
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 13 token_y_program  // MAINNET_BLOCKER: Token-2022
       { pubkey: DLMM_EVENT_AUTHORITY, isSigner: false, isWritable: false },  // 14 event_authority
       { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },       // 15 program
     ];
@@ -610,6 +610,12 @@ export class ExecutorService {
 
     // Account order matches the on-chain handler's index assertions —
     // see programs/octora-executor/src/instructions/dlmm/claim_fees.rs.
+    //
+    // MAINNET_BLOCKER: token_program is hardcoded to classic SPL-Token. On
+    // mainnet DLMM has Token-2022 pools (e.g. some PYUSD, JUP-extension
+    // pairs); both the program-id account and the ATA derivation must
+    // branch per-side based on `mintAccount.owner`. See docs/test-plan.md
+    // §14 for the pre-mainnet checklist.
     const dlmmAccounts: AccountMeta[] = [
       { pubkey: lbPair, isSigner: false, isWritable: true },                 // 0 lb_pair
       { pubkey: positionPubkey, isSigner: false, isWritable: true },         // 1 position
@@ -622,7 +628,7 @@ export class ExecutorService {
       { pubkey: exitAtaY, isSigner: false, isWritable: true },               // 8 user_token_y (exit_recipient)
       { pubkey: tokenX, isSigner: false, isWritable: false },                // 9 token_x_mint
       { pubkey: tokenY, isSigner: false, isWritable: false },                // 10 token_y_mint
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 11 token_program
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 11 token_program  // MAINNET_BLOCKER: Token-2022
       { pubkey: DLMM_EVENT_AUTHORITY, isSigner: false, isWritable: false },  // 12 event_authority
       { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },       // 13 dlmm_program
     ];
@@ -685,6 +691,9 @@ export class ExecutorService {
     const [reserveX] = deriveReserve(tokenX, lbPair, DLMM_PROGRAM_ID);
     const [reserveY] = deriveReserve(tokenY, lbPair, DLMM_PROGRAM_ID);
 
+    // MAINNET_BLOCKER: token_x_program / token_y_program hardcoded to classic
+    // SPL-Token. Token-2022 pools require per-side branching off
+    // `mintAccount.owner` plus matching ATA derivation. See docs/test-plan.md §14.
     const dlmmAccounts: AccountMeta[] = [
       { pubkey: positionPubkey, isSigner: false, isWritable: true },         // 0 position
       { pubkey: lbPair, isSigner: false, isWritable: true },                 // 1 lb_pair
@@ -698,8 +707,8 @@ export class ExecutorService {
       { pubkey: binArrayLower, isSigner: false, isWritable: true },          // 9 bin_array_lower
       { pubkey: binArrayUpper, isSigner: false, isWritable: true },          // 10 bin_array_upper
       { pubkey: positionAuthority, isSigner: false, isWritable: false },     // 11 sender
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 12 token_x_program
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 13 token_y_program
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 12 token_x_program  // MAINNET_BLOCKER: Token-2022
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 13 token_y_program  // MAINNET_BLOCKER: Token-2022
       { pubkey: DLMM_EVENT_AUTHORITY, isSigner: false, isWritable: false },  // 14 event_authority
       { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },       // 15 program
       { pubkey: exitRecipient, isSigner: false, isWritable: true },          // 16 rent_receiver
@@ -738,18 +747,77 @@ export class ExecutorService {
     lbPair: string;
     position: string;
     exitRecipient: string;
+    /** On-chain DLMM position bin range — populated when the position account
+     *  is decodable. The pool detail page uses this so the user doesn't have
+     *  to remember the original deposit range to claim or withdraw. */
+    lowerBinId?: number;
+    upperBinId?: number;
+    width?: number;
+    /** Pool token mints + bin-array PDAs covering the position. Same shape
+     *  as `useExistingPool` returns so the frontend can hand the result
+     *  straight to /executor/{claim-fees,withdraw-close}-tx. */
+    tokenX?: string;
+    tokenY?: string;
+    binArrayLower?: string;
+    binArrayUpper?: string;
+    activeBin?: number;
+    binStep?: number;
   } | null> {
     const [pda] = derivePoolAuthorityPda(this.programId, stealth, lbPair);
     const acct = await (this.program.account as any).poolAuthority.fetchNullable(pda);
     if (!acct) return null;
     const dlmm = acct.poolRef?.dlmm;
     if (!dlmm) return null;
+
+    // Best-effort: read the on-chain position to recover the deposit's
+    // bin range. Failures are tolerated (returns the base shape) so the
+    // endpoint stays useful when DLMM RPCs are flaky.
+    let extras: Partial<{
+      lowerBinId: number;
+      upperBinId: number;
+      width: number;
+      tokenX: string;
+      tokenY: string;
+      binArrayLower: string;
+      binArrayUpper: string;
+      activeBin: number;
+      binStep: number;
+    }> = {};
+    try {
+      const dlmmInstance = await DLMM.create(this.connection, lbPair);
+      const lbPosition = await dlmmInstance.getPosition(dlmm.position as PublicKey);
+      const lowerBinId = lbPosition.positionData.lowerBinId;
+      const upperBinId = lbPosition.positionData.upperBinId;
+      const lowerArrayIdx = binIdToBinArrayIndex(new BN(lowerBinId));
+      const upperArrayIdx = binIdToBinArrayIndex(new BN(upperBinId));
+      const [binArrayLower] = deriveBinArray(lbPair, lowerArrayIdx, DLMM_PROGRAM_ID);
+      const [binArrayUpper] = deriveBinArray(lbPair, upperArrayIdx, DLMM_PROGRAM_ID);
+      extras = {
+        lowerBinId,
+        upperBinId,
+        width: upperBinId - lowerBinId + 1,
+        tokenX: dlmmInstance.lbPair.tokenXMint.toBase58(),
+        tokenY: dlmmInstance.lbPair.tokenYMint.toBase58(),
+        binArrayLower: binArrayLower.toBase58(),
+        binArrayUpper: binArrayUpper.toBase58(),
+        activeBin: dlmmInstance.lbPair.activeId,
+        binStep: dlmmInstance.lbPair.binStep,
+      };
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[fetchPositionAuthority] could not decode DLMM position; returning base shape:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+
     return {
       pda: pda.toBase58(),
       stealthPubkey: acct.stealthPubkey.toBase58(),
       lbPair: dlmm.lbPair.toBase58(),
       position: dlmm.position.toBase58(),
       exitRecipient: acct.exitRecipient.toBase58(),
+      ...extras,
     };
   }
 

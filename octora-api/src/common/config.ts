@@ -23,6 +23,12 @@ export interface AppConfig {
   mixerRelayerFeeLamports: bigint;
   /** Fixed-amount mixer pool denomination in lamports (must match the on-chain pool). */
   mixerDenomination: bigint;
+  /**
+   * Privacy delay in ms — the relayer rejects a withdrawal whose Merkle
+   * root the relayer first observed less than this long ago. Defaults to
+   * 13_000 (~32 slots). 0 disables (tests, localnet smoke).
+   */
+  mixerPrivacyDelayMs: number;
 }
 
 function requireEnv(name: string): string {
@@ -51,5 +57,6 @@ export function loadConfig(): AppConfig {
       `${process.env.HOME ?? ""}/.config/solana/id.json`,
     mixerRelayerFeeLamports: BigInt(process.env.OCTORA_MIXER_RELAYER_FEE ?? "0"),
     mixerDenomination: BigInt(process.env.MIXER_DENOMINATION ?? "1000000000"),
+    mixerPrivacyDelayMs: Number(process.env.OCTORA_MIXER_PRIVACY_DELAY_MS ?? "13000"),
   };
 }

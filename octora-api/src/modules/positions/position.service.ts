@@ -276,6 +276,14 @@ async function claimPosition(
     return recordFailure(positionRepo, activityService, recoveryService, position, "venue-submission", error);
   }
 
+  // MAINNET_BLOCKER: this lifecycle path goes through `meteoraExecutor` from
+  // execution/clients/executor.factory.ts, which returns the mock unless
+  // OCTORA_USE_ONCHAIN_EXECUTOR=true *and* the OnchainMeteoraExecutor's
+  // ClaimInput is widened to carry the OnchainPositionContext (stealth
+  // keypair + 14-account remaining_accounts). The pool-detail UI bypasses
+  // this entirely via /executor/claim-fees-tx so it works today; this
+  // managed lifecycle still records "claimed" with a fake signature.
+  // See docs/test-plan.md §14.
   let venueReceipt;
   try {
     venueReceipt = await meteoraExecutor.claim({

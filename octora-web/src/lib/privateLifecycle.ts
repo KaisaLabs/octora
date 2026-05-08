@@ -31,9 +31,12 @@ interface TestPairConfig {
 export interface ClaimFeesInput {
   mainWalletAddress: string;
   poolAddress: string;
-  /** Original deposit range so use-pool reproduces the same bin arrays. */
-  lowerBinId: number;
-  upperBinId: number;
+  /** Original deposit range so use-pool reproduces the same bin arrays.
+   *  Optional: when omitted, the lib derives the stealth address and reads
+   *  the bin range from the on-chain PoolAuthority + DLMM Position so the
+   *  user doesn't have to remember the deposit's bins to claim/withdraw. */
+  lowerBinId?: number;
+  upperBinId?: number;
 }
 
 export interface ClaimFeesResult {
@@ -56,17 +59,70 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${API}${path}`);
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  return res.json() as Promise<T>;
+}
+
 function decodeBase64Tx(base64: string): Transaction {
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
   return Transaction.from(bytes);
 }
 
-async function loadConfig(input: ClaimFeesInput): Promise<TestPairConfig> {
-  const width = input.upperBinId - input.lowerBinId + 1;
+interface PoolAuthorityResponse {
+  pda: string;
+  stealthPubkey: string;
+  lbPair: string;
+  position: string;
+  exitRecipient: string;
+  // Present when /executor/pool-authority could decode the on-chain position.
+  lowerBinId?: number;
+  upperBinId?: number;
+  width?: number;
+  tokenX?: string;
+  tokenY?: string;
+  binArrayLower?: string;
+  binArrayUpper?: string;
+  activeBin?: number;
+  binStep?: number;
+}
+
+/**
+ * Resolve a complete `TestPairConfig` for a (wallet, pool) pair.
+ *
+ * If the caller already knows the bin range (test-page flow), use it
+ * directly via /executor/use-pool. Otherwise derive the stealth address,
+ * fetch /executor/pool-authority?stealth&lbPair to read the on-chain
+ * position's range, and feed that into /executor/use-pool. Either path
+ * returns the same `TestPairConfig` shape so the rest of the flow doesn't
+ * care which one ran.
+ */
+async function loadConfig(input: ClaimFeesInput, stealthPubkey: string): Promise<TestPairConfig> {
+  if (input.lowerBinId != null && input.upperBinId != null) {
+    const width = input.upperBinId - input.lowerBinId + 1;
+    return apiPost<TestPairConfig>("/executor/use-pool", {
+      lbPair: input.poolAddress,
+      width,
+      lowerBinId: input.lowerBinId,
+    });
+  }
+
+  const auth = await apiGet<PoolAuthorityResponse>(
+    `/executor/pool-authority?stealth=${stealthPubkey}&lbPair=${input.poolAddress}`,
+  );
+  if (auth.lowerBinId == null || auth.upperBinId == null) {
+    throw new Error(
+      "PoolAuthority found but its bin range could not be decoded. The DLMM " +
+        "position may not be initialised on this RPC, or the SDK request " +
+        "failed — try again or pass an explicit lowerBinId/upperBinId.",
+    );
+  }
+  const width = auth.upperBinId - auth.lowerBinId + 1;
   return apiPost<TestPairConfig>("/executor/use-pool", {
     lbPair: input.poolAddress,
     width,
-    lowerBinId: input.lowerBinId,
+    lowerBinId: auth.lowerBinId,
   });
 }
 
@@ -79,7 +135,7 @@ async function deriveAndConfirm(
     mainWalletAddress: input.mainWalletAddress,
     poolAddress: input.poolAddress,
   });
-  const config = await loadConfig(input);
+  const config = await loadConfig(input, stealth.publicKey);
 
   const { transaction, exitRecipient } = await apiPost<{
     transaction: string;

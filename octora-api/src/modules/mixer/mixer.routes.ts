@@ -4,6 +4,10 @@ import { MixerService } from "./mixer.service.js";
 import { createMixerController } from "./mixer.controller.js";
 import { makeRateLimiter } from "./rate-limit.js";
 
+// MAINNET_BLOCKER: default falls back to devnet. On mainnet deploy,
+// SOLANA_RPC_URL must be set explicitly to a real provider (Helius,
+// Triton, etc.) — public mainnet-beta rate-limits aggressively and
+// `getSignaturesForAddress` truncates under load. See docs/test-plan.md §14.
 const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
 // 1 SOL — single denomination for the MVP. Changing this is a *new pool*
 // (denomination is part of the PDA seeds), so MIXER_DENOMINATION must stay

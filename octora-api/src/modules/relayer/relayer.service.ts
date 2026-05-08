@@ -33,10 +33,30 @@ export class RelayerService {
   private client: MixerClient | null = null;
   private mixerPoolPDA: PublicKey | null = null;
 
+  /**
+   * Privacy delay gate — first-seen wall-clock timestamp per Merkle root.
+   * Populated lazily on first withdrawal request that names a given root.
+   *
+   * Why wall-clock and not slot-based: slot-of-deposit isn't observable
+   * from the proof (the whole point of the proof is to NOT reveal which
+   * commitment is being spent). What we *can* observe is when each root
+   * first arrived at this relayer, which is a lower bound on the
+   * deposit-to-withdraw delay because each new deposit produces a new
+   * root. Forcing a min wait between first-seeing-the-root and submitting
+   * the spend prevents the trivial "deposit, withdraw next slot" attack.
+   *
+   * The map grows unboundedly under attack — bounded by the on-chain
+   * 30-root ring buffer in practice. Old entries are pruned lazily.
+   */
+  private readonly rootFirstSeenAt = new Map<string, number>();
+  private readonly privacyDelayMs: number;
+
   constructor(
     private readonly config: RelayerConfig,
     private readonly nullifiers: NullifierRegistry,
-  ) {}
+  ) {
+    this.privacyDelayMs = config.privacyDelayMs ?? 13_000;
+  }
 
   /**
    * Initialize the Solana client connection.
@@ -90,7 +110,25 @@ export class RelayerService {
       };
     }
 
-    // 3. Verify proof off-chain (fast sanity check before paying gas)
+    // 3. Privacy delay gate. Run AFTER parity so the gate can't be probed
+    //    with garbage roots — only a parity-valid withdrawal can ever arm
+    //    a root in the first-seen map.
+    const delay = this.checkPrivacyDelay(request.root);
+    if (!delay.ok) {
+      return {
+        success: false,
+        txSignature: null,
+        nullifierHash: request.nullifierHash,
+        recipient: request.recipient,
+        amountLamports: "0",
+        feeLamports: request.fee,
+        error: `Privacy delay: this root was first observed less than ${
+          this.privacyDelayMs / 1000
+        }s ago. Retry in ~${Math.ceil(delay.waitMs / 1000)}s.`,
+      };
+    }
+
+    // 4. Verify proof off-chain (fast sanity check before paying gas)
     let proofValid: boolean;
     try {
       proofValid = await verifyWithdrawProof(request.proof, request.publicSignals);
@@ -118,7 +156,7 @@ export class RelayerService {
       };
     }
 
-    // 4. Submit on-chain withdrawal transaction
+    // 5. Submit on-chain withdrawal transaction
     this.pendingWithdrawals++;
     let txSignature: string;
 
@@ -137,7 +175,7 @@ export class RelayerService {
       };
     }
 
-    // 5. Mark nullifier as spent
+    // 6. Mark nullifier as spent
     await this.nullifiers.markSpent(request.nullifierHash, txSignature);
 
     this.pendingWithdrawals--;
@@ -199,6 +237,46 @@ export class RelayerService {
   }
 
   // --- Private ---
+
+  /**
+   * Privacy delay check.
+   *
+   * On first sight of a root, arm it with `now` and reject. On subsequent
+   * sights, accept iff the root has been known for at least
+   * `privacyDelayMs`. The arm-on-reject pattern is what makes the gate
+   * meaningful — without it, a client could pre-arm any root by spamming
+   * requests then submit just before the proof's blockhash expires.
+   *
+   * Roots that fall out of the on-chain 30-entry ring buffer naturally
+   * stop showing up in well-formed requests, so the map is bounded by
+   * pool-side state in practice. Out of paranoia we also evict entries
+   * older than 10× the delay window.
+   */
+  private checkPrivacyDelay(rootHex: string): { ok: true } | { ok: false; waitMs: number } {
+    if (this.privacyDelayMs <= 0) return { ok: true };
+    const now = Date.now();
+
+    // Lazy GC: drop entries older than 10× the window. Keeps the map size
+    // bounded under churn without scheduling a timer that would keep the
+    // process alive.
+    const maxAge = this.privacyDelayMs * 10;
+    if (this.rootFirstSeenAt.size > 64) {
+      for (const [k, t] of this.rootFirstSeenAt) {
+        if (now - t > maxAge) this.rootFirstSeenAt.delete(k);
+      }
+    }
+
+    const seen = this.rootFirstSeenAt.get(rootHex);
+    if (seen == null) {
+      this.rootFirstSeenAt.set(rootHex, now);
+      return { ok: false, waitMs: this.privacyDelayMs };
+    }
+    const elapsed = now - seen;
+    if (elapsed < this.privacyDelayMs) {
+      return { ok: false, waitMs: this.privacyDelayMs - elapsed };
+    }
+    return { ok: true };
+  }
 
   /**
    * Submit the withdrawal instruction to the mixer program on-chain.
