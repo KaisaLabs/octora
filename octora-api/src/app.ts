@@ -43,7 +43,11 @@ function createPrismaRepositories(): AppRepositories {
 
 export async function createApp(options: CreateAppOptions = {}) {
   const config = loadConfig()
-  const app = Fastify({ logger: options.logger ?? false })
+  // pluginTimeout bumped from the 10s default because registerMixerRoutes
+  // awaits hydrateFromChain() during registration — paginated
+  // getSignaturesForAddress + getTransaction calls regularly exceed 10s on
+  // public RPC endpoints. See mixer.routes.ts for why this must stay awaited.
+  const app = Fastify({ logger: options.logger ?? false, pluginTimeout: 120_000 })
   const repos = options.repos ?? createPrismaRepositories()
 
   await app.register(cors, {

@@ -10,7 +10,6 @@ import { PoolsPage } from "@/pages/PoolsPage";
 import { PoolDetailPage } from "@/pages/PoolDetailPage";
 import { PortfolioPage } from "@/pages/PortfolioPage";
 import { PositionDetailPage } from "@/pages/PositionDetailPage";
-import { ActivityPage } from "@/pages/ActivityPage";
 import NotFound from "./pages/NotFound.tsx";
 
 // MixerTestPage transitively imports circomlibjs + the mixer crypto bundle
@@ -26,7 +25,6 @@ const IntegratedTestPage = lazy(() =>
 import type { Pool } from "@/components/octora/types";
 import { listPools, mapPoolSummary, NETWORK } from "@/lib/api";
 import { usePortfolioPositions } from "@/hooks/usePortfolioPositions";
-import { usePortfolioActivity } from "@/hooks/usePortfolioActivity";
 import { useSolana } from "@/providers/SolanaProvider";
 
 const queryClient = new QueryClient();
@@ -66,7 +64,6 @@ function AppRoutes() {
   const pools = useMemo(() => rawPools, [rawPools]);
   const { wallet } = useSolana();
   const portfolioPositions = usePortfolioPositions(wallet.address, pools);
-  const portfolioActivity = usePortfolioActivity(wallet.address, pools);
 
   return (
     <Routes>
@@ -75,7 +72,6 @@ function AppRoutes() {
         <Route path="pool/:address" element={<PoolDetailPage />} />
         <Route path="portfolio" element={<PortfolioPage positions={portfolioPositions} />} />
         <Route path="position/:id" element={<PositionDetailPage positions={portfolioPositions} />} />
-        <Route path="activity" element={<ActivityPage activity={portfolioActivity} />} />
       </Route>
       <Route
         path="mixer-test"

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Activity, BriefcaseBusiness, Coins, Compass, Loader2, LogOut, Sparkles, Wallet } from "lucide-react";
+import { BriefcaseBusiness, Coins, Compass, Loader2, LogOut, Sparkles, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSolana, type WalletProviderId } from "@/providers/SolanaProvider";
 import { usePortfolioPositions } from "@/hooks/usePortfolioPositions";
@@ -29,7 +29,6 @@ function shortenAddress(addr: string): string {
 const tabs = [
   { to: "/", label: "Pools", icon: Compass },
   { to: "/portfolio", label: "Portfolio", icon: BriefcaseBusiness },
-  { to: "/activity", label: "Activity", icon: Activity },
 ] as const;
 
 export function AppShell() {
@@ -64,35 +63,37 @@ export function AppShell() {
   };
 
   return (
-    <div className="relative flex min-h-[100dvh] flex-col overflow-hidden">
+    <div className="relative flex min-h-[100dvh] flex-col overflow-x-hidden">
       <GlowBackground />
       <FloatingParticles count={30} />
 
       {/* Header */}
       <header className="sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur-xl">
         <div className="container flex min-h-14 items-center justify-between gap-3 py-2.5 sm:min-h-16 sm:py-3">
-          <Link to="/" className="flex items-center gap-2">
-            <span className="font-display text-lg font-semibold tracking-tight text-foreground sm:text-xl">
-              Octora
-            </span>
-          </Link>
+          <div className="flex items-center gap-6">
+            <Link to="/" className="flex items-center gap-2">
+              <span className="font-display text-lg font-semibold tracking-tight text-foreground sm:text-xl">
+                Octora
+              </span>
+            </Link>
 
-          {/* Desktop tabs */}
-          <nav className="hidden items-center gap-1 sm:flex">
-            {tabs.map((tab) => (
-              <Link
-                key={tab.to}
-                to={tab.to}
-                className={`rounded-lg px-3.5 py-2 text-sm transition-colors ${
-                  isActive(tab.to)
-                    ? "bg-surface-elevated text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {tab.label}
-              </Link>
-            ))}
-          </nav>
+            {/* Desktop tabs — grouped with the logo on the left */}
+            <nav className="hidden items-center gap-1 sm:flex">
+              {tabs.map((tab) => (
+                <Link
+                  key={tab.to}
+                  to={tab.to}
+                  className={`rounded-lg px-3.5 py-2 text-sm transition-colors ${
+                    isActive(tab.to)
+                      ? "bg-surface-elevated text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {tab.label}
+                </Link>
+              ))}
+            </nav>
+          </div>
 
           {/* Wallet */}
           <div className="flex items-center gap-2">

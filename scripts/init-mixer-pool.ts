@@ -5,9 +5,18 @@ import {
   PublicKey,
   SystemProgram,
 } from "@solana/web3.js";
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { resolve } from "path";
 import type { OctoraMixer } from "../target/types/octora_mixer";
+
+// Auto-load the repo-root .env so `pnpm tsx scripts/init-mixer-pool.ts` works
+// without an external `--env-file` or shell-source step. Resolved against cwd
+// because tsx's CJS transform leaves `import.meta.dirname` undefined — the
+// script's contract is "run from the repo root".
+const ENV_FILE = resolve(process.cwd(), ".env");
+if (existsSync(ENV_FILE)) {
+  process.loadEnvFile(ENV_FILE);
+}
 
 const MIXER_POOL_SEED = Buffer.from("mixer_pool");
 

@@ -4,6 +4,7 @@ import type { PortfolioPosition } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
 import { PositionCard } from "@/components/octora/lp/PositionCard";
 import { PnLCalendar } from "@/components/octora/lp/PnLCalendar";
+import { PortfolioKpiStrip } from "@/components/octora/lp/PortfolioKpiStrip";
 import { PortfolioStatsPanel } from "@/components/octora/lp/PortfolioStatsPanel";
 import { generateDailyPnL, summarizePnL } from "@/lib/pnl";
 import { useSolana } from "@/providers/SolanaProvider";
@@ -13,6 +14,7 @@ interface PortfolioPageProps {
   positions: PortfolioPosition[];
 }
 
+type Tab = "overview" | "active" | "closed";
 type Filter = "all" | "in-range" | "out-of-range" | "claimable";
 
 const parseUsd = (v: string | undefined): number => {
@@ -22,6 +24,7 @@ const parseUsd = (v: string | undefined): number => {
 };
 
 export function PortfolioPage({ positions }: PortfolioPageProps) {
+  const [tab, setTab] = useState<Tab>("overview");
   const [filter, setFilter] = useState<Filter>("all");
   const { wallet } = useSolana();
   const [claimingId, setClaimingId] = useState<string | null>(null);
@@ -63,7 +66,8 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
     const claimable = live.reduce((s, p) => s + parseUsd(p.claimable), 0);
     const inRange = live.filter((p) => p.inRange).length;
     const open = live.length;
-    return { value, fees, deposited, claimable, inRange, open };
+    const pools = new Set(live.map((p) => p.poolAddress)).size;
+    return { value, fees, deposited, claimable, inRange, open, pools };
   }, [positions]);
 
   const today = useMemo(() => new Date(), []);
@@ -84,10 +88,8 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
     [daily, totals],
   );
 
-  // Live positions only — closed-pending-sweep entries are tracked via the
-  // Activity feed and accessible by URL for the sweep flow, so they don't
-  // need to clutter the portfolio grid.
   const livePositions = useMemo(() => positions.filter((p) => !p.closed), [positions]);
+  const closedPositions = useMemo(() => positions.filter((p) => p.closed), [positions]);
 
   const filtered = useMemo(() => {
     return livePositions.filter((p) => {
@@ -136,53 +138,123 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
         )}
       </section>
 
-      {/* Stats + calendar */}
-      <section className="panel-shell rounded-2xl p-5 sm:p-6">
-        <div className="grid gap-6 lg:grid-cols-[minmax(280px,1fr)_2fr]">
-          <div className="border-b border-border/60 pb-6 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-6">
-            <PortfolioStatsPanel summary={summary} />
-          </div>
-          <div className="min-h-[420px]">
-            <PnLCalendar daily={daily} today={today} />
-          </div>
-        </div>
-      </section>
+      {/* Tabs */}
+      <div className="flex items-center gap-1 border-b border-border/60">
+        <TabButton active={tab === "overview"} onClick={() => setTab("overview")}>
+          Overview
+        </TabButton>
+        <TabButton active={tab === "active"} onClick={() => setTab("active")}>
+          Active Positions
+          <span className="ml-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+            {livePositions.length}
+          </span>
+        </TabButton>
+        <TabButton active={tab === "closed"} onClick={() => setTab("closed")}>
+          Closed Positions
+          <span className="ml-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+            {closedPositions.length}
+          </span>
+        </TabButton>
+      </div>
 
-      {/* Filters + positions */}
-      <section className="panel-shell rounded-2xl p-4 sm:p-5">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Filter</span>
-          <FilterChip active={filter === "all"} onClick={() => setFilter("all")}>
-            All ({livePositions.length})
-          </FilterChip>
-          <FilterChip active={filter === "in-range"} onClick={() => setFilter("in-range")}>
-            In range
-          </FilterChip>
-          <FilterChip active={filter === "out-of-range"} onClick={() => setFilter("out-of-range")}>
-            Out of range
-          </FilterChip>
-          <FilterChip active={filter === "claimable"} onClick={() => setFilter("claimable")}>
-            Has fees
-          </FilterChip>
-        </div>
-
-        {filtered.length === 0 ? (
-          <div className="mt-6 rounded-xl border border-dashed border-border bg-card p-10 text-center text-sm text-muted-foreground">
-            No positions match this filter.
-          </div>
-        ) : (
-          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((p) => (
-              <PositionCard
-                key={p.id}
-                position={p}
-                onClaim={() => handleClaim(p)}
+      {tab === "overview" && (
+        <>
+          <PortfolioKpiStrip summary={summary} />
+          <section className="grid gap-4 lg:grid-cols-[minmax(280px,360px)_1fr]">
+            <div className="panel-shell rounded-2xl p-5">
+              <PortfolioStatsPanel
+                summary={summary}
+                positionCount={totals.open}
+                poolCount={totals.pools}
               />
-            ))}
+            </div>
+            <div className="panel-shell min-h-[460px] rounded-2xl p-5">
+              <PnLCalendar daily={daily} today={today} />
+            </div>
+          </section>
+        </>
+      )}
+
+      {tab === "active" && (
+        <section className="panel-shell rounded-2xl p-4 sm:p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Filter</span>
+            <FilterChip active={filter === "all"} onClick={() => setFilter("all")}>
+              All ({livePositions.length})
+            </FilterChip>
+            <FilterChip active={filter === "in-range"} onClick={() => setFilter("in-range")}>
+              In range
+            </FilterChip>
+            <FilterChip active={filter === "out-of-range"} onClick={() => setFilter("out-of-range")}>
+              Out of range
+            </FilterChip>
+            <FilterChip active={filter === "claimable"} onClick={() => setFilter("claimable")}>
+              Has fees
+            </FilterChip>
           </div>
-        )}
-      </section>
+
+          {filtered.length === 0 ? (
+            <div className="mt-6 rounded-xl border border-dashed border-border bg-card p-10 text-center text-sm text-muted-foreground">
+              {livePositions.length === 0
+                ? "No active positions yet. Open a position from the Pools tab to get started."
+                : "No positions match this filter."}
+            </div>
+          ) : (
+            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {filtered.map((p) => (
+                <PositionCard key={p.id} position={p} onClaim={() => handleClaim(p)} />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {tab === "closed" && (
+        <section className="panel-shell rounded-2xl p-4 sm:p-5">
+          {closedPositions.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border bg-card p-10 text-center text-sm text-muted-foreground">
+              No closed positions. Positions you close will appear here.
+            </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {closedPositions.map((p) => (
+                <PositionCard key={p.id} position={p} onClaim={() => handleClaim(p)} />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative inline-flex items-center gap-1 px-4 py-2.5 text-sm font-medium transition-colors ${
+        active
+          ? "text-foreground"
+          : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {children}
+      {active && (
+        <span
+          aria-hidden
+          className="absolute inset-x-3 -bottom-px h-[2px] rounded-full bg-primary"
+        />
+      )}
+    </button>
   );
 }
 

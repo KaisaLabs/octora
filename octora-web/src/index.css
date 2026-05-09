@@ -115,11 +115,11 @@
   }
 
   html {
-    @apply dark scroll-smooth;
+    @apply dark scroll-smooth overscroll-none;
   }
 
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-background text-foreground antialiased overscroll-none;
     font-family: "Geist", ui-sans-serif, system-ui, sans-serif;
     font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;

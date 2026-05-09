@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Search, SlidersHorizontal, X } from "lucide-react";
+import { Anchor, ChevronDown, Flame, Loader2, Search, SlidersHorizontal, TrendingUp, X } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import type { Pool } from "@/components/octora/types";
 import { listPools, mapPoolSummary, NETWORK } from "@/lib/api";
 import { DEFAULT_CLUSTER } from "@/lib/solana/config";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -16,11 +16,17 @@ import { usePrices } from "@/hooks/usePrices";
 
 type ContentTab = "top" | "trending" | "stable";
 type TimeFrame = "5m" | "30m" | "1h" | "2h" | "4h" | "12h" | "24h";
+type SortKey = "tvl" | "volume" | "fees" | "feeTvl" | "apr" | "age";
+type SortDir = "asc" | "desc";
+interface SortState {
+  key: SortKey;
+  dir: SortDir;
+}
 
-const CONTENT_TABS: Array<{ id: ContentTab; label: string; sub: string }> = [
-  { id: "top", label: "Top performers", sub: "Best fee yield per dollar" },
-  { id: "trending", label: "Trending", sub: "Most 24h volume" },
-  { id: "stable", label: "Stable", sub: "USDC / USDT pairs" },
+const CONTENT_TABS: Array<{ id: ContentTab; label: string; sub: string; icon: LucideIcon }> = [
+  { id: "top", label: "Top Performers", sub: "Best fee yield per dollar at risk", icon: Flame },
+  { id: "trending", label: "Trending", sub: "Most 24h volume", icon: TrendingUp },
+  { id: "stable", label: "Stable", sub: "USDC / USDT pairs", icon: Anchor },
 ];
 
 const TIMEFRAMES: TimeFrame[] = ["5m", "30m", "1h", "2h", "4h", "12h", "24h"];
@@ -122,6 +128,17 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
   const [contentTab, setContentTab] = useState<ContentTab>("top");
   const [timeframe, setTimeframe] = useState<TimeFrame>("4h");
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  // null = use the implicit content-tab sort. Three-state cycle on click:
+  // desc → asc → null.
+  const [sort, setSort] = useState<SortState | null>(null);
+
+  const toggleSort = (key: SortKey) => {
+    setSort((cur) => {
+      if (!cur || cur.key !== key) return { key, dir: "desc" };
+      if (cur.dir === "desc") return { key, dir: "asc" };
+      return null;
+    });
+  };
 
   // Debounce search input to avoid hammering the API on every keystroke.
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -191,8 +208,41 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
         .includes(q);
     });
 
-    // Content tab implies sort. No separate sort UI.
+    // User-driven sort overrides the content-tab default; otherwise the tab
+    // picks the order.
     list = [...list].sort((a, b) => {
+      if (sort) {
+        const sign = sort.dir === "asc" ? 1 : -1;
+        let av = 0;
+        let bv = 0;
+        switch (sort.key) {
+          case "tvl":
+            av = parseUsd(a.tvl);
+            bv = parseUsd(b.tvl);
+            break;
+          case "volume":
+            av = parseUsd(a.volume24h);
+            bv = parseUsd(b.volume24h);
+            break;
+          case "fees":
+            av = parseUsd(a.fees24h);
+            bv = parseUsd(b.fees24h);
+            break;
+          case "feeTvl":
+            av = feeTvlPct(a);
+            bv = feeTvlPct(b);
+            break;
+          case "apr":
+            av = parsePct(a.apr);
+            bv = parsePct(b.apr);
+            break;
+          case "age":
+            av = a.createdAt ? nowSec - a.createdAt : -Infinity;
+            bv = b.createdAt ? nowSec - b.createdAt : -Infinity;
+            break;
+        }
+        return sign * (av - bv);
+      }
       if (contentTab === "trending") return parseUsd(b.volume24h) - parseUsd(a.volume24h);
       if (contentTab === "stable") return parseUsd(b.tvl) - parseUsd(a.tvl);
       // top: best fee yield per dollar at risk.
@@ -202,7 +252,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
       return parseUsd(b.tvl) - parseUsd(a.tvl);
     });
     return list;
-  }, [pools, debouncedQuery, searchQuery.data, contentTab, filters, nowSec]);
+  }, [pools, debouncedQuery, searchQuery.data, contentTab, filters, nowSec, sort]);
 
   const resetFilters = () => {
     setFilters(DEFAULT_FILTERS);
@@ -279,54 +329,106 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
 
         {/* Desktop table */}
         <div className="mt-5 hidden overflow-x-auto rounded-xl border border-border lg:block">
-          <div className="min-w-[1280px]">
-            <div className="grid grid-cols-[40px_minmax(220px,2fr)_100px_minmax(150px,1.2fr)_110px_110px_110px_110px_110px_120px] gap-3 bg-secondary/60 px-4 py-3 text-xs uppercase tracking-[0.18em] text-muted-foreground">
-              <span className="text-left">#</span>
-              <span className="text-left">Pool</span>
-              <span className="text-right">Pool Age</span>
-              <span className="inline-flex items-center justify-end gap-1.5 text-right">
-                <span>Live Price (24h)</span>
-                <LiveDot active={pricesQuery.isFetching} />
-              </span>
-              <span className="text-right">TVL</span>
-              <span className="text-right">24h Volume</span>
-              <span className="text-right">24h Fees</span>
-              <span className="text-right">Fee/TVL</span>
-              <span className="text-right">APR</span>
-              <span className="text-right">Action</span>
-            </div>
-            <div className="divide-y divide-border">
-              {filteredPools.map((p, i) => (
-                <div
-                  key={p.id}
-                  className="grid grid-cols-[40px_minmax(220px,2fr)_100px_minmax(150px,1.2fr)_110px_110px_110px_110px_110px_120px] items-center gap-3 bg-card px-4 py-4 text-sm transition-colors hover:bg-surface-elevated"
-                >
-                  <span className="font-mono text-xs text-muted-foreground tabular-nums">#{i + 1}</span>
-                  <PoolPairCell pool={p} />
-                  <p className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                    {formatAge(p.createdAt, nowSec)}
-                  </p>
-                  <PoolPairPrice
-                    tokenA={p.tokenA}
-                    tokenB={p.tokenB}
-                    tokenAMint={p.tokenAMint}
-                    tokenBMint={p.tokenBMint}
-                    prices={prices}
-                  />
-                  <p className="text-right font-mono tabular-nums text-foreground">{p.tvl}</p>
-                  <p className="text-right font-mono tabular-nums text-foreground">{p.volume24h}</p>
-                  <p className="text-right font-mono tabular-nums text-foreground">{p.fees24h}</p>
-                  <p className="text-right font-mono tabular-nums text-foreground">{fmtFeeTvl(p)}</p>
-                  <p className="text-right font-mono tabular-nums text-primary">{p.apr}</p>
-                  <div className="text-right">
-                    <Button size="sm" variant="premium" onClick={() => openPool(p)}>
-                      Open
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <table className="w-full min-w-[1080px] table-fixed border-separate border-spacing-0 text-sm">
+            <colgroup>
+              <col className="w-12" />
+              <col />
+              <col className="w-24" />
+              <col className="w-48" />
+              <col className="w-28" />
+              <col className="w-28" />
+              <col className="w-28" />
+              <col className="w-28" />
+              <col className="w-28" />
+            </colgroup>
+            <thead>
+              <tr className="bg-secondary/60 text-xs font-normal uppercase tracking-[0.18em] text-muted-foreground">
+                <th className="px-4 py-3 text-left font-normal">#</th>
+                <th className="px-4 py-3 text-left font-normal">Pool</th>
+                <th className="px-4 py-3 text-right font-normal">
+                  <SortHeader label="Pool Age" sortKey="age" current={sort} onToggle={toggleSort} />
+                </th>
+                <th className="px-4 py-3 text-right font-normal">
+                  <span className="inline-flex items-center justify-end gap-1.5">
+                    <span>Live Price (24h)</span>
+                    <LiveDot active={pricesQuery.isFetching} />
+                  </span>
+                </th>
+                <th className="px-4 py-3 text-right font-normal">
+                  <SortHeader label="TVL" sortKey="tvl" current={sort} onToggle={toggleSort} />
+                </th>
+                <th className="px-4 py-3 text-right font-normal">
+                  <SortHeader label="24h Volume" sortKey="volume" current={sort} onToggle={toggleSort} />
+                </th>
+                <th className="px-4 py-3 text-right font-normal">
+                  <SortHeader label="24h Fees" sortKey="fees" current={sort} onToggle={toggleSort} />
+                </th>
+                <th className="px-4 py-3 text-right font-normal">
+                  <SortHeader label="Fee/TVL" sortKey="feeTvl" current={sort} onToggle={toggleSort} />
+                </th>
+                <th className="px-4 py-3 text-right font-normal">
+                  <SortHeader label="APR" sortKey="apr" current={sort} onToggle={toggleSort} />
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredPools.map((p, i) => {
+                const feeTvl = feeTvlPct(p);
+                const aprNum = parsePct(p.apr);
+                return (
+                  <tr
+                    key={p.id}
+                    onClick={() => openPool(p)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openPool(p);
+                      }
+                    }}
+                    className="cursor-pointer border-t border-border bg-card transition-colors hover:bg-surface-elevated focus:bg-surface-elevated focus:outline-none"
+                  >
+                    <td className="px-4 py-4 align-middle">
+                      <span className={`font-mono text-xs tabular-nums ${rankClass(i, sort)}`}>
+                        #{i + 1}
+                      </span>
+                    </td>
+                    <td className="px-4 py-4 align-middle">
+                      <PoolPairCell pool={p} />
+                    </td>
+                    <td className="px-4 py-4 text-right align-middle font-mono text-xs tabular-nums text-muted-foreground">
+                      {formatAge(p.createdAt, nowSec)}
+                    </td>
+                    <td className="px-4 py-4 align-middle">
+                      <PoolPairPrice
+                        tokenA={p.tokenA}
+                        tokenB={p.tokenB}
+                        tokenAMint={p.tokenAMint}
+                        tokenBMint={p.tokenBMint}
+                        prices={prices}
+                      />
+                    </td>
+                    <td className="px-4 py-4 text-right align-middle font-mono tabular-nums text-foreground">
+                      {p.tvl}
+                    </td>
+                    <td className="px-4 py-4 text-right align-middle font-mono tabular-nums text-foreground">
+                      {p.volume24h}
+                    </td>
+                    <td className="px-4 py-4 text-right align-middle font-mono tabular-nums text-foreground">
+                      {p.fees24h}
+                    </td>
+                    <td className={`px-4 py-4 text-right align-middle font-mono tabular-nums ${feeTvlColorClass(feeTvl)}`}>
+                      {fmtFeeTvl(p)}
+                    </td>
+                    <td className={`px-4 py-4 text-right align-middle font-mono tabular-nums ${aprColorClass(aprNum)}`}>
+                      {p.apr}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
 
         {/* Mobile cards */}
@@ -441,26 +543,47 @@ function ContentTabBar({
   value: ContentTab;
   onChange: (v: ContentTab) => void;
 }) {
+  const activeTab = CONTENT_TABS.find((t) => t.id === value);
   return (
-    <div className="flex items-center gap-1 overflow-x-auto">
-      {CONTENT_TABS.map((t) => {
-        const active = value === t.id;
-        return (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => onChange(t.id)}
-            title={t.sub}
-            className={`relative whitespace-nowrap rounded-full px-3.5 py-2 text-sm transition-colors ${
-              active
-                ? "font-display text-xl font-semibold tracking-tight text-foreground sm:text-2xl"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {t.label}
-          </button>
-        );
-      })}
+    <div className="flex flex-col gap-2">
+      <div
+        role="tablist"
+        aria-label="Pool sort categories"
+        className="flex items-center gap-6 border-b border-border/60"
+      >
+        {CONTENT_TABS.map((t) => {
+          const active = value === t.id;
+          const Icon = t.icon;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => onChange(t.id)}
+              className={`relative inline-flex items-center gap-2 whitespace-nowrap pb-3 pt-1 text-sm font-medium transition-colors ${
+                active ? "text-primary" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Icon
+                className={`h-4 w-4 transition-colors ${
+                  active ? "text-primary" : "text-muted-foreground/80"
+                }`}
+              />
+              {t.label}
+              {active && (
+                <span
+                  aria-hidden
+                  className="absolute inset-x-0 -bottom-px h-[2px] rounded-full bg-primary"
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {activeTab && (
+        <p className="text-xs text-muted-foreground">{activeTab.sub}</p>
+      )}
     </div>
   );
 }
@@ -720,5 +843,65 @@ function PairAvatar({ a, b }: { a: string; b: string }) {
 function initials(token: string): string {
   if (!token) return "?";
   return token.slice(0, 2).toUpperCase();
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  current,
+  onToggle,
+}: {
+  label: string;
+  sortKey: SortKey;
+  current: SortState | null;
+  onToggle: (k: SortKey) => void;
+}) {
+  const active = current?.key === sortKey;
+  const dir = active ? current!.dir : null;
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(sortKey)}
+      className={`group inline-flex items-center justify-end gap-1 transition-colors ${
+        active ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      <span>{label}</span>
+      <ChevronDown
+        className={`h-3 w-3 transition-[transform,opacity] ${
+          active ? "opacity-100" : "opacity-30 group-hover:opacity-70"
+        } ${dir === "asc" ? "rotate-180" : ""}`}
+      />
+    </button>
+  );
+}
+
+/**
+ * Top-3 ranks get medal-style tinting on the default content-tab order;
+ * once the user picks an explicit sort, fall back to plain muted text since
+ * "rank" no longer means "best".
+ */
+function rankClass(i: number, sort: SortState | null): string {
+  if (sort) return "text-muted-foreground";
+  if (i === 0) return "text-amber-300";
+  if (i === 1) return "text-foreground/80";
+  if (i === 2) return "text-orange-300";
+  return "text-muted-foreground";
+}
+
+function feeTvlColorClass(v: number): string {
+  if (!Number.isFinite(v) || v <= 0) return "text-muted-foreground";
+  if (v >= 200) return "text-emerald-300";
+  if (v >= 50) return "text-primary";
+  if (v >= 10) return "text-primary/70";
+  return "text-foreground/75";
+}
+
+function aprColorClass(v: number): string {
+  if (!Number.isFinite(v)) return "text-muted-foreground";
+  if (v >= 100) return "text-emerald-300";
+  if (v >= 30) return "text-primary";
+  if (v >= 10) return "text-primary/70";
+  return "text-foreground/75";
 }
 
