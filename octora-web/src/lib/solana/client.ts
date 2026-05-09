@@ -4,7 +4,7 @@ import {
   type Lamports,
   type Address,
 } from "@solana/kit";
-import { getClusterConfig } from "./config";
+import { ACTIVE_CLUSTER, getClusterConfig, type Cluster } from "./config";
 
 /* ─────────────────────────────────────────────────────────
  * Solana client — browser-safe @solana/kit wrapper
@@ -29,7 +29,7 @@ export async function getLatestBlockhash(rpc: Rpc) {
   return value;
 }
 
-export function createSolanaClient(cluster?: "devnet" | "mainnet") {
+export function createSolanaClient(cluster?: Cluster) {
   const { rpc: rpcUrl, ws: wsUrl } = getClusterConfig(cluster);
 
   const rpc = createSolanaRpc(rpcUrl);
@@ -38,7 +38,7 @@ export function createSolanaClient(cluster?: "devnet" | "mainnet") {
   return {
     rpc,
     rpcSubscriptions,
-    cluster: cluster ?? ("devnet" as const),
+    cluster: cluster ?? ACTIVE_CLUSTER,
   };
 }
 

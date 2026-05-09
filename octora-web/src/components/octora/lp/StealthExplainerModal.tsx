@@ -1,0 +1,102 @@
+import { Eye, KeyRound, RefreshCw, ShieldOff } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+interface StealthExplainerModalProps {
+  open: boolean;
+  onContinue: () => void;
+  onCancel: () => void;
+}
+
+/**
+ * Pre-deposit explainer for the stealth-wallet UX (P1-38).
+ *
+ * Octora derives the stealth keypair deterministically from the user's
+ * main-wallet `signMessage` (see `lib/stealthVault.ts`). That model has
+ * three properties users absolutely must understand before their first
+ * deposit:
+ *
+ *   1. Recovery is the same signMessage on any device. There is no
+ *      "stealth seed phrase" — the seed *is* the signature.
+ *   2. Losing access to the main wallet permanently strands any rent
+ *      and any un-withdrawn dust held by the stealth wallet.
+ *   3. Two browsers signing the same derivation message produce the
+ *      same stealth keypair, so private windows and shared machines
+ *      do not produce a fresh identity.
+ *
+ * Surfaced once per wallet via `localStorage.octora.stealth-ack`; users
+ * can re-open it from the wallet popover via the "How does this work?"
+ * affordance.
+ */
+export function StealthExplainerModal({ open, onContinue, onCancel }: StealthExplainerModalProps) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => (o ? null : onCancel())}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <KeyRound className="h-5 w-5 text-primary" />
+            How your stealth wallet works
+          </DialogTitle>
+          <DialogDescription>
+            Read this once before your first private deposit. It is not a tutorial — it is the
+            recovery model.
+          </DialogDescription>
+        </DialogHeader>
+
+        <ul className="space-y-3 text-sm">
+          <li className="flex gap-3 rounded-md border border-border bg-muted/30 p-3">
+            <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div>
+              <p className="font-medium">Recovery is your wallet signature.</p>
+              <p className="text-muted-foreground">
+                Your stealth keypair is derived from a free, off-chain signature with your
+                connected wallet. Sign the same message on any device and the same stealth
+                address comes back — no seed phrase to copy down.
+              </p>
+            </div>
+          </li>
+
+          <li className="flex gap-3 rounded-md border border-border bg-muted/30 p-3">
+            <ShieldOff className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+            <div>
+              <p className="font-medium">Losing the main wallet strands the stealth balance.</p>
+              <p className="text-muted-foreground">
+                If you can no longer sign with your main wallet, you cannot recover the stealth
+                wallet either — including the rent it holds and any un-withdrawn dust.
+              </p>
+            </div>
+          </li>
+
+          <li className="flex gap-3 rounded-md border border-border bg-muted/30 p-3">
+            <Eye className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
+            <div>
+              <p className="font-medium">Privacy depends on the anonymity set.</p>
+              <p className="text-muted-foreground">
+                Octora keeps the on-chain link broken, but a withdrawal that lands moments after
+                your deposit is statistically linkable. The longer you wait and the more
+                deposits queue up, the stronger the privacy.
+              </p>
+            </div>
+          </li>
+        </ul>
+
+        <DialogFooter className="mt-2 gap-2">
+          <Button variant="ghost" onClick={onCancel}>
+            Not now
+          </Button>
+          <Button variant="hero" onClick={onContinue}>
+            I understand — continue
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

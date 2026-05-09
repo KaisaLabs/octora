@@ -1,10 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { BriefcaseBusiness, Coins, Compass, Loader2, LogOut, Sparkles, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSolana, type WalletProviderId } from "@/providers/SolanaProvider";
 import { usePortfolioPositions } from "@/hooks/usePortfolioPositions";
+import { hasAckedTos } from "@/lib/tosAck";
 import { WalletConnectDialog } from "./lp/WalletConnectDialog";
+import { TosAckModal } from "./lp/TosAckModal";
+import { BetaWarningBanner } from "./BetaWarningBanner";
 import { GlowBackground } from "./GlowBackground";
 import { FloatingParticles } from "./FloatingParticles";
 import { LivePriceChip } from "./LivePriceChip";
@@ -37,6 +40,19 @@ export function AppShell() {
   const { wallet, connect, disconnect, balance, providers } = useSolana();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pendingId, setPendingId] = useState<WalletProviderId | null>(null);
+  const [tosOpen, setTosOpen] = useState(false);
+
+  // Open the BETA / UNAUDITED ack modal once per (wallet × disclosure
+  // version). Bumping CURRENT_TOS_VERSION in lib/tosAck.ts forces every
+  // wallet to re-ack — the audit (P1-36) treats acceptance as
+  // version-scoped, not "did this user ever accept any version".
+  useEffect(() => {
+    if (!wallet.connected || !wallet.address) {
+      setTosOpen(false);
+      return;
+    }
+    setTosOpen(!hasAckedTos(wallet.address));
+  }, [wallet.connected, wallet.address]);
 
   // Live claimable across all wallet-owned positions. Pools list is unused
   // here (we only need feeUsd from on-chain state); shared react-query cache
@@ -66,6 +82,10 @@ export function AppShell() {
     <div className="relative flex min-h-[100dvh] flex-col overflow-x-hidden">
       <GlowBackground />
       <FloatingParticles count={30} />
+
+      {/* BETA / UNAUDITED + network-mismatch banner. Sticky above the
+          header so the warning can never be scrolled past. */}
+      <BetaWarningBanner />
 
       {/* Header */}
       <header className="sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur-xl">
@@ -207,6 +227,18 @@ export function AppShell() {
         connecting={wallet.connecting}
         pendingId={pendingId}
         onSelect={handlePick}
+      />
+
+      <TosAckModal
+        open={tosOpen}
+        walletAddress={wallet.address ?? null}
+        onAcknowledged={() => setTosOpen(false)}
+        onCancel={() => {
+          // User dismissed without signing — disconnect rather than leave
+          // them in an un-acked state where every action would prompt again.
+          setTosOpen(false);
+          disconnect();
+        }}
       />
     </div>
   );

@@ -20,6 +20,9 @@ import {
 } from "@/lib/privateDeposit";
 import { addLocalPosition } from "@/lib/localPositions";
 import { NETWORK } from "@/lib/api";
+import { hasSeenStealthExplainer, markStealthExplainerSeen } from "@/lib/stealthAck";
+import { isNetworkUnsafe, useNetworkStatus } from "@/lib/networkStatus";
+import { StealthExplainerModal } from "./StealthExplainerModal";
 
 interface Props {
   open: boolean;
@@ -102,9 +105,24 @@ export function PrivateDepositModal({
   fallbackDecimals,
 }: Props) {
   const { wallet } = useSolana();
+  const networkStatus = useNetworkStatus();
+  const networkUnsafe = isNetworkUnsafe(networkStatus);
 
   const [prices, setPrices] = useState<PriceMap | null>(null);
   const [pricesError, setPricesError] = useState<string | null>(null);
+
+  // P1-38: surface the stealth-wallet recovery model the first time a
+  // wallet opens the deposit modal. Per-wallet flag — switching wallets
+  // re-opens the explainer, which is correct (a different user is
+  // arriving at the same UI for the first time).
+  const [stealthExplainerOpen, setStealthExplainerOpen] = useState(false);
+  useEffect(() => {
+    if (!open || !wallet.connected || !wallet.address) {
+      setStealthExplainerOpen(false);
+      return;
+    }
+    setStealthExplainerOpen(!hasSeenStealthExplainer(wallet.address));
+  }, [open, wallet.connected, wallet.address]);
 
   const [phase, setPhase] = useState<Phase>("preview");
   const initialStepStatuses = (): Record<DepositStepKey, "pending" | "active" | "ok" | "error"> => ({
@@ -254,7 +272,11 @@ export function PrivateDepositModal({
     fallbackDecimals?.tokenB,
   ]);
 
-  const ready = wallet.connected && breakdown.hasPrices && phase === "preview";
+  // Block submit when the genesis-hash check failed or the RPC is
+  // unreachable (P1-35). The explainer modal does NOT block submit
+  // (it's UX, not a security gate); we just open it on first deposit.
+  const ready =
+    wallet.connected && breakdown.hasPrices && phase === "preview" && !networkUnsafe;
 
   const [mintState, setMintState] = useState<{
     status: "idle" | "loading" | "ok" | "error";
@@ -392,6 +414,21 @@ export function PrivateDepositModal({
   };
 
   return (
+    <>
+    <StealthExplainerModal
+      open={stealthExplainerOpen}
+      onContinue={() => {
+        if (wallet.address) markStealthExplainerSeen(wallet.address);
+        setStealthExplainerOpen(false);
+      }}
+      onCancel={() => {
+        // User dismissed without confirming. Close the deposit modal too —
+        // sending them straight at the spinner would skip the recovery
+        // explainer they just declined.
+        setStealthExplainerOpen(false);
+        onOpenChange(false);
+      }}
+    />
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="max-w-md border-border bg-surface-elevated p-0 sm:max-w-lg">
         <DialogHeader className="border-b border-border/60 px-6 py-4">
@@ -464,6 +501,7 @@ export function PrivateDepositModal({
         </div>
       </DialogContent>
     </Dialog>
+    </>
   );
 }
 

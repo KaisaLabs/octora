@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { Address, Lamports } from "@solana/kit";
 import { createSolanaClient, getLamportBalance, type SolanaClient } from "@/lib/solana/client";
+import { ACTIVE_CLUSTER } from "@/lib/solana/config";
 
 /* ─────────────────────────────────────────────────────────
  * SolanaProvider — React context for Solana client + wallet
@@ -94,7 +95,7 @@ function detectProviders(): WalletProviderInfo[] {
 const PROVIDER_STORAGE_KEY = "octora.wallet.providerId";
 
 export function SolanaProvider({ children }: { children: ReactNode }) {
-  const [client] = useState(() => createSolanaClient("devnet"));
+  const [client] = useState(() => createSolanaClient(ACTIVE_CLUSTER));
   const [wallet, setWallet] = useState<WalletState>({
     address: null,
     connected: false,
