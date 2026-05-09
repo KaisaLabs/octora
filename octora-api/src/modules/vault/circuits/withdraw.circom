@@ -76,14 +76,44 @@ template Withdraw(levels) {
         tree.pathIndices[i] <== pathIndices[i];
     }
 
-    // 4. Constrain recipient and fee to prevent tx front-running
-    // Square constraints ensure these values are bound to the proof
-    signal recipientSquare;
-    recipientSquare <== recipient * recipient;
-    signal feeSquare;
-    feeSquare <== fee * fee;
-    signal relayerSquare;
-    relayerSquare <== relayer * relayer;
+    // 4. Bind (recipient, relayer, fee) into a Poseidon hash that
+    //    participates in the constraint matrix.
+    //
+    // Why this matters (P0-3, runbooks/PRODUCTION_READINESS.md):
+    //
+    //   Groth16 already binds public inputs to the proof — a relayer
+    //   that takes a proof for `recipient = A` cannot submit it with
+    //   `recipient = B` because B is not what the verifier was given.
+    //   The previous `x*x === xSquare` pattern (Tornado-style) only
+    //   ensured the public-input signal was *referenced* somewhere in
+    //   the constraint system, so the circom optimizer wouldn't drop
+    //   it. Auditors flag the squaring pattern because:
+    //
+    //     1. Squaring is trivially satisfiable for any input — the
+    //        constraint system cannot tell A from B once `A*A` and
+    //        `B*B` are independently witnessed.
+    //     2. Off-chain tooling that inspects the proof body (without
+    //        re-running the verifier against the public inputs) would
+    //        be fooled into accepting a substituted (recipient,
+    //        relayer, fee) triple.
+    //
+    // Replacing the three squarings with a Poseidon hash over the
+    // same three values makes the binding non-linear and explicit.
+    // Any change to recipient / relayer / fee perturbs every
+    // downstream wire in the witness, so a substitution attempt
+    // produces an inconsistent witness rather than a separately-valid
+    // square. The hash output (`paramsBindingHash`) is a witness-only
+    // signal — it is NOT a public input, so no on-chain verifier
+    // change is required, but the verifying key MUST be regenerated
+    // from the rebuilt `.r1cs` (the constraint count changed). See
+    // `runbooks/ceremony/PROCEDURE.md` for the full re-setup steps.
+    component paramsBinding = Poseidon(3);
+    paramsBinding.inputs[0] <== recipient;
+    paramsBinding.inputs[1] <== relayer;
+    paramsBinding.inputs[2] <== fee;
+
+    signal paramsBindingHash;
+    paramsBindingHash <== paramsBinding.out;
 }
 
 // 20 levels = 2^20 = ~1,048,576 possible deposits
