@@ -12,6 +12,23 @@ octora_mixer = "BHxT3jyWJ1mRLyMjywQoiSXBqo7YpTiGWC1oVr2Ppnzx"
 octora_executor = "4n47TYP2hQ2bwS8GiU3a1EVyF9mgeSbKWBvAVmUjaUtK"
 octora_mixer = "BHxT3jyWJ1mRLyMjywQoiSXBqo7YpTiGWC1oVr2Ppnzx"
 
+# [programs.mainnet]
+# Mainnet program IDs — filled in only after a successful deploy from a
+# fresh, never-used keypair. The same string must also be pasted into:
+#   * programs/octora-executor/src/lib.rs : declare_id!
+#   * programs/octora-mixer/src/lib.rs    : declare_id!
+#   * octora-api env: OCTORA_EXECUTOR_PROGRAM_ID, OCTORA_MIXER_PROGRAM_ID
+#   * frontend env  : the VITE_* program-id vars
+#
+# Leaving this section commented is intentional — uncommenting with a
+# placeholder will make `anchor build` load mainnet metadata that does
+# not match the on-chain bytecode. Follow the bring-up checklist at
+# `runbooks/deployment/MAINNET.md` and uncomment in the SAME commit
+# that lands the deploy.
+#
+# octora_executor = "<MAINNET_EXECUTOR_PROGRAM_ID>"
+# octora_mixer    = "<MAINNET_MIXER_PROGRAM_ID>"
+
 
 [registry]
 url = "https://api.apr.dev"
