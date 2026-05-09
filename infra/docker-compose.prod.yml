@@ -1,0 +1,92 @@
+# Production-ish docker-compose for a single-VM private beta deploy
+# (P1-41). Suitable for Hetzner / Render / a dedicated VM until traffic
+# warrants a managed Postgres + multi-replica setup.
+#
+# Three services:
+#   - octora-api : the Fastify API behind the runbook health checks.
+#   - postgres   : 16-alpine, single instance. Migrate to RDS / Supabase
+#                  for production beta — see runbooks/PRODUCTION_READINESS.md
+#                  P2-32.
+#   - caddy      : reverse proxy with automatic Let's Encrypt. Listens
+#                  on :80/:443 and forwards to the API.
+#
+# Secrets are NOT defined inline. Pull them from the host's secrets
+# manager (Doppler / AWS SM / 1Password Secrets) into a `.env` that the
+# `env_file` directive sources at boot. NEVER commit that file.
+#
+# Volumes:
+#   octora-postgres-data : Postgres data dir.
+#   octora-caddy-data    : ACME certs + Caddy state. Persistent so
+#                          rate-limited Let's Encrypt issuance survives
+#                          restarts.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-octora}
+      POSTGRES_USER: ${POSTGRES_USER:-octora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - octora-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-octora}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # No external port exposure — only the API talks to Postgres, and
+    # both share the compose network. Open a port here ONLY when
+    # debugging; production access is via the API's queries.
+
+  octora-api:
+    build:
+      context: ../octora-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      # Source from secrets-manager → host file (see runbooks/deployment/
+      # secrets.md). Includes DATABASE_URL, OCTORA_*_PROGRAM_ID,
+      # OCTORA_MIXER_RELAYER_*, OCTORA_ADMIN_API_TOKEN, FRONTEND_URL,
+      # SENTRY_DSN, NODE_ENV=production, etc.
+      - ./octora-api.env
+    environment:
+      # Force Postgres URL into the form Prisma + the application want.
+      # Override DATABASE_URL in octora-api.env if you're pointing at
+      # an external DB instead of the compose Postgres.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-octora}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-octora}}
+      PORT: 8787
+    expose:
+      - "8787"
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8787/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - octora-api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - octora-caddy-data:/data
+      - octora-caddy-config:/config
+    environment:
+      # Domain and admin email are read by Caddyfile via {$ENV} substitution.
+      OCTORA_DOMAIN: ${OCTORA_DOMAIN:?OCTORA_DOMAIN must be set, e.g. api.octora.example}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set for Let's Encrypt}
+
+volumes:
+  octora-postgres-data:
+  octora-caddy-data:
+  octora-caddy-config:

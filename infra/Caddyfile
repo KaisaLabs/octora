@@ -1,0 +1,56 @@
+# Caddy config for the production single-VM deploy (P1-41).
+#
+# Caddy auto-provisions a Let's Encrypt cert for {$OCTORA_DOMAIN}.
+# Override via the docker-compose env. ACME_EMAIL is required by
+# Let's Encrypt's TOS check.
+#
+# Security headers reflect the audit's CSP guidance (P2-40):
+#   - HSTS on, 1 year, includeSubDomains.
+#   - X-Frame-Options DENY (no third-party iframing of API responses).
+#   - Strict referrer.
+#   - Content-Security-Policy intentionally NOT set here — the API
+#     serves JSON, not HTML, so a CSP header on the API origin is
+#     defensive noise. The frontend's CSP belongs on the static host
+#     (Vercel / Cloudflare Pages) where it can include the wasm-unsafe-
+#     eval allowance the ZK prover needs.
+
+{
+    email {$ACME_EMAIL}
+    auto_https on
+    # Production logs to stdout; the docker driver writes to the host's
+    # journal where the secrets-manager runbook documents shipping them
+    # to a real log sink (P1-30 / P1-44).
+    log {
+        format json
+        level INFO
+    }
+}
+
+{$OCTORA_DOMAIN} {
+    encode zstd gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Frame-Options "DENY"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Caddy adds Server: Caddy by default; redact so we don't
+        # advertise the proxy version to scanners.
+        -Server
+    }
+
+    reverse_proxy octora-api:8787 {
+        # Forward standard provenance headers so the API logs can tag
+        # requests with the originating IP (used by the rate-limit
+        # middleware to bucket abuse).
+        header_up X-Real-IP {http.request.remote_host}
+        header_up X-Forwarded-For {http.request.header.X-Forwarded-For},{http.request.remote_host}
+        header_up X-Forwarded-Proto {http.request.scheme}
+
+        # Health-check upstream so a transient API restart doesn't
+        # serve 502s into a load balancer / uptime monitor.
+        health_uri /health
+        health_interval 15s
+        health_timeout 5s
+    }
+}

@@ -1,0 +1,29 @@
+# Keep the build context tight — every byte that lands in the builder
+# stage gets streamed to the daemon, and a stray node_modules can turn
+# a 30s build into a 5min one.
+node_modules
+dist
+.next
+coverage
+.pnpm-store
+
+# Local env / dev files. Production secrets come from the secrets
+# manager (see runbooks/deployment/secrets.md), never from a baked-in
+# .env.
+.env
+.env.*
+!.env.example
+
+# Editor / OS detritus
+.DS_Store
+.idea
+.vscode
+*.swp
+
+# Source-control + tests we don't run inside the image
+.git
+.gitignore
+**/__tests__
+**/*.test.ts
+playwright-report
+test-results

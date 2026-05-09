@@ -1,0 +1,166 @@
+name: CI
+
+# PR checks + main pre-deploy gate (P1-42).
+#
+# Runs on every pull request and every push to `main`. Each job is
+# independent so a failure in (say) Anchor doesn't hide a TypeScript
+# regression — the audit treats CI gates as the contract between
+# committers and the deploy workflow.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel superseded runs on the same PR / branch so a fast typo
+  # doesn't burn 30 min of compute.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API · typecheck + tests + prisma drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: octora
+          POSTGRES_PASSWORD: octora
+          POSTGRES_DB: octora
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U octora"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: octora-api
+    env:
+      DATABASE_URL: postgresql://octora:octora@localhost:5432/octora
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: octora-api/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Prisma generate
+        run: pnpm exec prisma generate
+
+      - name: Prisma migration drift check
+        # `migrate diff` exits 0 when the migration history fully
+        # describes the schema. A non-zero exit means someone edited
+        # `schema.prisma` without writing a migration — the very mistake
+        # that bricks production deploys.
+        run: |
+          pnpm exec prisma migrate deploy
+          pnpm exec prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+  web:
+    name: Web · typecheck + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: octora-web
+    env:
+      VITE_NETWORK: devnet
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: octora-web/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  programs:
+    name: Programs · cargo check + clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check (workspace)
+        run: cargo check --workspace --all-targets
+
+      - name: cargo clippy
+        # Treat warnings as errors so a `unused variable` in a fresh
+        # PR shows up as a CI red, not as a comment in code review.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  anchor:
+    name: Anchor · build IDLs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v1.18.26/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor --tag v0.32.1 anchor-cli --locked
+
+      - name: Anchor build
+        # `--no-idl` skips the IDL emission that requires `idl-build`
+        # feature wiring; CI just needs to know the programs compile
+        # against Anchor 0.32. Real IDLs are generated and committed
+        # separately when the runbook says so.
+        run: anchor build --no-idl

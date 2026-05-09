@@ -1,0 +1,144 @@
+name: Deploy
+
+# Build + push the octora-api Docker image. Triggers:
+#   - push to `main`        → build, push, deploy to staging
+#   - workflow_dispatch     → optional manual mainnet deploy with the
+#                             approval gate enforced by the
+#                             `production` environment's protection
+#                             rules.
+#
+# The audit (P1-42) wants:
+#   - On main merge: build + push Docker image, deploy to staging.
+#   - Manual approval gate → mainnet deploy.
+#
+# The `production` GitHub environment must be configured with a
+# required reviewers list before this workflow can land a real
+# mainnet deploy. Until that's wired, the `deploy-prod` job will
+# block waiting for approval — which is the right safety posture.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Deploy target"
+        required: true
+        type: choice
+        default: staging
+        options:
+          - staging
+          - production
+      sha:
+        description: "Commit SHA to deploy (default: latest on main)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  # Avoid two deploys racing the same target.
+  group: deploy-${{ github.event.inputs.target || 'staging' }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/octora-api
+
+jobs:
+  build-and-push:
+    name: Build & push ${{ github.sha }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.sha || github.sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build & push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: octora-api
+          file: octora-api/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-staging:
+    name: Deploy → staging
+    needs: build-and-push
+    if: github.event_name == 'push' || github.event.inputs.target == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_API_URL }}
+    steps:
+      - name: Trigger staging rollout
+        # The actual deploy command depends on the host. For Fly.io:
+        #   flyctl deploy --image $IMAGE --remote-only
+        # For a single-VM compose deploy:
+        #   ssh staging "cd /srv/octora && docker compose pull && docker compose up -d"
+        # Wire the right step in once the staging host is provisioned;
+        # this run-step keeps the workflow honest until then.
+        run: |
+          echo "Image: ${{ needs.build-and-push.outputs.image }}"
+          echo "Digest: ${{ needs.build-and-push.outputs.digest }}"
+          echo "TODO: replace with the staging host's deploy command."
+          # Fail loudly so a mis-merge doesn't pretend to deploy.
+          exit 1
+
+  deploy-prod:
+    name: Deploy → production
+    needs: build-and-push
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # `production` environment must be configured with required
+    # reviewers in the repo settings — that's the manual approval
+    # gate the audit (P1-42) calls for. Without configured reviewers,
+    # this job waits forever, which is fail-closed and intentional.
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_API_URL }}
+    steps:
+      - name: Pre-flight reminders
+        run: |
+          echo "::notice::Confirm runbooks/deployment/MAINNET.md §0 pre-flight is green."
+          echo "::notice::Confirm Squads vault holds upgrade authority for both programs."
+          echo "::notice::Confirm /health is GREEN on staging with the same image."
+
+      - name: Trigger production rollout
+        run: |
+          echo "Image: ${{ needs.build-and-push.outputs.image }}"
+          echo "Digest: ${{ needs.build-and-push.outputs.digest }}"
+          echo "TODO: replace with the production host's deploy command."
+          exit 1
