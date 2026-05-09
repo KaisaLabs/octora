@@ -20,6 +20,7 @@ describe("orchestrator service", () => {
     await repos.positionRepo.createPosition({
       id: positionId,
       intentId: "intent_1",
+      walletAddress: "TestWallet111111111111111111111111111111111",
       action: "add-liquidity",
       mode: "fast-private",
       state: "awaiting_signature",
@@ -76,6 +77,7 @@ describe("orchestrator service", () => {
     await repos.positionRepo.createPosition({
       id: positionId,
       intentId: "intent_2",
+      walletAddress: "TestWallet111111111111111111111111111111111",
       action: "add-liquidity",
       mode: "fast-private",
       state: "indexing",
@@ -121,6 +123,7 @@ describe("orchestrator service", () => {
     await repos.positionRepo.createPosition({
       id: positionId,
       intentId: "intent_3",
+      walletAddress: "TestWallet111111111111111111111111111111111",
       action: "add-liquidity",
       mode: "fast-private",
       state: "awaiting_signature",

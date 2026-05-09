@@ -18,6 +18,8 @@ import { registerMixerRoutes } from '#modules/mixer/mixer.routes'
 import { registerExecutorRoutes } from '#modules/executor/executor.routes'
 import { registerDepositsRoutes } from '#modules/deposits'
 import { registerRelayerRoutes } from '#modules/relayer'
+import { registerAuthRoutes } from '#modules/auth/auth.routes'
+import { registerAdminRoutes } from '#modules/admin/admin.routes'
 import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
 
 export interface AppRepositories {
@@ -78,12 +80,14 @@ export async function createApp(options: CreateAppOptions = {}) {
         version: '0.1.0',
       },
       tags: [
+        { name: 'Auth', description: 'Wallet-signature challenge / nonce issuance' },
         { name: 'Positions', description: 'Position intents and lifecycle' },
         { name: 'DLMM', description: 'Meteora DLMM pool data and analytics' },
         { name: 'Prices', description: 'Realtime token USD prices via Jupiter' },
         { name: 'Waitlist', description: 'Landing page waitlist signups' },
         { name: 'Deposits', description: 'Private deposit orchestration' },
         { name: 'Relayer', description: 'Mixer relayer (Groth16-proven withdrawals)' },
+        { name: 'Admin', description: 'Operator-only admin endpoints (token-gated)' },
       ],
     },
   })
@@ -128,7 +132,23 @@ export async function createApp(options: CreateAppOptions = {}) {
     const code = report.status === 'ok' ? 200 : 503
     return reply.code(code).send(report)
   })
-  app.register(registerPositionRoutes, { ...repos, meteoraExecutor })
+  // Wallet-signature auth + admin routes (P0-20, P1-25). Both depend on the
+  // live Prisma client; they degrade to no-op when the app is built with
+  // injected repos and no client (test harness).
+  if (prismaClient) {
+    await app.register(registerAuthRoutes, { prisma: prismaClient })
+    await app.register(registerAdminRoutes, {
+      waitlistRepo: repos.waitlistRepo,
+      adminApiToken: config.adminApiToken,
+    })
+  }
+
+  app.register(registerPositionRoutes, {
+    ...repos,
+    meteoraExecutor,
+    betaCaps: config.betaCaps,
+    prisma: prismaClient,
+  })
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)
   app.register(registerWaitlistRoutes, { waitlistRepo: repos.waitlistRepo })
@@ -143,7 +163,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   // holds a hot wallet. Driven by OCTORA_MIXER_RELAYER_ENABLED=true plus the
   // other OCTORA_MIXER_RELAYER_* env vars (see common/config.ts).
   if (config.mixerRelayer) {
-    await registerRelayerRoutes(app, config.mixerRelayer)
+    await registerRelayerRoutes(app, config.mixerRelayer, prismaClient ?? null)
   }
 
   return app

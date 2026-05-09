@@ -99,6 +99,8 @@ async function main() {
       data: {
         id: position.id,
         intentId: position.intentId,
+        // Demo data — synthetic placeholder wallet, not a real Solana key.
+        walletAddress: "DemoWallet1111111111111111111111111111111111",
         action: position.action,
         mode: position.mode,
         state: position.state,

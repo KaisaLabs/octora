@@ -7,17 +7,23 @@ datasource db {
 }
 
 model Position {
-  id         String             @id
-  intentId   String             @unique
-  action     String
-  mode       String
-  state      String
-  poolSlug   String
-  amount     String
-  createdAt  DateTime           @default(now())
-  updatedAt  DateTime           @updatedAt
-  sessions   ExecutionSession[]
-  activities Activity[]
+  id            String             @id
+  intentId      String             @unique
+  /// Solana wallet that owns this position. Set by `requireWalletSignature`
+  /// at intent creation and asserted on every subsequent mutating call.
+  walletAddress String
+  action        String
+  mode          String
+  state         String
+  poolSlug      String
+  amount        String
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  sessions      ExecutionSession[]
+  activities    Activity[]
+
+  @@index([walletAddress])
+  @@index([walletAddress, state])
 }
 
 model ExecutionSession {
@@ -60,4 +66,48 @@ model Waitlist {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+}
+
+/// Per-wallet beta cohort gate. Existence in this table = approved to use
+/// the mainnet beta. Manually populated via `POST /admin/waitlist/approve`.
+/// Separate from `Waitlist` because email signups and on-chain wallet
+/// approvals are different identities; one user may have many of either.
+model BetaAccess {
+  walletAddress String   @id
+  approvedAt    DateTime @default(now())
+  note          String?
+}
+
+/// One-time challenge nonces consumed by `requireWalletSignature`. Issued by
+/// `POST /auth/nonce`, signed off-line by the wallet, then presented in the
+/// `x-signed-nonce` header on a mutating call. Marking `used = true` blocks
+/// replay; rows older than `expiresAt` are pruned by the auth middleware.
+model AuthNonce {
+  nonce         String   @id
+  walletAddress String
+  expiresAt     DateTime
+  used          Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([walletAddress, used])
+  @@index([expiresAt])
+}
+
+/// Persistent privacy-delay gate for the mixer relayer. The relayer rejects
+/// withdrawal proofs whose Merkle root has been observed for less than
+/// `OCTORA_MIXER_PRIVACY_DELAY_MS`. Storing first-seen state in Postgres
+/// (instead of the previous in-memory Map) means a relayer restart cannot
+/// be used to bypass the timing-correlation defense.
+///
+/// Slot height is the authoritative gate — wall-clock first-seen is kept
+/// only for diagnostics. `firstSeenSlot` comes from `connection.getSlot()`
+/// and is monotonic across the cluster.
+model MixerRootSeen {
+  /// Hex-encoded Merkle root from the withdrawal proof's publicSignals[0].
+  root          String   @id
+  /// Slot height returned by the relayer's RPC at first observation.
+  firstSeenSlot BigInt
+  firstSeenAt   DateTime @default(now())
+
+  @@index([firstSeenAt])
 }

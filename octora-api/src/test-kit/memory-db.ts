@@ -5,6 +5,7 @@ import type {
   CreatePositionInput,
   CreateSessionInput,
 } from "#modules/positions/position.repository";
+import { TERMINAL_POSITION_STATES } from "#modules/positions/position.repository";
 import type {
   ActivityRepository,
   ActivityRow,
@@ -70,6 +71,24 @@ export function createMemoryPositionRepository(): PositionRepository {
       const items = sessions.get(positionId) ?? [];
       return items.at(-1) ?? null;
     },
+    async countActiveByWallet(walletAddress: string) {
+      const terminal = new Set<string>(TERMINAL_POSITION_STATES);
+      let n = 0;
+      for (const row of positions.values()) {
+        if (row.walletAddress === walletAddress && !terminal.has(row.state)) n++;
+      }
+      return n;
+    },
+    async sumActiveAmountSol() {
+      const terminal = new Set<string>(TERMINAL_POSITION_STATES);
+      let total = 0;
+      for (const row of positions.values()) {
+        if (terminal.has(row.state)) continue;
+        const v = Number(row.amount);
+        if (Number.isFinite(v)) total += v;
+      }
+      return total;
+    },
   };
 }
 
@@ -107,6 +126,7 @@ export function createMemoryReconciliationRepository(): ReconciliationRepository
 
 export function createMemoryWaitlistRepository(): WaitlistRepository {
   const entries = new Map<string, { id: string; email: string; createdAt: Date }>();
+  const approved = new Map<string, { walletAddress: string; approvedAt: Date; note: string | null }>();
 
   return {
     async add(email, source) {
@@ -116,6 +136,20 @@ export function createMemoryWaitlistRepository(): WaitlistRepository {
     },
     async exists(email) {
       return entries.has(email);
+    },
+    async isApproved(walletAddress) {
+      return approved.has(walletAddress);
+    },
+    async approveWallet(walletAddress, note) {
+      const existing = approved.get(walletAddress);
+      const row = existing
+        ? { ...existing, note: note ?? existing.note }
+        : { walletAddress, approvedAt: new Date(), note: note ?? null };
+      approved.set(walletAddress, row);
+      return { walletAddress: row.walletAddress, approvedAt: row.approvedAt };
+    },
+    async revokeWallet(walletAddress) {
+      return approved.delete(walletAddress);
     },
   };
 }

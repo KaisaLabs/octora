@@ -72,10 +72,19 @@ describe("StealthWallet", () => {
       expect(e1.ciphertext).not.toBe(e2.ciphertext);
     });
 
-    it("tags new blobs as version 2 (HKDF)", () => {
+    it("tags new blobs as version 3 (HKDF + per-blob nonce)", () => {
       const wallet = generateStealthWallet();
       const encrypted = encryptSeed(wallet, encryptionKey);
-      expect(encrypted.version).toBe(2);
+      expect(encrypted.version).toBe(3);
+      expect(typeof encrypted.nonce).toBe("string");
+      expect(encrypted.nonce!.length).toBeGreaterThan(0);
+    });
+
+    it("two encryptions of the same seed have distinct nonces (P0-16)", () => {
+      const wallet = generateStealthWallet();
+      const e1 = encryptSeed(wallet, encryptionKey);
+      const e2 = encryptSeed(wallet, encryptionKey);
+      expect(e1.nonce).not.toBe(e2.nonce);
     });
 
     it("can still decrypt legacy v1 blobs (raw signature slice)", () => {

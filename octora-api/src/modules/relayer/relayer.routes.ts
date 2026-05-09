@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { PublicKey } from "@solana/web3.js";
+import type { PrismaClient } from "@prisma/client";
 import type { MixerRelayerConfig } from "#common/config";
 import { makeRateLimiter } from "#modules/mixer/rate-limit";
 import { RelayerService } from "./relayer.service.js";
 import { OnChainNullifierRegistry } from "./nullifier-registry.js";
+import { createPrismaRootSeenRepository } from "./root-seen.repository.js";
 import { createMixerClient, deriveMixerPoolPDA } from "./solana-client.js";
 import type { RelayerConfig, WithdrawRequest } from "./types.js";
 
@@ -32,6 +34,7 @@ import type { RelayerConfig, WithdrawRequest } from "./types.js";
 export async function registerRelayerRoutes(
   app: FastifyInstance,
   cfg: MixerRelayerConfig,
+  prisma: PrismaClient | null = null,
 ): Promise<void> {
   const tags = ["Relayer"];
 
@@ -60,7 +63,17 @@ export async function registerRelayerRoutes(
     poolPDA,
   );
 
-  const relayer = new RelayerService(serviceConfig, nullifiers);
+  // Persistent root-seen state — required so a relayer restart can't be
+  // used to bypass the privacy-delay timing-correlation gate (P0-15).
+  // When `prisma` is null (test harness), the gate is disabled.
+  const rootSeenRepo = prisma ? createPrismaRootSeenRepository(prisma) : null;
+  if (!rootSeenRepo) {
+    app.log.warn(
+      "mixer relayer running without a Prisma client — privacy-delay gate is disabled.",
+    );
+  }
+
+  const relayer = new RelayerService(serviceConfig, nullifiers, rootSeenRepo);
   relayer.initializeClient();
 
   // Snapshot the public-facing identity once at registration. These values

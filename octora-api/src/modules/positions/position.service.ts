@@ -18,16 +18,34 @@ import type { ReconciliationRepository } from "#modules/indexer/indexer.reposito
 
 import { PositionNotFoundError, UnsupportedPositionActionError } from "#common/errors";
 
+import type { BetaCapsConfig } from "#common/config";
+
 import type { PositionRepository, PositionRow, ExecutionSessionRow } from "./position.repository";
 import type { ActivityRepository, ActivityRow } from "./activity.repository";
 import { createActivityService, type ActivityService } from "./activity.service";
 import { createRecoveryService, type RecoveryServiceInput } from "./recovery.service";
+
+/** Default beta caps used when the service is constructed without explicit config. */
+const DEFAULT_BETA_CAPS: BetaCapsConfig = {
+  maxPositionSol: 2.5,
+  maxGlobalTvlSol: 125,
+  maxPositionsPerWallet: 5,
+};
 
 export interface CreateDraftPositionIntentInput {
   action: PositionAction;
   amount: string;
   pool: string;
   mode: ExecutionMode;
+  /** Authenticated wallet from `requireWalletSignature`. Required. */
+  walletAddress: string;
+}
+
+export class BetaCapExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BetaCapExceededError";
+  }
 }
 
 export interface ExecuteSignedIntentInput {
@@ -84,6 +102,11 @@ export interface PositionServiceDependencies {
   meteoraExecutor?: MeteoraExecutor;
   positionIndexer?: PositionIndexer;
   recoveryService?: ReturnType<typeof createRecoveryService>;
+  /**
+   * Beta cohort caps. Defaults to {@link DEFAULT_BETA_CAPS} so existing
+   * tests that don't care about caps don't have to pass a config.
+   */
+  betaCaps?: BetaCapsConfig;
 }
 
 export { PositionNotFoundError, UnsupportedPositionActionError };
@@ -96,10 +119,11 @@ export function createPositionService(deps: PositionServiceDependencies) {
   const meteoraExecutor = deps.meteoraExecutor ?? createMockMeteoraExecutor();
   const positionIndexer = deps.positionIndexer ?? createIndexerService({ store: deps.reconciliationRepo! });
   const recoveryService = deps.recoveryService ?? createRecoveryService();
+  const betaCaps = deps.betaCaps ?? DEFAULT_BETA_CAPS;
 
   return {
     createDraftPositionIntent(input: CreateDraftPositionIntentInput): Promise<PositionResponse> {
-      return createDraftPositionIntent(positionRepo, activityService, input);
+      return createDraftPositionIntent(positionRepo, activityService, betaCaps, input);
     },
     executeSignedIntent(input: ExecuteSignedIntentInput): Promise<PositionResponse> {
       return executeSignedIntent(positionRepo, activityService, privacyAdapter, meteoraExecutor, positionIndexer, recoveryService, input);
@@ -119,8 +143,15 @@ export function createPositionService(deps: PositionServiceDependencies) {
 async function createDraftPositionIntent(
   positionRepo: PositionRepository,
   activityService: ActivityService,
+  betaCaps: BetaCapsConfig,
   input: CreateDraftPositionIntentInput,
 ): Promise<PositionResponse> {
+  if (!input.walletAddress) {
+    throw new Error("walletAddress is required to create a position intent");
+  }
+
+  await assertBetaCaps(positionRepo, betaCaps, input);
+
   const positionId = randomUUID();
   const intentId = randomUUID();
   const sessionId = randomUUID();
@@ -128,6 +159,7 @@ async function createDraftPositionIntent(
   const position = await positionRepo.createPosition({
     id: positionId,
     intentId,
+    walletAddress: input.walletAddress,
     action: input.action,
     mode: input.mode,
     state: "draft",
@@ -649,4 +681,48 @@ function formatFailureMessage(error: unknown) {
   }
 
   return "Octora stopped safely and needs another pass.";
+}
+
+/**
+ * Beta-cohort guardrails enforced at intent creation. All caps are SOL,
+ * not USD — the API doesn't have a price feed wired in for this path, so
+ * operators set lamports-equivalent SOL ceilings via `BETA_MAX_*` env vars
+ * (see common/config.ts). The audit (P1-26) targets ~$500 / ~$25k / 5
+ * active positions per wallet.
+ */
+async function assertBetaCaps(
+  positionRepo: PositionRepository,
+  caps: BetaCapsConfig,
+  input: CreateDraftPositionIntentInput,
+): Promise<void> {
+  const amountSol = Number(input.amount);
+  if (!Number.isFinite(amountSol) || amountSol <= 0) {
+    throw new BetaCapExceededError(
+      `amount must be a positive decimal SOL value; got "${input.amount}".`,
+    );
+  }
+  if (amountSol > caps.maxPositionSol) {
+    throw new BetaCapExceededError(
+      `Per-position cap exceeded: ${amountSol} SOL > ${caps.maxPositionSol} SOL.`,
+    );
+  }
+
+  const [walletCount, globalTvl] = await Promise.all([
+    positionRepo.countActiveByWallet(input.walletAddress),
+    positionRepo.sumActiveAmountSol(),
+  ]);
+
+  if (walletCount >= caps.maxPositionsPerWallet) {
+    throw new BetaCapExceededError(
+      `Per-wallet position cap exceeded: wallet already has ${walletCount} active positions ` +
+        `(cap ${caps.maxPositionsPerWallet}).`,
+    );
+  }
+
+  if (globalTvl + amountSol > caps.maxGlobalTvlSol) {
+    throw new BetaCapExceededError(
+      `Global beta TVL cap exceeded: existing ${globalTvl.toFixed(3)} + new ${amountSol} SOL ` +
+        `would surpass ${caps.maxGlobalTvlSol} SOL.`,
+    );
+  }
 }

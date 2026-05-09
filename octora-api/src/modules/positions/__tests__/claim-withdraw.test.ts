@@ -19,6 +19,7 @@ describe("claim and withdraw-close flows", () => {
     await repos.positionRepo.createPosition({
       id: positionId,
       intentId: "intent_1",
+      walletAddress: "TestWallet111111111111111111111111111111111",
       action: "add-liquidity",
       mode: "fast-private",
       state: "active",
@@ -72,6 +73,7 @@ describe("claim and withdraw-close flows", () => {
     await repos.positionRepo.createPosition({
       id: positionId,
       intentId: "intent_2",
+      walletAddress: "TestWallet111111111111111111111111111111111",
       action: "add-liquidity",
       mode: "fast-private",
       state: "active",

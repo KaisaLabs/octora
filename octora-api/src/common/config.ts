@@ -23,6 +23,27 @@ export interface AppConfig {
   mixerDenomination: bigint;
   /** Mixer relayer config — `null` when the relayer is disabled (default). */
   mixerRelayer: MixerRelayerConfig | null;
+  /**
+   * Beta cohort guardrails. All positions are denominated in SOL (decimal
+   * string) to match the existing `Position.amount` column. Convert from
+   * USD targets via your reference price — defaults assume ~$200/SOL.
+   */
+  betaCaps: BetaCapsConfig;
+  /**
+   * Shared-secret token required by the `/admin/*` endpoints. When unset,
+   * admin routes refuse every request — same fail-closed posture as the
+   * relayer keypair when `OCTORA_MIXER_RELAYER_ENABLED` is missing.
+   */
+  adminApiToken: string | null;
+}
+
+export interface BetaCapsConfig {
+  /** Max SOL per position (audit target: ~$500 ≈ 2.5 SOL). */
+  maxPositionSol: number;
+  /** Max active TVL across the protocol (audit target: ~$25k ≈ 125 SOL). */
+  maxGlobalTvlSol: number;
+  /** Max concurrent active positions per wallet. */
+  maxPositionsPerWallet: number;
 }
 
 /**
@@ -73,6 +94,12 @@ export function loadConfig(): AppConfig {
       `${process.env.HOME ?? ""}/.config/solana/id.json`,
     mixerDenomination: BigInt(process.env.MIXER_DENOMINATION ?? "1000000000"),
     mixerRelayer: loadMixerRelayerConfig(),
+    betaCaps: {
+      maxPositionSol: Number(process.env.BETA_MAX_POSITION_SOL ?? "2.5"),
+      maxGlobalTvlSol: Number(process.env.BETA_MAX_GLOBAL_TVL_SOL ?? "125"),
+      maxPositionsPerWallet: Number(process.env.BETA_MAX_POSITIONS_PER_WALLET ?? "5"),
+    },
+    adminApiToken: process.env.OCTORA_ADMIN_API_TOKEN?.trim() || null,
   };
 }
 

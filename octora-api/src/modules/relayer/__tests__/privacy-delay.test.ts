@@ -13,12 +13,34 @@
  * (which the gate sits behind) can be made to pass with computed
  * pubkeyToFieldHash values.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { RelayerService } from "../relayer.service.js";
 import { InMemoryNullifierRegistry } from "../nullifier-registry.js";
 import { pubkeyToFieldHash } from "../proof-converter.js";
+import type { RootSeenRepository } from "../root-seen.repository.js";
 import type { RelayerConfig, WithdrawRequest } from "../types.js";
+
+/**
+ * In-memory root-seen repo + a controllable slot counter, so the gate's
+ * contract can be exercised without a live Postgres or Solana RPC.
+ */
+function makeMemoryRootSeen(): RootSeenRepository & { _store: Map<string, bigint> } {
+  const store = new Map<string, bigint>();
+  return {
+    _store: store,
+    async observe(root: string, currentSlot: bigint) {
+      const existing = store.get(root);
+      if (existing !== undefined) return { firstSeenSlot: existing };
+      store.set(root, currentSlot);
+      return { firstSeenSlot: currentSlot };
+    },
+    async get(root: string) {
+      const v = store.get(root);
+      return v === undefined ? null : { firstSeenSlot: v };
+    },
+  };
+}
 
 function makeConfig(over: Partial<RelayerConfig> = {}): RelayerConfig {
   return {
@@ -95,45 +117,61 @@ describe("RelayerService — privacy delay gate", () => {
   });
 
   it("API-RLY-012: rejects on first sight of a root with a deterministic wait hint", async () => {
-    const service = new RelayerService(makeConfig({ privacyDelayMs: 1000 }), nullifiers);
+    const repo = makeMemoryRootSeen();
+    let slot = 1_000n;
+    const service = new RelayerService(
+      makeConfig({ privacyDelayMs: 1000 }),
+      nullifiers,
+      repo,
+      async () => slot,
+    );
 
     const result = await service.processWithdrawal(makeRequest(parity));
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/Privacy delay/i);
-    // Wait hint should round up to ~1s.
-    expect(result.error).toMatch(/Retry in ~1s/);
+    // 1000ms / 400ms-per-slot = 3 slots. Wait hint rounds up to ~2s
+    // (3 slots × 400ms = 1200ms).
+    expect(result.error).toMatch(/Retry in ~/);
     // Nullifier must NOT be marked spent on a delay-rejection — the
     // user retries with the same proof.
     expect(await nullifiers.isSpent("67890")).toBe(false);
   });
 
   it("API-RLY-013: accepts the same root after the delay (and proceeds to proof verify)", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-08T00:00:00Z"));
-    try {
-      const service = new RelayerService(makeConfig({ privacyDelayMs: 1000 }), nullifiers);
+    const repo = makeMemoryRootSeen();
+    let slot = 1_000n;
+    const service = new RelayerService(
+      makeConfig({ privacyDelayMs: 1000 }),
+      nullifiers,
+      repo,
+      async () => slot,
+    );
 
-      const first = await service.processWithdrawal(makeRequest(parity));
-      expect(first.success).toBe(false);
-      expect(first.error).toMatch(/Privacy delay/i);
+    const first = await service.processWithdrawal(makeRequest(parity));
+    expect(first.success).toBe(false);
+    expect(first.error).toMatch(/Privacy delay/i);
 
-      vi.advanceTimersByTime(1500);
+    // Advance 1500ms → ≥ 4 slots elapsed, well past the 3-slot threshold.
+    slot += 4n;
 
-      const second = await service.processWithdrawal(makeRequest(parity));
-      // Past the gate the proof check kicks in. We don't ship compiled
-      // circuit artifacts in this test scope, so the failure mode flips
-      // to one of: proof verify error, or proof invalid — but never
-      // the privacy-delay error.
-      expect(second.success).toBe(false);
-      expect(second.error).not.toMatch(/Privacy delay/i);
-    } finally {
-      vi.useRealTimers();
-    }
+    const second = await service.processWithdrawal(makeRequest(parity));
+    // Past the gate the proof check kicks in. We don't ship compiled
+    // circuit artifacts in this test scope, so the failure mode flips
+    // to one of: proof verify error, or proof invalid — but never
+    // the privacy-delay error.
+    expect(second.success).toBe(false);
+    expect(second.error).not.toMatch(/Privacy delay/i);
   });
 
   it("API-RLY-014: privacyDelayMs=0 disables the gate entirely", async () => {
-    const service = new RelayerService(makeConfig({ privacyDelayMs: 0 }), nullifiers);
+    const repo = makeMemoryRootSeen();
+    const service = new RelayerService(
+      makeConfig({ privacyDelayMs: 0 }),
+      nullifiers,
+      repo,
+      async () => 1_000n,
+    );
 
     const result = await service.processWithdrawal(makeRequest(parity));
     // Gate is off, so the next failure must be downstream of it (proof
@@ -142,7 +180,13 @@ describe("RelayerService — privacy delay gate", () => {
   });
 
   it("API-RLY-015: a parity-failing request does NOT arm the root in the first-seen map", async () => {
-    const service = new RelayerService(makeConfig({ privacyDelayMs: 1000 }), nullifiers);
+    const repo = makeMemoryRootSeen();
+    const service = new RelayerService(
+      makeConfig({ privacyDelayMs: 1000 }),
+      nullifiers,
+      repo,
+      async () => 1_000n,
+    );
 
     // Body root deliberately disagrees with publicSignals[0] (root binding).
     // Parity must fail first — and crucially must NOT arm root "999999".

@@ -2,6 +2,7 @@ import { ComputeBudgetProgram, PublicKey, SystemProgram } from "@solana/web3.js"
 import { verifyWithdrawProof } from "#modules/vault";
 import { bigintToBytes32 } from "#modules/mixer/mixer.service";
 import type { NullifierRegistry } from "./nullifier-registry.js";
+import type { RootSeenRepository } from "./root-seen.repository.js";
 import type { StealthWallet } from "./stealth-wallet.js";
 import { generateStealthWallet } from "./stealth-wallet.js";
 import {
@@ -34,6 +35,11 @@ const LOW_BALANCE_THRESHOLD_WITHDRAWALS = 50;
 /** Page when this many concurrent withdrawals share an in-flight slot. */
 const QUEUE_BACKED_THRESHOLD = 25;
 
+/** Average mainnet slot duration. The privacy-delay gate is converted from
+ *  ms to slots using this constant; we round up so the gate never under-
+ *  enforces under variable slot times. */
+const SLOT_DURATION_MS = 400;
+
 /**
  * Relayer Service — the core engine that:
  * 1. Verifies ZK withdrawal proofs off-chain
@@ -58,28 +64,40 @@ export class RelayerService {
   private readonly inFlight = new Map<string, Promise<WithdrawResult>>();
 
   /**
-   * Privacy delay gate — first-seen wall-clock timestamp per Merkle root.
-   * Populated lazily on first withdrawal request that names a given root.
+   * Privacy delay configuration.
    *
-   * Why wall-clock and not slot-based: slot-of-deposit isn't observable
-   * from the proof (the whole point of the proof is to NOT reveal which
-   * commitment is being spent). What we *can* observe is when each root
-   * first arrived at this relayer, which is a lower bound on the
-   * deposit-to-withdraw delay because each new deposit produces a new
-   * root. Forcing a min wait between first-seeing-the-root and submitting
-   * the spend prevents the trivial "deposit, withdraw next slot" attack.
+   * First-seen state is persisted in Postgres (`MixerRootSeen`) via
+   * {@link RootSeenRepository} so a relayer restart cannot be used to
+   * bypass the timing-correlation defense (P0-15 audit fix). Slot height
+   * is the authoritative gate — wall-clock is unreliable across restarts
+   * and clock skew, while slot height is monotonic across the cluster.
    *
-   * The map grows unboundedly under attack — bounded by the on-chain
-   * 30-root ring buffer in practice. Old entries are pruned lazily.
+   * When `rootSeenRepo` is null (legacy / test), the gate is disabled —
+   * production wiring in `relayer.routes.ts` always passes a real repo.
    */
-  private readonly rootFirstSeenAt = new Map<string, number>();
   private readonly privacyDelayMs: number;
+  private readonly privacyDelaySlots: number;
+
+  /**
+   * Test seam: when set, replaces `connection.getSlot()` for the privacy
+   * delay gate. Production wiring leaves this null and the gate uses the
+   * Solana RPC. Tests pass a deterministic counter so they don't need a
+   * live cluster.
+   */
+  private readonly slotProvider: (() => Promise<bigint>) | null;
 
   constructor(
     private readonly config: RelayerConfig,
     private readonly nullifiers: NullifierRegistry,
+    private readonly rootSeenRepo: RootSeenRepository | null = null,
+    slotProvider: (() => Promise<bigint>) | null = null,
   ) {
     this.privacyDelayMs = config.privacyDelayMs ?? 13_000;
+    this.privacyDelaySlots = Math.max(
+      0,
+      Math.ceil(this.privacyDelayMs / SLOT_DURATION_MS),
+    );
+    this.slotProvider = slotProvider;
   }
 
   /**
@@ -205,9 +223,10 @@ export class RelayerService {
 
     // 3. Privacy delay gate. Run AFTER parity so the gate can't be probed
     //    with garbage roots — only a parity-valid withdrawal can ever arm
-    //    a root in the first-seen map.
-    const delay = this.checkPrivacyDelay(request.root);
+    //    a root in the first-seen table.
+    const delay = await this.checkPrivacyDelay(request.root);
     if (!delay.ok) {
+      const waitSeconds = Math.ceil(delay.waitSlots * (SLOT_DURATION_MS / 1000));
       return {
         success: false,
         txSignature: null,
@@ -215,9 +234,8 @@ export class RelayerService {
         recipient: request.recipient,
         amountLamports: "0",
         feeLamports: request.fee,
-        error: `Privacy delay: this root was first observed less than ${
-          this.privacyDelayMs / 1000
-        }s ago. Retry in ~${Math.ceil(delay.waitMs / 1000)}s.`,
+        error: `Privacy delay: this root was first observed ${delay.elapsedSlots} slots ago ` +
+          `(threshold ${this.privacyDelaySlots} slots). Retry in ~${waitSeconds}s.`,
       };
     }
 
@@ -382,41 +400,47 @@ export class RelayerService {
   // --- Private ---
 
   /**
-   * Privacy delay check.
+   * Slot-based privacy delay check, persisted in Postgres.
    *
-   * On first sight of a root, arm it with `now` and reject. On subsequent
-   * sights, accept iff the root has been known for at least
-   * `privacyDelayMs`. The arm-on-reject pattern is what makes the gate
+   * On first sight of a root: insert `(root, currentSlot)` and reject.
+   * On subsequent sights: accept iff `currentSlot - firstSeenSlot >=
+   * privacyDelaySlots`. The arm-on-reject pattern is what makes the gate
    * meaningful — without it, a client could pre-arm any root by spamming
-   * requests then submit just before the proof's blockhash expires.
+   * requests, then submit just before the proof's blockhash expires.
    *
-   * Roots that fall out of the on-chain 30-entry ring buffer naturally
-   * stop showing up in well-formed requests, so the map is bounded by
-   * pool-side state in practice. Out of paranoia we also evict entries
-   * older than 10× the delay window.
+   * Slot height is monotonic and survives relayer restarts, so this gate
+   * cannot be bypassed by bouncing the relayer (P0-15).
    */
-  private checkPrivacyDelay(rootHex: string): { ok: true } | { ok: false; waitMs: number } {
-    if (this.privacyDelayMs <= 0) return { ok: true };
-    const now = Date.now();
+  private async checkPrivacyDelay(
+    rootHex: string,
+  ): Promise<
+    | { ok: true }
+    | { ok: false; elapsedSlots: number; waitSlots: number }
+  > {
+    if (this.privacyDelaySlots <= 0) return { ok: true };
+    if (!this.rootSeenRepo) return { ok: true };
 
-    // Lazy GC: drop entries older than 10× the window. Keeps the map size
-    // bounded under churn without scheduling a timer that would keep the
-    // process alive.
-    const maxAge = this.privacyDelayMs * 10;
-    if (this.rootFirstSeenAt.size > 64) {
-      for (const [k, t] of this.rootFirstSeenAt) {
-        if (now - t > maxAge) this.rootFirstSeenAt.delete(k);
-      }
-    }
+    const currentSlot = this.slotProvider
+      ? await this.slotProvider()
+      : this.client
+      ? BigInt(await this.client.provider.connection.getSlot("confirmed"))
+      : null;
+    if (currentSlot == null) return { ok: true };
 
-    const seen = this.rootFirstSeenAt.get(rootHex);
-    if (seen == null) {
-      this.rootFirstSeenAt.set(rootHex, now);
-      return { ok: false, waitMs: this.privacyDelayMs };
-    }
-    const elapsed = now - seen;
-    if (elapsed < this.privacyDelayMs) {
-      return { ok: false, waitMs: this.privacyDelayMs - elapsed };
+    const observed = await this.rootSeenRepo.observe(rootHex, currentSlot);
+
+    // Negative deltas are possible if the cluster forks back, in which
+    // case we conservatively keep the row's older slot (already what
+    // `observe` returned) and treat the gate as not-yet-armed.
+    const deltaBigInt = currentSlot - observed.firstSeenSlot;
+    const delta = deltaBigInt < 0n ? 0 : Number(deltaBigInt);
+
+    if (delta < this.privacyDelaySlots) {
+      return {
+        ok: false,
+        elapsedSlots: delta,
+        waitSlots: this.privacyDelaySlots - delta,
+      };
     }
     return { ok: true };
   }
