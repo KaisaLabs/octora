@@ -35,6 +35,12 @@ export interface AppConfig {
    * relayer keypair when `OCTORA_MIXER_RELAYER_ENABLED` is missing.
    */
   adminApiToken: string | null;
+  /**
+   * Sentry DSN. When null, `@sentry/node` is never loaded and capture
+   * helpers no-op. Set `SENTRY_DSN` in the environment to activate
+   * (requires `pnpm add @sentry/node` first; see common/observability.ts).
+   */
+  sentryDsn: string | null;
 }
 
 export interface BetaCapsConfig {
@@ -100,6 +106,7 @@ export function loadConfig(): AppConfig {
       maxPositionsPerWallet: Number(process.env.BETA_MAX_POSITIONS_PER_WALLET ?? "5"),
     },
     adminApiToken: process.env.OCTORA_ADMIN_API_TOKEN?.trim() || null,
+    sentryDsn: process.env.SENTRY_DSN?.trim() || null,
   };
 }
 

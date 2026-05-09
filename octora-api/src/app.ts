@@ -6,6 +6,8 @@ import scalarApiReference from '@scalar/fastify-api-reference'
 import { createPrismaClient } from '#common/db/client'
 import { loadConfig } from '#common/config'
 import { runHealthCheck } from '#common/health'
+import { collectMetrics } from '#common/metrics'
+import { buildLoggerOptions, genReqId, initSentry } from '#common/observability'
 import { createPrismaPositionRepository, type PositionRepository } from '#modules/positions/position.repository'
 import { createPrismaActivityRepository, type ActivityRepository } from '#modules/positions/activity.repository'
 import { createPrismaReconciliationRepository, type ReconciliationRepository } from '#modules/indexer/indexer.repository'
@@ -53,7 +55,19 @@ export async function createApp(options: CreateAppOptions = {}) {
   // awaits hydrateFromChain() during registration — paginated
   // getSignaturesForAddress + getTransaction calls regularly exceed 10s on
   // public RPC endpoints. See mixer.routes.ts for why this must stay awaited.
-  const app = Fastify({ logger: options.logger ?? false, pluginTimeout: 120_000 })
+  // Logger: structured JSON + ISO timestamps + request id (P1-30). When
+  // the caller opts out (`logger: false`), keep the off-switch — tests
+  // run with logging disabled to keep output clean.
+  const loggerOption = options.logger === false ? false : buildLoggerOptions()
+  const app = Fastify({
+    logger: loggerOption,
+    genReqId,
+    pluginTimeout: 120_000,
+  })
+
+  // Sentry seam (P1-30). No-op until SENTRY_DSN is set AND @sentry/node
+  // is installed; see common/observability.ts for the pnpm command.
+  await initSentry(app, { sentryDsn: config.sentryDsn })
   // /health needs a Prisma client to ping; we keep the same instance the
   // repos use so a connection-pool exhaustion shows up in the health probe.
   let prismaClient: ReturnType<typeof createPrismaClient> | undefined
@@ -131,6 +145,26 @@ export async function createApp(options: CreateAppOptions = {}) {
     const report = await runHealthCheck(prismaClient, config)
     const code = report.status === 'ok' ? 200 : 503
     return reply.code(code).send(report)
+  })
+
+  // Metrics endpoint (P1-44). JSON snapshot of mixer TVL, position state
+  // distribution, and process uptime — meant to be polled by external
+  // monitoring (UptimeRobot, Datadog, Grafana JSON datasource). Returns
+  // the same minimal shape in test mode so probes don't 500 there.
+  app.get('/metrics', async (_req, reply) => {
+    if (!prismaClient) {
+      return reply.send({ collectedAt: new Date().toISOString(), mode: 'minimal' })
+    }
+    try {
+      const snapshot = await collectMetrics(prismaClient, config)
+      return reply.send(snapshot)
+    } catch (err) {
+      app.log.error({ err }, '/metrics: collection failed')
+      return reply.code(503).send({
+        error: 'MetricsUnavailable',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
   })
   // Wallet-signature auth + admin routes (P0-20, P1-25). Both depend on the
   // live Prisma client; they degrade to no-op when the app is built with

@@ -1,6 +1,7 @@
-import { ComputeBudgetProgram, PublicKey, SystemProgram } from "@solana/web3.js";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { verifyWithdrawProof } from "#modules/vault";
 import { bigintToBytes32 } from "#modules/mixer/mixer.service";
+import { submitConfirmed } from "#common/solana-tx";
 import type { NullifierRegistry } from "./nullifier-registry.js";
 import type { RootSeenRepository } from "./root-seen.repository.js";
 import type { StealthWallet } from "./stealth-wallet.js";
@@ -479,27 +480,35 @@ export class RelayerService {
     const recipientKey = new PublicKey(request.recipient);
     const relayerKey = hotWallet.publicKey;
 
-    // Build and send the withdraw instruction
-    try {
-      const tx = await program.methods
-        .withdraw(
-          Array.from(proofBytes) as number[],
-          Array.from(publicInputsBytes) as number[],
-        )
-        .accounts({
-          signer: hotWallet.publicKey,
-          mixerPool: mixerPoolKey,
-          nullifierAccount: nullifierPDA,
-          recipient: recipientKey,
-          relayer: relayerKey,
-          systemProgram: SystemProgram.programId,
-        })
-        .preInstructions([
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-        ])
-        .signers([hotWallet])
-        .rpc({ commitment: "confirmed" });
+    // Build the bare withdraw instruction; the retry helper handles
+    // CU profiling, priority fees, fresh blockhash per attempt, and
+    // exponential backoff on retryable RPC failures (P1-27, P1-28).
+    const withdrawIx = await program.methods
+      .withdraw(
+        Array.from(proofBytes) as number[],
+        Array.from(publicInputsBytes) as number[],
+      )
+      .accounts({
+        signer: hotWallet.publicKey,
+        mixerPool: mixerPoolKey,
+        nullifierAccount: nullifierPDA,
+        recipient: recipientKey,
+        relayer: relayerKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
 
+    try {
+      const tx = await submitConfirmed({
+        connection: this.client!.provider.connection,
+        instructions: [withdrawIx],
+        signers: [hotWallet],
+        payer: hotWallet.publicKey,
+        // The mixer pool, nullifier PDA, and recipient are the writable
+        // hot accounts on this tx — sample priority fees against them
+        // so the relayer pays for the actual congestion this tx faces.
+        priorityFeeAccounts: [mixerPoolKey, nullifierPDA, recipientKey],
+      });
       return tx;
     } catch (err) {
       // RootNotFound is the most common on-chain failure here, and the bare
