@@ -1,11 +1,11 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::AccountMeta;
 
-use crate::constants::POOL_AUTHORITY_SEED;
+use crate::constants::{CONFIG_SEED, POOL_AUTHORITY_SEED};
 use crate::cpi::dlmm::*;
 use crate::cpi::{require_spl_token_program, require_token_account_mint};
 use crate::errors::ExecutorError;
-use crate::state::{PoolAuthority, PoolRef};
+use crate::state::{Config, PoolAuthority, PoolRef};
 
 #[derive(Accounts)]
 pub struct DlmmAddLiquidity<'info> {
@@ -24,6 +24,13 @@ pub struct DlmmAddLiquidity<'info> {
 
     /// CHECK: validated in handler against stored PoolAuthority lb_pair.
     pub lb_pair: UncheckedAccount<'info>,
+
+    #[account(
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        constraint = !config.paused @ ExecutorError::Paused,
+    )]
+    pub config: Account<'info, Config>,
 }
 
 pub fn handler<'info>(

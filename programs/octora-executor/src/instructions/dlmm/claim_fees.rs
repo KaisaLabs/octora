@@ -1,13 +1,13 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::AccountMeta;
 
-use crate::constants::POOL_AUTHORITY_SEED;
+use crate::constants::{CONFIG_SEED, POOL_AUTHORITY_SEED};
 use crate::cpi::dlmm::*;
 use crate::cpi::{
     require_spl_token_program, require_token_account_mint, require_token_account_owner,
 };
 use crate::errors::ExecutorError;
-use crate::state::{PoolAuthority, PoolRef};
+use crate::state::{Config, PoolAuthority, PoolRef};
 
 #[derive(Accounts)]
 pub struct DlmmClaimFees<'info> {
@@ -26,6 +26,13 @@ pub struct DlmmClaimFees<'info> {
 
     /// CHECK: validated in handler against canonical DLMM program ID.
     pub dlmm_program: UncheckedAccount<'info>,
+
+    #[account(
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        constraint = !config.paused @ ExecutorError::Paused,
+    )]
+    pub config: Account<'info, Config>,
 }
 
 pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>) -> Result<()> {

@@ -70,4 +70,10 @@ pub enum ExecutorError {
 
     #[msg("SPL token account mint does not match the expected mint")]
     TokenMintMismatch,
+
+    #[msg("Executor is paused — all state-mutating instructions are disabled")]
+    Paused,
+
+    #[msg("Caller is not authorized for this admin instruction")]
+    Unauthorized,
 }

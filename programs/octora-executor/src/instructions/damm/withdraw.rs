@@ -1,10 +1,10 @@
 use anchor_lang::prelude::*;
 
-use crate::constants::{DAMM_PROGRAM_ID, POOL_AUTHORITY_SEED};
+use crate::constants::{CONFIG_SEED, DAMM_PROGRAM_ID, POOL_AUTHORITY_SEED};
 use crate::cpi::damm::*;
 use crate::cpi::{require_spl_token_program, require_token_account_owner};
 use crate::errors::ExecutorError;
-use crate::state::{PoolAuthority, PoolRef};
+use crate::state::{Config, PoolAuthority, PoolRef};
 
 /// Remove liquidity from a DAMM pool via removeBalanceLiquidity.
 /// Tokens flow to exit_recipient ATAs. PoolAuthority is closed.
@@ -28,6 +28,13 @@ pub struct DammWithdraw<'info> {
 
     /// CHECK: validated in handler against stored PoolAuthority pool.
     pub pool: UncheckedAccount<'info>,
+
+    #[account(
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        constraint = !config.paused @ ExecutorError::Paused,
+    )]
+    pub config: Account<'info, Config>,
 }
 
 pub fn handler<'info>(

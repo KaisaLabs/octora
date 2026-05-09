@@ -1,9 +1,9 @@
 use anchor_lang::prelude::*;
 
-use crate::constants::{DAMM_PROGRAM_ID, POOL_AUTHORITY_SEED};
+use crate::constants::{CONFIG_SEED, DAMM_PROGRAM_ID, POOL_AUTHORITY_SEED};
 use crate::cpi::damm::*;
 use crate::errors::ExecutorError;
-use crate::state::{PoolAuthority, PoolRef};
+use crate::state::{Config, PoolAuthority, PoolRef};
 
 /// Initialize a DAMM position: create PoolAuthority + lock escrow via DAMM CPI.
 /// Uses DAMM's `createLockEscrow` instruction to create the escrow account.
@@ -31,6 +31,13 @@ pub struct DammInit<'info> {
 
     /// CHECK: validated in handler against canonical DAMM program ID.
     pub damm_program: UncheckedAccount<'info>,
+
+    #[account(
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        constraint = !config.paused @ ExecutorError::Paused,
+    )]
+    pub config: Account<'info, Config>,
 
     pub system_program: Program<'info, System>,
 }

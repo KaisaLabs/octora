@@ -14,6 +14,21 @@ declare_id!("4n47TYP2hQ2bwS8GiU3a1EVyF9mgeSbKWBvAVmUjaUtK");
 pub mod octora_executor {
     use super::*;
 
+    // ═══ Admin Instructions ═══
+    //
+    // `init_config` is gated on `EXECUTOR_ADMIN_AUTHORITY` (see
+    // `constants.rs`) and must be the very first instruction sent to a
+    // freshly deployed program — every state-mutating DLMM/DAMM instruction
+    // requires the global `Config` PDA to exist *and* `paused == false`.
+
+    pub fn init_config(ctx: Context<InitConfig>) -> Result<()> {
+        instructions::admin::init_config_handler(ctx)
+    }
+
+    pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
+        instructions::admin::set_paused_handler(ctx, paused)
+    }
+
     // ═══ DLMM Instructions ═══
 
     pub fn dlmm_init_position<'info>(

@@ -1,7 +1,14 @@
 export interface AppConfig {
   port: number;
   databaseUrl: string;
-  frontendUrl: string;
+  /**
+   * Allowed CORS origins. Comma-separated allowlist parsed from
+   * `FRONTEND_URL`. The wildcard `"*"` is permitted only in non-production
+   * `NODE_ENV` — production startup throws if `FRONTEND_URL` is unset or
+   * `"*"`, since a wildcard fallback lets any origin call the API on behalf
+   * of an authenticated browser.
+   */
+  frontendUrl: string | string[];
   /** When true, the position service uses the on-chain `octora-executor` instead of the mock. */
   useOnchainExecutor: boolean;
   /** Solana RPC the on-chain executor talks to. Only used when `useOnchainExecutor` is true. */
@@ -55,7 +62,7 @@ export function loadConfig(): AppConfig {
   return {
     port: Number(process.env.PORT ?? 8787),
     databaseUrl: process.env.DATABASE_URL ?? "",
-    frontendUrl: process.env.FRONTEND_URL ?? "*",
+    frontendUrl: loadFrontendUrl(),
     useOnchainExecutor: process.env.OCTORA_USE_ONCHAIN_EXECUTOR === "true",
     executorRpcUrl:
       process.env.OCTORA_EXECUTOR_RPC_URL ?? "https://api.devnet.solana.com",
@@ -67,6 +74,36 @@ export function loadConfig(): AppConfig {
     mixerDenomination: BigInt(process.env.MIXER_DENOMINATION ?? "1000000000"),
     mixerRelayer: loadMixerRelayerConfig(),
   };
+}
+
+/**
+ * Parse `FRONTEND_URL` into a strict CORS allowlist.
+ *
+ * Production (`NODE_ENV === "production"`) requires an explicit value and
+ * forbids `"*"` — a wildcard fallback would let any origin call the API on
+ * behalf of an authenticated browser. Non-production keeps a permissive
+ * default so dev / local builds keep working.
+ */
+function loadFrontendUrl(): string | string[] {
+  const raw = process.env.FRONTEND_URL?.trim() ?? "";
+  const isProd = process.env.NODE_ENV === "production";
+
+  if (isProd) {
+    if (raw === "" || raw === "*") {
+      throw new Error(
+        "FRONTEND_URL must be set to a strict comma-separated origin allowlist " +
+          "in production (wildcard '*' is forbidden).",
+      );
+    }
+  }
+
+  if (raw === "" || raw === "*") return "*";
+
+  const origins = raw
+    .split(",")
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+  return origins.length === 1 ? origins[0]! : origins;
 }
 
 function loadMixerRelayerConfig(): MixerRelayerConfig | null {

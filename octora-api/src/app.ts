@@ -5,6 +5,7 @@ import scalarApiReference from '@scalar/fastify-api-reference'
 
 import { createPrismaClient } from '#common/db/client'
 import { loadConfig } from '#common/config'
+import { runHealthCheck } from '#common/health'
 import { createPrismaPositionRepository, type PositionRepository } from '#modules/positions/position.repository'
 import { createPrismaActivityRepository, type ActivityRepository } from '#modules/positions/activity.repository'
 import { createPrismaReconciliationRepository, type ReconciliationRepository } from '#modules/indexer/indexer.repository'
@@ -31,13 +32,16 @@ export interface CreateAppOptions {
   logger?: boolean
 }
 
-function createPrismaRepositories(): AppRepositories {
+function createPrismaRepositories(): { repos: AppRepositories; client: ReturnType<typeof createPrismaClient> } {
   const client = createPrismaClient()
   return {
-    positionRepo: createPrismaPositionRepository(client),
-    activityRepo: createPrismaActivityRepository(client),
-    reconciliationRepo: createPrismaReconciliationRepository(client),
-    waitlistRepo: createPrismaWaitlistRepository(client),
+    client,
+    repos: {
+      positionRepo: createPrismaPositionRepository(client),
+      activityRepo: createPrismaActivityRepository(client),
+      reconciliationRepo: createPrismaReconciliationRepository(client),
+      waitlistRepo: createPrismaWaitlistRepository(client),
+    },
   }
 }
 
@@ -48,7 +52,17 @@ export async function createApp(options: CreateAppOptions = {}) {
   // getSignaturesForAddress + getTransaction calls regularly exceed 10s on
   // public RPC endpoints. See mixer.routes.ts for why this must stay awaited.
   const app = Fastify({ logger: options.logger ?? false, pluginTimeout: 120_000 })
-  const repos = options.repos ?? createPrismaRepositories()
+  // /health needs a Prisma client to ping; we keep the same instance the
+  // repos use so a connection-pool exhaustion shows up in the health probe.
+  let prismaClient: ReturnType<typeof createPrismaClient> | undefined
+  let repos: AppRepositories
+  if (options.repos) {
+    repos = options.repos
+  } else {
+    const built = createPrismaRepositories()
+    repos = built.repos
+    prismaClient = built.client
+  }
 
   await app.register(cors, {
     origin: config.frontendUrl,
@@ -101,7 +115,19 @@ export async function createApp(options: CreateAppOptions = {}) {
   // the on-chain executor is a single env flag (OCTORA_USE_ONCHAIN_EXECUTOR).
   const meteoraExecutor = createMeteoraExecutorFromConfig(config)
 
-  app.get('/health', async () => ({ ok: true }))
+  // Real liveness/readiness probe. Returns 503 on any failed dependency so
+  // load balancers and uptime monitors actually catch DB / RPC / relayer /
+  // mixer-paused outages instead of routing traffic into a broken backend.
+  // Falls back to a minimal alive-only probe when the app is hosting
+  // injected repos without a Prisma client (test harness path).
+  app.get('/health', async (_req, reply) => {
+    if (!prismaClient) {
+      return reply.send({ status: 'ok', mode: 'minimal' })
+    }
+    const report = await runHealthCheck(prismaClient, config)
+    const code = report.status === 'ok' ? 200 : 503
+    return reply.code(code).send(report)
+  })
   app.register(registerPositionRoutes, { ...repos, meteoraExecutor })
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)

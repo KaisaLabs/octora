@@ -1,10 +1,10 @@
 use anchor_lang::prelude::*;
 
-use crate::constants::{DAMM_PROGRAM_ID, POOL_AUTHORITY_SEED};
+use crate::constants::{CONFIG_SEED, DAMM_PROGRAM_ID, POOL_AUTHORITY_SEED};
 use crate::cpi::damm::*;
 use crate::cpi::require_spl_token_program;
 use crate::errors::ExecutorError;
-use crate::state::{PoolAuthority, PoolRef};
+use crate::state::{Config, PoolAuthority, PoolRef};
 
 /// Single-side SOL deposit + lock LP tokens into escrow.
 /// Step 1: addBalanceLiquidity → LP tokens minted to userPoolLp
@@ -26,6 +26,13 @@ pub struct DammDeposit<'info> {
 
     /// CHECK: validated in handler against stored PoolAuthority pool.
     pub pool: UncheckedAccount<'info>,
+
+    #[account(
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        constraint = !config.paused @ ExecutorError::Paused,
+    )]
+    pub config: Account<'info, Config>,
 }
 
 pub fn handler<'info>(
