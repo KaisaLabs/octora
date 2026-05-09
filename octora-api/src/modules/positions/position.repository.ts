@@ -62,6 +62,18 @@ export interface PositionRepository {
    * over a TEXT column requires a JS-side parse anyway.
    */
   sumActiveAmountSol(): Promise<number>;
+  /**
+   * Positions in `state` whose `updatedAt` is older than `cutoff`. Used by
+   * the recovery worker (P1-29) to find stuck transitions; bounded by
+   * `limit` so a runaway count can't load the whole table.
+   */
+  findStuckPositions(state: string, cutoff: Date, limit: number): Promise<PositionRow[]>;
+  /**
+   * Positions that entered `failed` since `since`. Used by the recovery
+   * worker to alert exactly once on each new failure rather than firing
+   * on every poll tick.
+   */
+  findRecentlyFailed(since: Date, limit: number): Promise<PositionRow[]>;
 }
 
 export function createPrismaPositionRepository(client: PrismaClient): PositionRepository {
@@ -107,5 +119,17 @@ export function createPrismaPositionRepository(client: PrismaClient): PositionRe
         return Number.isFinite(v) ? acc + v : acc;
       }, 0);
     },
+    findStuckPositions: (state, cutoff, limit) =>
+      client.position.findMany({
+        where: { state, updatedAt: { lt: cutoff } },
+        orderBy: { updatedAt: "asc" },
+        take: limit,
+      }),
+    findRecentlyFailed: (since, limit) =>
+      client.position.findMany({
+        where: { state: "failed", updatedAt: { gte: since } },
+        orderBy: { updatedAt: "desc" },
+        take: limit,
+      }),
   };
 }

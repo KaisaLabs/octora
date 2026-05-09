@@ -23,6 +23,10 @@ import { registerRelayerRoutes } from '#modules/relayer'
 import { registerAuthRoutes } from '#modules/auth/auth.routes'
 import { registerAdminRoutes } from '#modules/admin/admin.routes'
 import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
+import { createActivityService } from '#modules/positions/activity.service'
+import { createIndexerService } from '#modules/indexer'
+import { createRecoveryWorker } from '#modules/positions/recovery-worker'
+import { Connection } from '@solana/web3.js'
 
 export interface AppRepositories {
   positionRepo: PositionRepository
@@ -198,6 +202,24 @@ export async function createApp(options: CreateAppOptions = {}) {
   // other OCTORA_MIXER_RELAYER_* env vars (see common/config.ts).
   if (config.mixerRelayer) {
     await registerRelayerRoutes(app, config.mixerRelayer, prismaClient ?? null)
+  }
+
+  // Recovery worker (P1-29). Polls every 30s to advance stuck positions
+  // and capture newly-failed ones. Started only with a real Prisma
+  // client — test harness skips it because there's nothing to recover.
+  // Disable explicitly via OCTORA_RECOVERY_WORKER_ENABLED=false to keep
+  // a deploy quiet during incident response.
+  if (prismaClient && process.env.OCTORA_RECOVERY_WORKER_ENABLED !== 'false') {
+    const worker = createRecoveryWorker({
+      positionRepo: repos.positionRepo,
+      activityService: createActivityService(repos.activityRepo),
+      positionIndexer: createIndexerService({ store: repos.reconciliationRepo }),
+      connection: new Connection(config.executorRpcUrl, 'confirmed'),
+      reconciliationRepo: repos.reconciliationRepo,
+      log: (msg, ctx) => app.log.info(ctx ?? {}, msg),
+    })
+    worker.start()
+    app.addHook('onClose', async () => worker.stop())
   }
 
   return app

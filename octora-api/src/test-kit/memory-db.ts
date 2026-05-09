@@ -89,6 +89,22 @@ export function createMemoryPositionRepository(): PositionRepository {
       }
       return total;
     },
+    async findStuckPositions(state, cutoff, limit) {
+      const matches: PositionRow[] = [];
+      for (const row of positions.values()) {
+        if (row.state === state && row.updatedAt < cutoff) matches.push(row);
+      }
+      matches.sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime());
+      return matches.slice(0, limit);
+    },
+    async findRecentlyFailed(since, limit) {
+      const matches: PositionRow[] = [];
+      for (const row of positions.values()) {
+        if (row.state === "failed" && row.updatedAt >= since) matches.push(row);
+      }
+      matches.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+      return matches.slice(0, limit);
+    },
   };
 }
 

@@ -1,0 +1,66 @@
+name: Nightly devnet e2e
+
+# Runs the smoke suite from `octora-web/e2e/` against a fresh build.
+# Schedule fires at 03:17 UTC every night — chosen off the hour so we
+# don't pile up on the GitHub Actions queue when other crypto repos
+# kick off their own crons.
+#
+# Manual dispatch is enabled too; `RUN_FULL_DEVNET=1` flips the heavy
+# deposit→withdraw leg on. Default is the lightweight regression path
+# that catches frontend breakage (banner missing, broken connect flow,
+# ToS modal regression).
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      run_full_devnet:
+        description: "Run the full devnet deposit→withdraw leg (requires funded test wallet)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: octora-web
+    env:
+      VITE_NETWORK: devnet
+      # When the workflow_dispatch input is set, plumb it through to the
+      # Playwright spec so the gated test runs.
+      RUN_FULL_DEVNET: ${{ github.event.inputs.run_full_devnet == 'true' && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run e2e smoke
+        run: pnpm test:e2e -- e2e/devnet-deposit-withdraw.spec.ts
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: octora-web/playwright-report/
+          retention-days: 7
