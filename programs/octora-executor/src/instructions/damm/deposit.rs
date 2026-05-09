@@ -21,8 +21,10 @@ pub struct DammDeposit<'info> {
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
 
+    /// CHECK: validated in handler against canonical DAMM program ID.
     pub damm_program: UncheckedAccount<'info>,
 
+    /// CHECK: validated in handler against stored PoolAuthority pool.
     pub pool: UncheckedAccount<'info>,
 }
 

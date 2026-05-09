@@ -17,7 +17,9 @@ export interface PoolSummary {
   feeBps: number
   binStep: number
   baseFee: number
-  network: 'mainnet' | 'devnet'
+  /** Unix seconds from Meteora; 0 if unavailable. */
+  createdAt: number
+  network: 'mainnet' | 'devnet' | 'localnet'
 }
 
 export interface PoolDetail extends PoolSummary {
@@ -73,4 +75,22 @@ export interface PaginatedResponse<T> {
   pages: number
   currentPage: number
   pageSize: number
+}
+
+export interface LiquidityBin {
+  binId: number
+  /** Price denominated in tokenY per tokenX, scaled per Meteora SDK. */
+  price: number
+  /** Aggregate liquidity in the bin, in USD-ish units (xAmount + yAmount converted via current price). */
+  liquidity: number
+  xAmount: string
+  yAmount: string
+}
+
+export interface PoolBins {
+  address: string
+  network: 'mainnet' | 'devnet' | 'localnet'
+  activeBinId: number
+  binStep: number
+  bins: LiquidityBin[]
 }

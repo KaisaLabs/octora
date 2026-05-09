@@ -182,7 +182,12 @@ async function signAndSendStealth(opts: {
     skipPreflight: false,
     preflightCommitment: "confirmed",
   });
-  await connection.confirmTransaction({ signature: sig, blockhash }, "confirmed");
+  // Server already signed this tx with its own blockhash; we don't have the
+  // matching lastValidBlockHeight to build a TransactionConfirmationStrategy,
+  // so fall back to the (deprecated but still supported) signature-string
+  // form for confirmation. Browser-test flow only.
+  await connection.confirmTransaction(sig, "confirmed");
+  void blockhash;
   return sig;
 }
 
@@ -527,7 +532,7 @@ export function IntegratedTestPage() {
           <h1 className="text-2xl font-bold">Integrated Test</h1>
           <p className="text-muted-foreground">Connect your wallet to start</p>
           <button
-            onClick={connect}
+            onClick={() => connect()}
             className="px-6 py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90"
           >
             Connect Wallet

@@ -85,7 +85,11 @@ describe("RelayerService", () => {
     it("generates valid Solana keypairs", () => {
       const wallet = service.generateRecipientWallet();
 
-      expect(wallet.publicKey).toHaveLength(44); // base58 pubkey length (approx)
+      // base58-encoded ed25519 pubkeys are 43 or 44 chars depending on
+      // leading-byte distribution. Use a range, not a hard equality, so
+      // this test isn't 1-in-256-runs flaky.
+      expect(wallet.publicKey.length).toBeGreaterThanOrEqual(43);
+      expect(wallet.publicKey.length).toBeLessThanOrEqual(44);
       expect(wallet.keypair).toBeDefined();
       expect(wallet.seed).toHaveLength(32);
     });

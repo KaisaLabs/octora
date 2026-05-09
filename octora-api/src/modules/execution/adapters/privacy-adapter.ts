@@ -14,6 +14,13 @@ export interface PrepareFundingInput {
   poolSlug: string;
   amount: string;
   mode: ExecutionMode;
+  /**
+   * Optional client-provided stealth pubkey (base58). When set, the adapter
+   * MUST use it as the funding/position owner rather than generating one
+   * server-side. Used by the wallet-derived seed flow where the browser is
+   * the sole holder of the stealth keypair and only sends the pubkey.
+   */
+  stealthPubkey?: string;
 }
 
 export interface PrepareExitInput {

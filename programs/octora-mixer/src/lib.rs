@@ -9,7 +9,7 @@ pub mod verifier;
 
 use instructions::*;
 
-declare_id!("Ao58tvHj3FTwFMiGts5HAc5mastNE61Puiw4ER3rA3NJ");
+declare_id!("BHxT3jyWJ1mRLyMjywQoiSXBqo7YpTiGWC1oVr2Ppnzx");
 
 #[program]
 pub mod octora_mixer {

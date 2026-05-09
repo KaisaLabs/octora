@@ -1,14 +1,18 @@
 import type { FastifyInstance } from "fastify";
+import { PublicKey } from "@solana/web3.js";
 import { MixerService } from "./mixer.service.js";
 import { createMixerController } from "./mixer.controller.js";
 import { makeRateLimiter } from "./rate-limit.js";
 
+// MAINNET_BLOCKER: default falls back to devnet. On mainnet deploy,
+// SOLANA_RPC_URL must be set explicitly to a real provider (Helius,
+// Triton, etc.) — public mainnet-beta rate-limits aggressively and
+// `getSignaturesForAddress` truncates under load. See docs/test-plan.md §14.
 const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
-// 0.025 SOL. Bumped from 0.02 because the old default's mixer_pool PDA on
-// devnet was initialised by a pre-`filled_subtrees` build of the program,
-// so Anchor can't deserialize it against the current MixerPool layout.
-// A new denomination → new PDA → fresh account, no migration needed.
-const DENOMINATION = BigInt(process.env.MIXER_DENOMINATION || "25000000");
+// 1 SOL — single denomination for the MVP. Changing this is a *new pool*
+// (denomination is part of the PDA seeds), so MIXER_DENOMINATION must stay
+// stable across server restarts for the same pool to be reused.
+const DENOMINATION = BigInt(process.env.MIXER_DENOMINATION || "1000000000");
 
 // Rate-limit ceilings — chosen to allow normal interactive use of the test
 // page (a few clicks per minute) while bounding what an abusive client can
@@ -30,31 +34,40 @@ const READ_LIMIT = { windowMs: 60_000, max: 120 };
  *
  * The browser-side equivalents live in octora-web/src/lib/mixer/.
  */
-export async function registerMixerRoutes(app: FastifyInstance) {
+export interface MixerRoutesOptions {
+  mixerProgramId: string;
+}
+
+export async function registerMixerRoutes(
+  app: FastifyInstance,
+  opts: MixerRoutesOptions,
+) {
   const tags = ["Mixer"];
 
   const mixer = new MixerService({
     rpcUrl: RPC_URL,
     denomination: DENOMINATION,
+    programId: new PublicKey(opts.mixerProgramId),
   });
 
   // Rehydrate the deposit cache from on-chain DepositEvent logs so a
   // server restart doesn't blank the public deposit history that
-  // browsers rely on for Merkle-tree reconstruction. Best-effort and
-  // non-blocking: kicked off in the background — /mixer/deposits will
-  // still serve whatever is loaded so far, and /mixer/confirm-deposit
-  // can backfill anything we miss.
-  void mixer
-    .hydrateFromChain({ log: (m) => app.log.warn(m) })
-    .then((res) => {
-      app.log.info(
-        { depositsLoaded: res.depositsLoaded, scannedSignatures: res.scannedSignatures },
-        "mixer: hydrated deposit cache from chain",
-      );
-    })
-    .catch((err) => {
-      app.log.warn({ err }, "mixer: hydrateFromChain failed");
-    });
+  // browsers rely on for Merkle-tree reconstruction.
+  //
+  // Awaited (not background): if /mixer/deposits serves a partial leaf set
+  // before hydration finishes, browsers rebuild a tree that doesn't match
+  // the on-chain root and withdrawals fail with RootNotFound. The 5–15s
+  // boot cost is a fair trade for not silently corrupting every deposit
+  // that races a fresh restart.
+  try {
+    const res = await mixer.hydrateFromChain({ log: (m) => app.log.warn(m) });
+    app.log.info(
+      { depositsLoaded: res.depositsLoaded, scannedSignatures: res.scannedSignatures },
+      "mixer: hydrated deposit cache from chain",
+    );
+  } catch (err) {
+    app.log.warn({ err }, "mixer: hydrateFromChain failed");
+  }
 
   const controller = createMixerController(mixer);
 

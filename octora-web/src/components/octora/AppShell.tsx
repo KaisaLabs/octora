@@ -1,9 +1,25 @@
-import { Link, Outlet, useLocation } from "react-router-dom";
-import { Activity, BriefcaseBusiness, Compass, Loader2, LogOut, Sparkles, Wallet } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { BriefcaseBusiness, Coins, Compass, Loader2, LogOut, Sparkles, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useSolana } from "@/providers/SolanaProvider";
+import { useSolana, type WalletProviderId } from "@/providers/SolanaProvider";
+import { usePortfolioPositions } from "@/hooks/usePortfolioPositions";
+import { WalletConnectDialog } from "./lp/WalletConnectDialog";
 import { GlowBackground } from "./GlowBackground";
 import { FloatingParticles } from "./FloatingParticles";
+import { LivePriceChip } from "./LivePriceChip";
+
+const parseUsd = (v: string | undefined): number => {
+  if (!v) return 0;
+  const n = parseFloat(v.replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+};
+
+function fmtUsdCompact(n: number): string {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 10_000) return `$${(n / 1000).toFixed(1)}K`;
+  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
 
 function shortenAddress(addr: string): string {
   if (addr.length <= 8) return addr;
@@ -13,12 +29,33 @@ function shortenAddress(addr: string): string {
 const tabs = [
   { to: "/", label: "Pools", icon: Compass },
   { to: "/portfolio", label: "Portfolio", icon: BriefcaseBusiness },
-  { to: "/activity", label: "Activity", icon: Activity },
 ] as const;
 
 export function AppShell() {
   const { pathname } = useLocation();
-  const { wallet, connect, disconnect, balance } = useSolana();
+  const navigate = useNavigate();
+  const { wallet, connect, disconnect, balance, providers } = useSolana();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pendingId, setPendingId] = useState<WalletProviderId | null>(null);
+
+  // Live claimable across all wallet-owned positions. Pools list is unused
+  // here (we only need feeUsd from on-chain state); shared react-query cache
+  // dedupes the actual fetch with the portfolio page's call.
+  const positions = usePortfolioPositions(wallet.address, []);
+  const claimable = useMemo(
+    () => positions.reduce((s, p) => s + parseUsd(p.claimable), 0),
+    [positions],
+  );
+
+  const handlePick = async (id: WalletProviderId) => {
+    setPendingId(id);
+    try {
+      await connect(id);
+      setPickerOpen(false);
+    } finally {
+      setPendingId(null);
+    }
+  };
 
   const isActive = (to: string) => {
     if (to === "/") return pathname === "/";
@@ -26,44 +63,64 @@ export function AppShell() {
   };
 
   return (
-    <div className="relative flex min-h-[100dvh] flex-col overflow-hidden">
+    <div className="relative flex min-h-[100dvh] flex-col overflow-x-hidden">
       <GlowBackground />
       <FloatingParticles count={30} />
 
       {/* Header */}
       <header className="sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur-xl">
         <div className="container flex min-h-14 items-center justify-between gap-3 py-2.5 sm:min-h-16 sm:py-3">
-          <Link to="/" className="flex items-center gap-2">
-            <span className="text-base font-semibold tracking-tight text-foreground sm:text-lg">
-              Octora
-            </span>
-          </Link>
+          <div className="flex items-center gap-6">
+            <Link to="/" className="flex items-center gap-2">
+              <span className="font-display text-lg font-semibold tracking-tight text-foreground sm:text-xl">
+                Octora
+              </span>
+            </Link>
 
-          {/* Desktop tabs */}
-          <nav className="hidden items-center gap-1 sm:flex">
-            {tabs.map((tab) => (
-              <Link
-                key={tab.to}
-                to={tab.to}
-                className={`rounded-lg px-3.5 py-2 text-sm transition-colors ${
-                  isActive(tab.to)
-                    ? "bg-surface-elevated text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {tab.label}
-              </Link>
-            ))}
-          </nav>
+            {/* Desktop tabs — grouped with the logo on the left */}
+            <nav className="hidden items-center gap-1 sm:flex">
+              {tabs.map((tab) => (
+                <Link
+                  key={tab.to}
+                  to={tab.to}
+                  className={`rounded-lg px-3.5 py-2 text-sm transition-colors ${
+                    isActive(tab.to)
+                      ? "bg-surface-elevated text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {tab.label}
+                </Link>
+              ))}
+            </nav>
+          </div>
 
           {/* Wallet */}
           <div className="flex items-center gap-2">
+            <LivePriceChip />
+
+            {wallet.connected && claimable > 0 && (
+              <button
+                type="button"
+                onClick={() => navigate("/portfolio")}
+                title={`${fmtUsdCompact(claimable)} claimable across positions`}
+                className="hidden items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 sm:inline-flex"
+              >
+                <span aria-hidden className="relative flex h-1.5 w-1.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60" />
+                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+                </span>
+                <Coins className="h-3.5 w-3.5" />
+                <span className="font-mono tabular-nums">{fmtUsdCompact(claimable)}</span>
+                <span className="text-primary/70">claimable</span>
+              </button>
+            )}
             {!wallet.connected && !wallet.connecting && (
               <Button
                 variant="hero"
                 size="sm"
                 className="rounded-full"
-                onClick={connect}
+                onClick={() => setPickerOpen(true)}
               >
                 <Wallet className="h-4 w-4" />
                 <span className="hidden sm:inline">Connect</span>
@@ -140,6 +197,17 @@ export function AppShell() {
           })}
         </div>
       </nav>
+
+      <WalletConnectDialog
+        open={pickerOpen}
+        onOpenChange={(o) => {
+          if (!wallet.connecting) setPickerOpen(o);
+        }}
+        providers={providers}
+        connecting={wallet.connecting}
+        pendingId={pendingId}
+        onSelect={handlePick}
+      />
     </div>
   );
 }

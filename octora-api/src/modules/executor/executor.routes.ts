@@ -5,11 +5,11 @@ import { ExecutorService } from "./executor.service.js";
 import { createExecutorController } from "./executor.controller.js";
 
 const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
-const EXECUTOR_PROGRAM_ID =
-  process.env.OCTORA_EXECUTOR_PROGRAM_ID || "86zj6EvHxMywP4Bw4EyZ2VcAjLm1pfGsc6ZjsZbrWwwc";
-const RELAYER_KEYPAIR_PATH =
-  process.env.OCTORA_EXECUTOR_RELAYER_KEYPAIR ||
-  `${process.env.HOME ?? ""}/.config/solana/id.json`;
+
+export interface ExecutorRoutesOptions {
+  executorProgramId: string;
+  relayerKeypairPath: string;
+}
 
 /**
  * Test-page executor routes. These power the integrated test page:
@@ -20,14 +20,17 @@ const RELAYER_KEYPAIR_PATH =
  * endpoint returns a partially-signed (or unsigned) tx that the browser
  * completes locally before submitting.
  */
-export async function registerExecutorRoutes(app: FastifyInstance) {
+export async function registerExecutorRoutes(
+  app: FastifyInstance,
+  opts: ExecutorRoutesOptions,
+) {
   const tags = ["Executor"];
 
-  const relayerKeypair = loadKeypair(RELAYER_KEYPAIR_PATH);
+  const relayerKeypair = loadKeypair(opts.relayerKeypairPath);
   const executor = new ExecutorService({
     rpcUrl: RPC_URL,
     relayerKeypair,
-    executorProgramId: new PublicKey(EXECUTOR_PROGRAM_ID),
+    executorProgramId: new PublicKey(opts.executorProgramId),
   });
   const controller = createExecutorController(executor);
 
@@ -35,10 +38,12 @@ export async function registerExecutorRoutes(app: FastifyInstance) {
   app.post("/executor/mint-tokens", { schema: { tags } }, controller.mintTokens);
   app.post("/executor/init-position-tx", { schema: { tags } }, controller.initPositionTx);
   app.post("/executor/add-liquidity-tx", { schema: { tags } }, controller.addLiquidityTx);
+  app.post("/executor/claim-fees-tx", { schema: { tags } }, controller.claimFeesTx);
   app.post("/executor/withdraw-close-tx", { schema: { tags } }, controller.withdrawCloseTx);
-  app.get("/executor/position-authority", { schema: { tags } }, controller.positionAuthority);
+  app.get("/executor/pool-authority", { schema: { tags } }, controller.poolAuthority);
   app.get("/executor/devnet-pools", { schema: { tags } }, controller.devnetPools);
   app.post("/executor/use-pool", { schema: { tags } }, controller.usePool);
+  app.get("/executor/position-state", { schema: { tags } }, controller.positionState);
 }
 
 function loadKeypair(path: string): Keypair {

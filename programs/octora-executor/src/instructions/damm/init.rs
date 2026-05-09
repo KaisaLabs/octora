@@ -22,11 +22,14 @@ pub struct DammInit<'info> {
     pub pool_authority: Account<'info, PoolAuthority>,
 
     /// DAMM pool account
+    /// CHECK: validated in handler against the forwarded createLockEscrow CPI.
     pub pool: UncheckedAccount<'info>,
 
     /// LP mint for this DAMM pool
+    /// CHECK: validated in handler against the forwarded createLockEscrow CPI.
     pub lp_mint: UncheckedAccount<'info>,
 
+    /// CHECK: validated in handler against canonical DAMM program ID.
     pub damm_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,

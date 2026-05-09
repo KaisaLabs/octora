@@ -16,6 +16,7 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    setupFiles: ['./src/test-kit/vitest-env.ts'],
     server: {
       deps: {
         inline: ['@meteora-ag/dlmm', '@coral-xyz/anchor'],

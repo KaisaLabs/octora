@@ -1,5 +1,15 @@
 const API_BASE = import.meta.env.VITE_API_URL ?? '/api'
 
+/**
+ * Active Solana network for all DLMM API calls.
+ *
+ * Set VITE_NETWORK=localnet (or devnet/mainnet) at build time. Defaults to
+ * devnet so the historical UX is preserved. On `localnet`, the API skips
+ * the Meteora indexer and reads pool data straight from the local validator.
+ */
+export const NETWORK: 'mainnet' | 'devnet' | 'localnet' =
+  (import.meta.env.VITE_NETWORK as 'mainnet' | 'devnet' | 'localnet' | undefined) ?? 'devnet'
+
 export interface PoolSummary {
   address: string
   name: string
@@ -13,7 +23,8 @@ export interface PoolSummary {
   feeBps: number
   binStep: number
   baseFee: number
-  network: 'mainnet' | 'devnet'
+  createdAt: number
+  network: 'mainnet' | 'devnet' | 'localnet'
 }
 
 export interface PoolDetail extends PoolSummary {
@@ -43,12 +54,6 @@ function fmtPct(n: number): string {
   return `${n.toFixed(1)}%`;
 }
 
-/** Determines the protocol label from binStep */
-function protocolLabel(binStep: number): string {
-  // DLMM pools typically have smaller bin steps, DAMM have larger/dynamic
-  return binStep <= 100 ? "Meteora DLMM" : "Meteora DAMM";
-}
-
 /** Maps an API PoolSummary to the internal Pool type */
 export function mapPoolSummary(summary: PoolSummary): Pool {
   const tokenA = summary.tokenX.symbol;
@@ -60,25 +65,31 @@ export function mapPoolSummary(summary: PoolSummary): Pool {
     pair: summary.pair || `${tokenA}-${tokenB}`,
     tokenA,
     tokenB,
+    tokenAMint: summary.tokenX.mint,
+    tokenBMint: summary.tokenY.mint,
     address: summary.address,
-    protocol: protocolLabel(summary.binStep),
+    protocol: "Meteora DLMM",
     tvl: fmtUsd(summary.tvl),
     apr: fmtPct(summary.apr),
     volume24h: fmtUsd(summary.volume24h),
     fees24h: fmtUsd(summary.fees24h),
     strategy: "Auto range · Balanced",
-    depth: summary.binStep <= 50 ? "Tight" : summary.binStep <= 200 ? "Medium" : "Wide",
+    depth: summary.binStep <= 10 ? "Tight" : summary.binStep <= 50 ? "Medium" : "Wide",
     risk: summary.apr > 30 ? "Active" : "Balanced",
     feeBps: summary.feeBps,
+    binStep: summary.binStep,
+    createdAt: summary.createdAt ?? 0,
     binRange: summary.binStep ? `±${summary.binStep} bins` : "Dynamic",
     priceRange: "Live pricing",
+    activeBinId: 0,
+    activePrice: 0,
     allocation: { tokenA: 50, tokenB: 50 },
-    tags: summary.binStep <= 100 ? ["Tight bands", "Active"] : ["Wide coverage", "Passive"],
+    tags: summary.binStep <= 10 ? ["Tight bands", "Active"] : ["Wide coverage", "Passive"],
   };
 }
 
 export async function listPools(opts: {
-  network?: 'mainnet' | 'devnet'
+  network?: 'mainnet' | 'devnet' | 'localnet'
   search?: string
   page?: number
   pageSize?: number
@@ -101,9 +112,99 @@ export async function listPools(opts: {
   return data.data
 }
 
+export interface PoolBinsResponse {
+  address: string
+  network: 'mainnet' | 'devnet' | 'localnet'
+  activeBinId: number
+  binStep: number
+  bins: Array<{
+    binId: number
+    price: number
+    liquidity: number
+    xAmount: string
+    yAmount: string
+  }>
+}
+
+export async function getPoolBins(
+  address: string,
+  opts: { network?: 'mainnet' | 'devnet' | 'localnet'; count?: number } = {}
+): Promise<PoolBinsResponse> {
+  const params = new URLSearchParams()
+  if (opts.network) params.set('network', opts.network)
+  if (opts.count) params.set('count', String(opts.count))
+
+  const res = await fetch(`${API_BASE}/dlmm/pools/${address}/bins?${params.toString()}`)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch bins: ${res.status}`)
+  }
+  return res.json()
+}
+
+export interface PriceInfo {
+  usdPrice: number
+  priceChange24h: number
+  decimals: number
+  blockId: number
+  createdAt: string
+}
+
+export type PriceMap = Record<string, PriceInfo>
+
+export async function getPrices(mints: string[]): Promise<PriceMap> {
+  const ids = mints.filter(Boolean)
+  if (ids.length === 0) return {}
+  const res = await fetch(`${API_BASE}/prices?ids=${encodeURIComponent(ids.join(','))}`)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch prices: ${res.status}`)
+  }
+  const body = await res.json()
+  return (body?.data ?? {}) as PriceMap
+}
+
+export interface PositionStateView {
+  positionPubkey: string
+  lbPair: string
+  lowerBinId: number
+  upperBinId: number
+  activeBinId: number
+  tokenXMint: string
+  tokenYMint: string
+  decimalsX: number
+  decimalsY: number
+  feeXLamports: string
+  feeYLamports: string
+  totalXLamports: string
+  totalYLamports: string
+  feeUsd: number
+  valueUsd: number
+  priceXUsd: number
+  priceYUsd: number
+}
+
+/**
+ * Fetch on-chain Meteora DLMM position state for the portfolio. Returns
+ * `null` when the position has been closed (404 from the API).
+ */
+export async function getPositionState(args: {
+  lbPair: string
+  positionPubkey: string
+}): Promise<PositionStateView | null> {
+  const params = new URLSearchParams({
+    lbPair: args.lbPair,
+    positionPubkey: args.positionPubkey,
+  })
+  const res = await fetch(`${API_BASE}/executor/position-state?${params.toString()}`)
+  if (res.status === 404) return null
+  if (!res.ok) {
+    throw new Error(`Failed to fetch position state: ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function getPoolDetail(
   address: string,
-  network: 'mainnet' | 'devnet' = 'mainnet'
+  network: 'mainnet' | 'devnet' | 'localnet' = 'devnet'
 ): Promise<PoolDetail> {
   const params = new URLSearchParams()
   params.set('network', network)

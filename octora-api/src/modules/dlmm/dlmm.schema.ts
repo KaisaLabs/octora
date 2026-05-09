@@ -1,14 +1,14 @@
 const networkQuery = {
   type: 'object',
   properties: {
-    network: { type: 'string', enum: ['mainnet', 'devnet'], default: 'mainnet' },
+    network: { type: 'string', enum: ['mainnet', 'devnet', 'localnet'], default: 'devnet' },
   },
 } as const
 
 const paginationQuery = {
   type: 'object',
   properties: {
-    network: { type: 'string', enum: ['mainnet', 'devnet'], default: 'mainnet' },
+    network: { type: 'string', enum: ['mainnet', 'devnet', 'localnet'], default: 'devnet' },
     page: { type: 'integer', minimum: 1, default: 1 },
     pageSize: { type: 'integer', minimum: 1, maximum: 1000, default: 50 },
   },
@@ -18,7 +18,7 @@ export const listPoolsSchema = {
   querystring: {
     type: 'object',
     properties: {
-      network: { type: 'string', enum: ['mainnet', 'devnet'], default: 'mainnet' },
+      network: { type: 'string', enum: ['mainnet', 'devnet', 'localnet'], default: 'devnet' },
       search: { type: 'string' },
       page: { type: 'integer', minimum: 1, default: 1 },
       pageSize: { type: 'integer', minimum: 1, maximum: 1000, default: 50 },
@@ -65,7 +65,7 @@ export const getOhlcvSchema = {
   querystring: {
     type: 'object',
     properties: {
-      network: { type: 'string', enum: ['mainnet', 'devnet'], default: 'mainnet' },
+      network: { type: 'string', enum: ['mainnet', 'devnet', 'localnet'], default: 'devnet' },
       startTime: { type: 'integer' },
       endTime: { type: 'integer' },
       resolution: { type: 'string' },
@@ -84,10 +84,27 @@ export const getVolumeHistorySchema = {
   querystring: {
     type: 'object',
     properties: {
-      network: { type: 'string', enum: ['mainnet', 'devnet'], default: 'mainnet' },
+      network: { type: 'string', enum: ['mainnet', 'devnet', 'localnet'], default: 'devnet' },
       startTime: { type: 'integer' },
       endTime: { type: 'integer' },
       resolution: { type: 'string' },
+    },
+  },
+} as const
+
+export const getPoolBinsSchema = {
+  params: {
+    type: 'object',
+    required: ['address'] as const,
+    properties: {
+      address: { type: 'string', minLength: 32 },
+    },
+  },
+  querystring: {
+    type: 'object',
+    properties: {
+      network: { type: 'string', enum: ['mainnet', 'devnet', 'localnet'], default: 'devnet' },
+      count: { type: 'integer', minimum: 7, maximum: 201, default: 61 },
     },
   },
 } as const

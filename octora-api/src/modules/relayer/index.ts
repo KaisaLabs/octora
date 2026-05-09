@@ -1,5 +1,6 @@
 export { RelayerService } from "./relayer.service.js";
 export { DepositService } from "./deposit.service.js";
+export { registerRelayerRoutes } from "./relayer.routes.js";
 export {
   InMemoryNullifierRegistry,
   OnChainNullifierRegistry,

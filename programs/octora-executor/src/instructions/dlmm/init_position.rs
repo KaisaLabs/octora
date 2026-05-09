@@ -21,9 +21,10 @@ pub struct DlmmInitPosition<'info> {
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
 
-    /// LB pair this position joins — must equal the forwarded lb_pair in remaining_accounts[2]
+    /// CHECK: validated in handler against the forwarded lb_pair in remaining_accounts[2].
     pub lb_pair: UncheckedAccount<'info>,
 
+    /// CHECK: validated in handler against canonical DLMM program ID.
     pub dlmm_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
@@ -39,14 +40,15 @@ pub fn handler<'info>(
     require_dlmm_program(&ctx.accounts.dlmm_program)?;
 
     let remaining = ctx.remaining_accounts;
-    require!(remaining.len() >= 8, ExecutorError::AccountsTooShort);
+    require!(remaining.len() == 8, ExecutorError::AccountsTooShort);
 
     let position_account = &remaining[1];
     let lb_pair_account = &remaining[2];
 
-    // ── Explicit LB pair validation ──
-    // The named account (ctx.accounts.lb_pair) must match the forwarded
-    // lb_pair in remaining_accounts[2] to prevent account substitution.
+    require!(
+        position_account.is_signer,
+        ExecutorError::MissingPositionSigner,
+    );
     require_keys_eq!(
         ctx.accounts.lb_pair.key(),
         lb_pair_account.key(),

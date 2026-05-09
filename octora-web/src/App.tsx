@@ -7,8 +7,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SolanaProvider } from "@/providers/SolanaProvider";
 import { AppShell } from "@/components/octora/AppShell";
 import { PoolsPage } from "@/pages/PoolsPage";
+import { PoolDetailPage } from "@/pages/PoolDetailPage";
 import { PortfolioPage } from "@/pages/PortfolioPage";
-import { ActivityPage } from "@/pages/ActivityPage";
+import { PositionDetailPage } from "@/pages/PositionDetailPage";
 import NotFound from "./pages/NotFound.tsx";
 
 // MixerTestPage transitively imports circomlibjs + the mixer crypto bundle
@@ -22,8 +23,9 @@ const IntegratedTestPage = lazy(() =>
   import("./pages/IntegratedTestPage").then((m) => ({ default: m.IntegratedTestPage })),
 );
 import type { Pool } from "@/components/octora/types";
-import { listPools, mapPoolSummary } from "@/lib/api";
-import { portfolioActivity, portfolioPositions } from "@/data/octora";
+import { listPools, mapPoolSummary, NETWORK } from "@/lib/api";
+import { usePortfolioPositions } from "@/hooks/usePortfolioPositions";
+import { useSolana } from "@/providers/SolanaProvider";
 
 const queryClient = new QueryClient();
 
@@ -37,7 +39,7 @@ function AppRoutes() {
     setLoading(true);
     setError(null);
 
-    listPools({ network: "mainnet", pageSize: 50 })
+    listPools({ network: NETWORK, pageSize: 50 })
       .then((summaries) => {
         if (!cancelled) {
           setRawPools(summaries.map(mapPoolSummary));
@@ -60,13 +62,16 @@ function AppRoutes() {
   }, []);
 
   const pools = useMemo(() => rawPools, [rawPools]);
+  const { wallet } = useSolana();
+  const portfolioPositions = usePortfolioPositions(wallet.address, pools);
 
   return (
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<PoolsPage pools={pools} loading={loading} error={error} />} />
+        <Route path="pool/:address" element={<PoolDetailPage />} />
         <Route path="portfolio" element={<PortfolioPage positions={portfolioPositions} />} />
-        <Route path="activity" element={<ActivityPage activity={portfolioActivity} />} />
+        <Route path="position/:id" element={<PositionDetailPage positions={portfolioPositions} />} />
       </Route>
       <Route
         path="mixer-test"

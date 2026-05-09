@@ -58,3 +58,4 @@ octora-api/src/modules/vault/circuits/build/
 # ─── Misc ───────────────────────────────────────────────
 .superstack
 /briefs
+meteora-invent/

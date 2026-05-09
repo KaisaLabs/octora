@@ -151,7 +151,7 @@ export function MixerTestPage() {
 
   // Pull the live pool denomination so step labels display the actual amount
   // every deposit/withdrawal moves. The default denomination is set by the
-  // API's MIXER_DENOMINATION env var (0.02 SOL) and frozen at pool init.
+  // API's MIXER_DENOMINATION env var (1 SOL) and frozen at pool init.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -378,7 +378,7 @@ export function MixerTestPage() {
           <h1 className="text-2xl font-bold">Mixer Test</h1>
           <p className="text-muted-foreground">Connect your wallet to start</p>
           <button
-            onClick={connect}
+            onClick={() => connect()}
             className="px-6 py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90"
           >
             Connect Wallet

@@ -1,5 +1,5 @@
 {
-  "address": "Ao58tvHj3FTwFMiGts5HAc5mastNE61Puiw4ER3rA3NJ",
+  "address": "BHxT3jyWJ1mRLyMjywQoiSXBqo7YpTiGWC1oVr2Ppnzx",
   "metadata": {
     "name": "octora_mixer",
     "version": "0.1.0",
@@ -165,6 +165,66 @@
         {
           "name": "denomination",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_paused",
+      "docs": [
+        "Authority-gated pause toggle. Blocks both deposit and withdraw",
+        "while `is_paused == true`. Only `pool.authority` can call this."
+      ],
+      "discriminator": [
+        91,
+        60,
+        125,
+        192,
+        176,
+        225,
+        166,
+        218
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "mixer_pool"
+          ]
+        },
+        {
+          "name": "mixer_pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  120,
+                  101,
+                  114,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mixer_pool.denomination",
+                "account": "MixerPool"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "paused",
+          "type": "bool"
         }
       ]
     },
@@ -382,13 +442,38 @@
     },
     {
       "code": 6008,
+      "name": "FeeOverflow",
+      "msg": "Fee field exceeds u64 — upper 24 bytes must be zero"
+    },
+    {
+      "code": 6009,
       "name": "InsufficientPoolBalance",
       "msg": "Insufficient pool balance for withdrawal"
     },
     {
-      "code": 6009,
+      "code": 6010,
       "name": "Unauthorized",
       "msg": "Unauthorized: only the authority can perform this action"
+    },
+    {
+      "code": 6011,
+      "name": "PoseidonHashFailed",
+      "msg": "Poseidon hash syscall failed during Merkle tree update"
+    },
+    {
+      "code": 6012,
+      "name": "PublicInputOutOfRange",
+      "msg": "Public input is not a canonical BN254 field element (>= r)"
+    },
+    {
+      "code": 6013,
+      "name": "RecipientAliasesPool",
+      "msg": "Recipient or relayer must not alias the mixer pool"
+    },
+    {
+      "code": 6014,
+      "name": "InvalidDenomination",
+      "msg": "Denomination must be greater than zero"
     }
   ],
   "types": [
@@ -490,7 +575,17 @@
           {
             "name": "filled_subtrees",
             "docs": [
-              "Cached left-side subtree hashes for incremental insertion"
+              "\"Filled subtrees\" cache for incremental Merkle insertion.",
+              "",
+              "At each level `i`, this stores the most recently inserted left-side",
+              "subtree hash. When the next deposit lands at an odd index at level",
+              "`i`, this value is the left sibling for the level-`i` hash; when it",
+              "lands at an even index, this slot is overwritten with the new",
+              "left-side subtree.",
+              "",
+              "Together with the precomputed `ZERO_HASHES`, this lets the program",
+              "compute the new Merkle root in `TREE_LEVELS` Poseidon syscalls per",
+              "deposit, without ever trusting a depositor-supplied root."
             ],
             "type": {
               "array": [

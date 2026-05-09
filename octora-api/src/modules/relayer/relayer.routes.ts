@@ -20,6 +20,14 @@ import type { RelayerConfig, WithdrawRequest } from "./types.js";
  * other `OCTORA_MIXER_RELAYER_*` env vars to turn it on. The relayer holds
  * a hot wallet, so do NOT enable it on serverless deploys where the
  * filesystem is shared or env vars are logged.
+ *
+ * Endpoints:
+ *   GET  /relayer/info     — pubkey + fee + denomination (browser binds these
+ *                            into the Groth16 proof)
+ *   GET  /relayer/status   — counters / hot-wallet balance
+ *   GET  /relayer/health   — 503 when unhealthy, with breakdown
+ *   POST /relayer/validate — dry-run proof verification
+ *   POST /relayer/withdraw — submit a proven withdrawal; relayer pays gas
  */
 export async function registerRelayerRoutes(
   app: FastifyInstance,
@@ -37,6 +45,7 @@ export async function registerRelayerRoutes(
     rpcUrl: cfg.rpcUrl,
     mixerProgramId: cfg.mixerProgramId,
     poolDenomination: cfg.poolDenomination,
+    privacyDelayMs: cfg.privacyDelayMs,
   };
 
   // Build the Solana client once, derive the pool PDA, and use that to
@@ -54,13 +63,23 @@ export async function registerRelayerRoutes(
   const relayer = new RelayerService(serviceConfig, nullifiers);
   relayer.initializeClient();
 
+  // Snapshot the public-facing identity once at registration. These values
+  // never change for a relayer instance, and they're what the browser binds
+  // into the Groth16 proof — caching avoids re-deriving them per /info hit.
+  const info = {
+    relayerPubkey: client.hotWallet.publicKey.toBase58(),
+    feeLamports: cfg.minFeeLamports.toString(),
+    denominationLamports: cfg.poolDenomination.toString(),
+    mixerPoolAddress: poolPDA.toBase58(),
+  };
+
   app.log.info(
     {
-      hotWallet: client.hotWallet.publicKey.toBase58(),
-      poolPDA: poolPDA.toBase58(),
+      hotWallet: info.relayerPubkey,
+      poolPDA: info.mixerPoolAddress,
       programId: client.programId.toBase58(),
-      denomination: cfg.poolDenomination.toString(),
-      minFeeLamports: cfg.minFeeLamports.toString(),
+      denomination: info.denominationLamports,
+      minFeeLamports: info.feeLamports,
     },
     "mixer relayer initialized",
   );
@@ -71,13 +90,16 @@ export async function registerRelayerRoutes(
   //     burning the relayer's CPU.
   //   - validate is a dry-run, slightly more permissive but still
   //     bounded so it can't be used to spam the verifier.
-  //   - status is read-only, looser limit.
+  //   - status/info are read-only, looser limit.
   const withdrawLimiter = makeRateLimiter({ windowMs: 60_000, max: 10 });
   const validateLimiter = makeRateLimiter({ windowMs: 60_000, max: 30 });
   const statusLimiter = makeRateLimiter({ windowMs: 60_000, max: 60 });
 
   await app.register(async (scope) => {
     scope.addHook("onRequest", statusLimiter);
+
+    scope.get("/relayer/info", { schema: { tags } }, async () => info);
+
     scope.get(
       "/relayer/status",
       { schema: { tags } },

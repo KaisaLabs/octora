@@ -3,7 +3,7 @@ use anchor_lang::solana_program::instruction::AccountMeta;
 
 use crate::constants::POOL_AUTHORITY_SEED;
 use crate::cpi::dlmm::*;
-use crate::cpi::require_spl_token_program;
+use crate::cpi::{require_spl_token_program, require_token_account_mint};
 use crate::errors::ExecutorError;
 use crate::state::{PoolAuthority, PoolRef};
 
@@ -19,8 +19,10 @@ pub struct DlmmAddLiquidity<'info> {
     )]
     pub pool_authority: Account<'info, PoolAuthority>,
 
+    /// CHECK: validated in handler against canonical DLMM program ID.
     pub dlmm_program: UncheckedAccount<'info>,
 
+    /// CHECK: validated in handler against stored PoolAuthority lb_pair.
     pub lb_pair: UncheckedAccount<'info>,
 }
 
@@ -32,7 +34,7 @@ pub fn handler<'info>(
 
     let pa = &ctx.accounts.pool_authority;
     let remaining = ctx.remaining_accounts;
-    require!(remaining.len() >= 16, ExecutorError::AccountsTooShort);
+    require!(remaining.len() == 16, ExecutorError::AccountsTooShort);
 
     match &pa.pool_ref {
         PoolRef::Dlmm {
@@ -59,6 +61,8 @@ pub fn handler<'info>(
         ExecutorError::LbPairMismatch
     );
 
+    require_token_account_mint(&remaining[3], &remaining[12], &remaining[7].key())?;
+    require_token_account_mint(&remaining[4], &remaining[13], &remaining[8].key())?;
     require_spl_token_program(&remaining[12])?;
     require_spl_token_program(&remaining[13])?;
     require_dlmm_event_authority(&remaining[14])?;

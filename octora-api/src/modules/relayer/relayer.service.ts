@@ -1,5 +1,6 @@
 import { ComputeBudgetProgram, PublicKey, SystemProgram } from "@solana/web3.js";
 import { verifyWithdrawProof } from "#modules/vault";
+import { bigintToBytes32 } from "#modules/mixer/mixer.service";
 import type { NullifierRegistry } from "./nullifier-registry.js";
 import type { StealthWallet } from "./stealth-wallet.js";
 import { generateStealthWallet } from "./stealth-wallet.js";
@@ -56,10 +57,30 @@ export class RelayerService {
    */
   private readonly inFlight = new Map<string, Promise<WithdrawResult>>();
 
+  /**
+   * Privacy delay gate — first-seen wall-clock timestamp per Merkle root.
+   * Populated lazily on first withdrawal request that names a given root.
+   *
+   * Why wall-clock and not slot-based: slot-of-deposit isn't observable
+   * from the proof (the whole point of the proof is to NOT reveal which
+   * commitment is being spent). What we *can* observe is when each root
+   * first arrived at this relayer, which is a lower bound on the
+   * deposit-to-withdraw delay because each new deposit produces a new
+   * root. Forcing a min wait between first-seeing-the-root and submitting
+   * the spend prevents the trivial "deposit, withdraw next slot" attack.
+   *
+   * The map grows unboundedly under attack — bounded by the on-chain
+   * 30-root ring buffer in practice. Old entries are pruned lazily.
+   */
+  private readonly rootFirstSeenAt = new Map<string, number>();
+  private readonly privacyDelayMs: number;
+
   constructor(
     private readonly config: RelayerConfig,
     private readonly nullifiers: NullifierRegistry,
-  ) {}
+  ) {
+    this.privacyDelayMs = config.privacyDelayMs ?? 13_000;
+  }
 
   /**
    * Initialize the Solana client connection.
@@ -182,7 +203,25 @@ export class RelayerService {
       };
     }
 
-    // 3. Verify proof off-chain (fast sanity check before paying gas)
+    // 3. Privacy delay gate. Run AFTER parity so the gate can't be probed
+    //    with garbage roots — only a parity-valid withdrawal can ever arm
+    //    a root in the first-seen map.
+    const delay = this.checkPrivacyDelay(request.root);
+    if (!delay.ok) {
+      return {
+        success: false,
+        txSignature: null,
+        nullifierHash: request.nullifierHash,
+        recipient: request.recipient,
+        amountLamports: "0",
+        feeLamports: request.fee,
+        error: `Privacy delay: this root was first observed less than ${
+          this.privacyDelayMs / 1000
+        }s ago. Retry in ~${Math.ceil(delay.waitMs / 1000)}s.`,
+      };
+    }
+
+    // 4. Verify proof off-chain (fast sanity check before paying gas)
     let proofValid: boolean;
     try {
       proofValid = await verifyWithdrawProof(request.proof, request.publicSignals);
@@ -210,7 +249,7 @@ export class RelayerService {
       };
     }
 
-    // 4. Submit on-chain withdrawal transaction
+    // 5. Submit on-chain withdrawal transaction
     this.pendingWithdrawals++;
     let txSignature: string;
 
@@ -229,7 +268,7 @@ export class RelayerService {
       };
     }
 
-    // 5. Mark nullifier as spent
+    // 6. Mark nullifier as spent
     await this.nullifiers.markSpent(request.nullifierHash, txSignature);
 
     this.pendingWithdrawals--;
@@ -343,6 +382,46 @@ export class RelayerService {
   // --- Private ---
 
   /**
+   * Privacy delay check.
+   *
+   * On first sight of a root, arm it with `now` and reject. On subsequent
+   * sights, accept iff the root has been known for at least
+   * `privacyDelayMs`. The arm-on-reject pattern is what makes the gate
+   * meaningful — without it, a client could pre-arm any root by spamming
+   * requests then submit just before the proof's blockhash expires.
+   *
+   * Roots that fall out of the on-chain 30-entry ring buffer naturally
+   * stop showing up in well-formed requests, so the map is bounded by
+   * pool-side state in practice. Out of paranoia we also evict entries
+   * older than 10× the delay window.
+   */
+  private checkPrivacyDelay(rootHex: string): { ok: true } | { ok: false; waitMs: number } {
+    if (this.privacyDelayMs <= 0) return { ok: true };
+    const now = Date.now();
+
+    // Lazy GC: drop entries older than 10× the window. Keeps the map size
+    // bounded under churn without scheduling a timer that would keep the
+    // process alive.
+    const maxAge = this.privacyDelayMs * 10;
+    if (this.rootFirstSeenAt.size > 64) {
+      for (const [k, t] of this.rootFirstSeenAt) {
+        if (now - t > maxAge) this.rootFirstSeenAt.delete(k);
+      }
+    }
+
+    const seen = this.rootFirstSeenAt.get(rootHex);
+    if (seen == null) {
+      this.rootFirstSeenAt.set(rootHex, now);
+      return { ok: false, waitMs: this.privacyDelayMs };
+    }
+    const elapsed = now - seen;
+    if (elapsed < this.privacyDelayMs) {
+      return { ok: false, waitMs: this.privacyDelayMs - elapsed };
+    }
+    return { ok: true };
+  }
+
+  /**
    * Submit the withdrawal instruction to the mixer program on-chain.
    * The hot wallet signs and pays gas; the recipient receives (denomination - fee).
    */
@@ -352,41 +431,100 @@ export class RelayerService {
     const { program, hotWallet, programId } = this.client!;
     const mixerPoolKey = this.mixerPoolPDA!;
 
+    // Pre-flight: pool must exist before Anchor's IDL-driven PDA check tries
+    // to read mixer_pool.denomination as a seed. Otherwise the failure
+    // surfaces as Solana's cryptic "Max seed length exceeded".
+    const poolAcct = await this.client!.provider.connection.getAccountInfo(mixerPoolKey);
+    if (!poolAcct) {
+      throw new Error(
+        `Mixer pool ${mixerPoolKey.toBase58()} (denom=${this.config.poolDenomination.toString()}) ` +
+          `not initialized. Run POST /mixer/initialize once before processing withdrawals.`,
+      );
+    }
+
     // Convert proof and public inputs to packed byte format
     const proofBytes = convertProofToBytes(request.proof);
     const publicInputsBytes = convertPublicInputsToBytes(request.publicSignals);
 
-    // Derive nullifier PDA
-    const nullifierHashBuf = Buffer.from(
-      BigInt(request.nullifierHash).toString(16).padStart(64, "0"),
-      "hex",
-    );
+    // Derive nullifier PDA. bigintToBytes32 throws SeedRangeError if the
+    // value doesn't fit in 32 bytes; the controller catches it and returns 400
+    // instead of letting Solana surface "Max seed length exceeded" as a 500.
+    const nullifierHashBuf = bigintToBytes32(BigInt(request.nullifierHash), "nullifierHash");
     const [nullifierPDA] = deriveNullifierPDA(programId, mixerPoolKey, nullifierHashBuf);
 
     const recipientKey = new PublicKey(request.recipient);
     const relayerKey = hotWallet.publicKey;
 
     // Build and send the withdraw instruction
-    const tx = await program.methods
-      .withdraw(
-        Array.from(proofBytes) as number[],
-        Array.from(publicInputsBytes) as number[],
-      )
-      .accounts({
-        signer: hotWallet.publicKey,
-        mixerPool: mixerPoolKey,
-        nullifierAccount: nullifierPDA,
-        recipient: recipientKey,
-        relayer: relayerKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .preInstructions([
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-      ])
-      .signers([hotWallet])
-      .rpc({ commitment: "confirmed" });
+    try {
+      const tx = await program.methods
+        .withdraw(
+          Array.from(proofBytes) as number[],
+          Array.from(publicInputsBytes) as number[],
+        )
+        .accounts({
+          signer: hotWallet.publicKey,
+          mixerPool: mixerPoolKey,
+          nullifierAccount: nullifierPDA,
+          recipient: recipientKey,
+          relayer: relayerKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+        ])
+        .signers([hotWallet])
+        .rpc({ commitment: "confirmed" });
 
-    return tx;
+      return tx;
+    } catch (err) {
+      // RootNotFound is the most common on-chain failure here, and the bare
+      // AnchorError message gives the operator no actionable info. Decorate
+      // with on-chain root-history vs submitted-root so we can tell whether
+      // the client's tree is stale, the pool was re-initialised, or a hash
+      // mismatch is producing roots the program never saw.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("RootNotFound") || msg.includes("6003")) {
+        const diag = await this.diagnoseRootNotFound(mixerPoolKey, request.root).catch(
+          (e) => `(diag failed: ${e instanceof Error ? e.message : "unknown"})`,
+        );
+        throw new Error(`${msg} | ${diag}`);
+      }
+      throw err;
+    }
+  }
+
+  private async diagnoseRootNotFound(
+    mixerPoolKey: PublicKey,
+    submittedRootDecimal: string,
+  ): Promise<string> {
+    const { program } = this.client!;
+    const accountNs = program.account as Record<string, { fetch: (k: PublicKey) => Promise<unknown> }>;
+    const pool = (await accountNs.mixerPool.fetch(mixerPoolKey)) as {
+      nextLeafIndex: number;
+      currentRootIndex: number;
+      rootHistory: number[][];
+    };
+
+    const submittedHex = bigintToBytes32(BigInt(submittedRootDecimal), "root").toString("hex");
+    const onchainHex = pool.rootHistory.map((r) =>
+      Buffer.from(r as number[]).toString("hex"),
+    );
+    const idx = pool.currentRootIndex;
+    const recent: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const j = (idx - i + onchainHex.length) % onchainHex.length;
+      recent.push(`[${j}]=${onchainHex[j].slice(0, 16)}…`);
+    }
+    const present = onchainHex.includes(submittedHex);
+    return [
+      `pool=${mixerPoolKey.toBase58()}`,
+      `nextLeafIndex=${pool.nextLeafIndex}`,
+      `currentRootIndex=${idx}`,
+      `submittedRoot=${submittedHex.slice(0, 16)}…`,
+      `submittedInHistory=${present}`,
+      `recentRoots=${recent.join(", ")}`,
+    ].join(" ");
   }
 
   private getHotWalletPublicKey(): string {

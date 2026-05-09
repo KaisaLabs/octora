@@ -6,10 +6,14 @@ export interface AppConfig {
   useOnchainExecutor: boolean;
   /** Solana RPC the on-chain executor talks to. Only used when `useOnchainExecutor` is true. */
   executorRpcUrl: string;
-  /** Program ID of the deployed `octora-executor`. Defaults to the localnet keypair. */
+  /** Program ID of the deployed `octora-executor`. Required (set via OCTORA_EXECUTOR_PROGRAM_ID). */
   executorProgramId: string;
+  /** Program ID of the deployed `octora-mixer`. Required (set via OCTORA_MIXER_PROGRAM_ID). */
+  mixerProgramId: string;
   /** Path to the relayer hot wallet keypair JSON. Pays gas for executor txs. */
   executorRelayerKeypairPath: string;
+  /** Fixed-amount mixer pool denomination in lamports (must match the on-chain pool). */
+  mixerDenomination: bigint;
   /** Mixer relayer config — `null` when the relayer is disabled (default). */
   mixerRelayer: MixerRelayerConfig | null;
 }
@@ -31,6 +35,20 @@ export interface MixerRelayerConfig {
    * worst-case priority fee + base fee for the target network.
    */
   minFeeLamports: bigint;
+  /**
+   * Privacy delay in ms — relayer rejects withdrawals whose Merkle root was
+   * first observed less than this long ago. Defaults to 13_000ms (~32 slots).
+   * 0 disables (tests, localnet smoke).
+   */
+  privacyDelayMs: number;
+}
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value || value.trim() === "") {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
 }
 
 export function loadConfig(): AppConfig {
@@ -41,12 +59,12 @@ export function loadConfig(): AppConfig {
     useOnchainExecutor: process.env.OCTORA_USE_ONCHAIN_EXECUTOR === "true",
     executorRpcUrl:
       process.env.OCTORA_EXECUTOR_RPC_URL ?? "https://api.devnet.solana.com",
-    executorProgramId:
-      process.env.OCTORA_EXECUTOR_PROGRAM_ID ??
-      "86zj6EvHxMywP4Bw4EyZ2VcAjLm1pfGsc6ZjsZbrWwwc",
+    executorProgramId: requireEnv("OCTORA_EXECUTOR_PROGRAM_ID"),
+    mixerProgramId: requireEnv("OCTORA_MIXER_PROGRAM_ID"),
     executorRelayerKeypairPath:
       process.env.OCTORA_EXECUTOR_RELAYER_KEYPAIR ??
       `${process.env.HOME ?? ""}/.config/solana/id.json`,
+    mixerDenomination: BigInt(process.env.MIXER_DENOMINATION ?? "1000000000"),
     mixerRelayer: loadMixerRelayerConfig(),
   };
 }
@@ -70,5 +88,6 @@ function loadMixerRelayerConfig(): MixerRelayerConfig | null {
     poolDenomination: BigInt(required("OCTORA_MIXER_POOL_DENOMINATION")),
     hotWalletSecret: required("OCTORA_MIXER_RELAYER_HOT_WALLET"),
     minFeeLamports: BigInt(required("OCTORA_MIXER_RELAYER_MIN_FEE")),
+    privacyDelayMs: Number(process.env.OCTORA_MIXER_PRIVACY_DELAY_MS ?? "13000"),
   };
 }

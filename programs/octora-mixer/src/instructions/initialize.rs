@@ -70,3 +70,6 @@ pub fn handler(ctx: Context<Initialize>, denomination: u64) -> Result<()> {
 
     Ok(())
 }
+
+// pre-mainnet: authority check
+// TODO: pin to a multisig or hardware key for mainnet deployment
