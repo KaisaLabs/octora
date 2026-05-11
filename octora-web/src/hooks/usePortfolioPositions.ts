@@ -158,6 +158,7 @@ function mapStoredToPortfolio(
     id: s.positionId,
     poolAddress: s.poolAddress,
     stealthPubkey: s.stealthPubkey,
+    derivationVersion: s.derivationVersion,
     closed,
     poolName,
     protocol,

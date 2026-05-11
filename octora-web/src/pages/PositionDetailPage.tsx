@@ -23,6 +23,7 @@ import { markLocalPositionClosed, removeLocalPosition } from "@/lib/localPositio
 import { useSolana } from "@/providers/SolanaProvider";
 import { PrivateClaimModal } from "@/components/octora/lp/PrivateClaimModal";
 import { PrivateExitModal } from "@/components/octora/lp/PrivateExitModal";
+import { StealthAddressDisplay } from "@/components/octora/lp/StealthAddressDisplay";
 
 interface Props {
   positions: PortfolioPosition[];
@@ -255,6 +256,7 @@ function ClaimSummary({ position }: { position: PortfolioPosition }) {
             positionId: position.id,
             poolAddress: position.poolAddress,
             stealthPubkey: position.stealthPubkey,
+            derivationVersion: position.derivationVersion,
           }}
         />
       )}
@@ -371,6 +373,7 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
             lowerBinId: position.rangeLowerBin ?? 0,
             upperBinId: position.rangeUpperBin ?? 0,
             depositedUsd: parseUsd(position.deposited),
+            derivationVersion: position.derivationVersion,
           }}
         />
       )}
@@ -419,6 +422,11 @@ function SweepPanel({ position }: { position: PortfolioPosition }) {
       const res = await runSweepStealthToMain({
         mainWalletAddress: wallet.address,
         poolAddress: position.poolAddress,
+        // Threading positionId for v2 positions so the sweep derives the
+        // right stealth. v1 positions (missing the flag) fall back to
+        // per-pool derive inside privateLifecycle.
+        positionId:
+          position.derivationVersion === "v2" ? position.id : undefined,
       });
       if (res.signature == null) {
         toast.message("Nothing to sweep — stealth balance is already at the floor.", { id: t });
@@ -488,16 +496,7 @@ function SweepPanel({ position }: { position: PortfolioPosition }) {
       </div>
 
       {position.stealthPubkey && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-mono">{position.stealthPubkey}</span>
-          <button
-            type="button"
-            onClick={() => navigator.clipboard?.writeText(position.stealthPubkey ?? "")}
-            className="inline-flex items-center gap-1 text-foreground/80 transition-colors hover:text-foreground"
-          >
-            <Copy className="h-3 w-3" /> Copy
-          </button>
-        </div>
+        <StealthAddressDisplay pubkey={position.stealthPubkey} />
       )}
 
       <div className="grid gap-3 lg:grid-cols-2">

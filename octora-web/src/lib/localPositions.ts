@@ -49,6 +49,11 @@ export interface StoredPosition {
     init?: string;
     fund?: string;
   };
+  /** Which stealth-derivation scheme this position uses. `"v1"` (or missing)
+   *  = per-pool derive; the legacy code path. `"v2"` = per-position derive,
+   *  keyed by (wallet, pool, positionId). The orchestrators read this on
+   *  recovery to pick which derivation to call. New positions = "v2". */
+  derivationVersion?: "v1" | "v2";
 }
 
 const KEY_PREFIX = "octora.positions.v1.";

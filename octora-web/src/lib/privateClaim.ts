@@ -1,5 +1,9 @@
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
-import { deriveStealthForPool, type DerivedStealth } from "./stealthVault";
+import {
+  deriveStealthForPool,
+  deriveStealthForPosition,
+  type DerivedStealth,
+} from "./stealthVault";
 import { breadcrumb } from "./observability";
 
 type MixerModule = typeof import("./mixer");
@@ -65,6 +69,14 @@ export type ClaimStepCallback = (event: ClaimStepEvent) => void;
 export interface PrivateClaimInput {
   mainWalletAddress: string;
   poolAddress: string;
+  /**
+   * The position's UUID, persisted in localPositions at deposit time.
+   * Drives v2 stealth derivation — the same key used to open the
+   * position. When omitted (legacy v1 positions opened before the
+   * per-position change), the orchestrator falls back to
+   * `deriveStealthForPool({wallet, pool})`.
+   */
+  positionId?: string;
   slippageBps?: number;
 }
 
@@ -226,13 +238,23 @@ export async function runPrivateClaim(
   } = await loadMixer();
 
   // ── 1. derive stealth ─────────────────────────────────────────────
+  // v2 (per-position) when positionId is provided — the modal pulls it
+  // off the StoredPosition the user is operating on. v1 (per-pool) is
+  // the back-compat fallback for legacy positions opened before the
+  // per-position change.
   onStep({ step: "derive", status: "active", message: "Authorize private claim in your wallet…" });
   let stealth: DerivedStealth;
   try {
-    stealth = await deriveStealthForPool({
-      mainWalletAddress: input.mainWalletAddress,
-      poolAddress: input.poolAddress,
-    });
+    stealth = input.positionId
+      ? await deriveStealthForPosition({
+          mainWalletAddress: input.mainWalletAddress,
+          poolAddress: input.poolAddress,
+          positionId: input.positionId,
+        })
+      : await deriveStealthForPool({
+          mainWalletAddress: input.mainWalletAddress,
+          poolAddress: input.poolAddress,
+        });
   } catch (err) {
     onStep({ step: "derive", status: "error", message: describe(err) });
     throw err;

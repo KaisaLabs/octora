@@ -22,6 +22,10 @@ export interface PrivateClaimPosition {
   positionId: string;
   poolAddress: string;
   stealthPubkey: string;
+  /** Stealth-derivation version. Threaded into runPrivateClaim so it
+   *  picks the right derive function — per-position (v2) by default,
+   *  per-pool (v1) for legacy entries. Missing = v1 for back-compat. */
+  derivationVersion?: "v1" | "v2";
 }
 
 interface Props {
@@ -116,6 +120,11 @@ export function PrivateClaimModal({ open, onOpenChange, position }: Props) {
         {
           mainWalletAddress: wallet.address,
           poolAddress: position.poolAddress,
+          // v2 positions key the stealth on positionId; v1 fall back
+          // to per-pool inside the orchestrator when positionId is
+          // omitted.
+          positionId:
+            position.derivationVersion === "v1" ? undefined : position.positionId,
         },
         handleStep,
       );

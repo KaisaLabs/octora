@@ -10,6 +10,15 @@ export interface PreparePrivateDepositBody {
   range: { lower: number; upper: number };
   /** Optional — when omitted, falls back to the first configured denomination. */
   denominationLamports?: string;
+  /**
+   * Optional client-generated positionId. The browser orchestrator
+   * generates a UUID at the start of a new deposit flow (so the stealth
+   * derivation can be keyed by it before the server is involved). When
+   * present, the server uses it verbatim as the receipt's positionId
+   * instead of generating one. When absent (back-compat), the server
+   * generates as before.
+   */
+  positionId?: string;
 }
 
 export interface PreparePrivateDepositResponse {
@@ -68,7 +77,23 @@ export function createDepositsController(
         chosen = parsed;
       }
 
-      const positionId = `pos_${randomUUID()}`;
+      // Use the client-provided positionId when present (the browser
+      // generated it before deriving stealth, so the v2 stealth key is
+      // bound to this exact id). Otherwise generate as before — keeps
+      // back-compat for any non-browser caller.
+      let positionId: string;
+      if (typeof body.positionId === "string" && body.positionId.length > 0) {
+        // Cap the length so a malicious client can't bloat the receipt
+        // store with arbitrary-size strings.
+        if (body.positionId.length > 128) {
+          return reply.status(400).send({
+            error: "positionId must be ≤ 128 chars.",
+          });
+        }
+        positionId = body.positionId;
+      } else {
+        positionId = `pos_${randomUUID()}`;
+      }
       const receipt = await privacy.prepareFunding({
         positionId,
         intentId: positionId,

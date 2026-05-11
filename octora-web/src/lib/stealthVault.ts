@@ -40,11 +40,12 @@ interface InjectedWindow {
 const SESSION_CACHE = new Map<string, Keypair>();
 
 /**
- * Build the message we ask the wallet to sign. Includes a stable version
- * tag and the pool address so each pool gets its own stealth identity.
- * Bumping the version (or adding a nonce) invalidates all derived keys.
+ * v1 derivation message — same wallet + same pool always yields the same
+ * stealth. Retained as a backward-compat path for devnet positions opened
+ * before the per-position derivation landed (StoredPosition entries
+ * without a `derivationVersion` field).
  */
-function buildDerivationMessage(poolAddress: string): string {
+function buildDerivationMessageV1(poolAddress: string): string {
   return [
     "Octora · Authorize private session",
     "",
@@ -52,6 +53,30 @@ function buildDerivationMessage(poolAddress: string): string {
     `Pool: ${poolAddress}`,
     "",
     "This signature derives the private address for your position.",
+    "It does not authorize any on-chain transaction or token transfer.",
+  ].join("\n");
+}
+
+/**
+ * v2 derivation message — same wallet + same pool + same positionId yields
+ * the same stealth. Different positions in the same pool get different
+ * stealths, so an on-chain observer (or a portfolio explorer the user
+ * inadvertently pasted into) sees only that one position, not the user's
+ * full LP footprint.
+ *
+ * positionId is a browser-generated UUIDv4 created at the start of a new
+ * deposit flow; persisted in localPositions so claim/exit can re-derive.
+ */
+function buildDerivationMessageV2(poolAddress: string, positionId: string): string {
+  return [
+    "Octora · Authorize private session",
+    "",
+    "Version: 2",
+    `Pool: ${poolAddress}`,
+    `Position: ${positionId}`,
+    "",
+    "This signature derives the private address for THIS SPECIFIC position.",
+    "Different positions get different addresses so they can't be linked.",
     "It does not authorize any on-chain transaction or token transfer.",
   ].join("\n");
 }
@@ -87,23 +112,65 @@ export interface DerivedStealth {
 }
 
 /**
- * Derive (or recover) the stealth keypair for the given pool.
+ * Derive (or recover) the v1 stealth keypair for the given pool.
  *
- * `mainWalletAddress` is part of the cache key so that switching wallets
- * mid-session doesn't accidentally hand out the wrong stealth identity.
+ * @deprecated Use `deriveStealthForPosition` for new flows. v1 derivation
+ * keys all of a wallet's positions in a pool to the same stealth, which
+ * lets an on-chain observer link them. Retained only for backward-compat
+ * with existing StoredPosition entries that predate the per-position
+ * change (those entries' `derivationVersion` field is missing or "v1").
  */
 export async function deriveStealthForPool(args: {
   mainWalletAddress: string;
   poolAddress: string;
 }): Promise<DerivedStealth> {
-  const cacheKey = `${args.mainWalletAddress}:${args.poolAddress}`;
+  const cacheKey = `v1:${args.mainWalletAddress}:${args.poolAddress}`;
   const cached = SESSION_CACHE.get(cacheKey);
   if (cached) {
     return { keypair: cached, publicKey: cached.publicKey.toBase58() };
   }
 
   const provider = getSigningProvider();
-  const message = buildDerivationMessage(args.poolAddress);
+  const message = buildDerivationMessageV1(args.poolAddress);
+  const encoded = new TextEncoder().encode(message);
+  const { signature } = await provider.signMessage!(encoded, "utf8");
+
+  const seed = await sha256(signature);
+  const keypair = Keypair.fromSeed(seed);
+
+  SESSION_CACHE.set(cacheKey, keypair);
+  return { keypair, publicKey: keypair.publicKey.toBase58() };
+}
+
+/**
+ * Derive (or recover) the v2 stealth keypair for a specific position.
+ *
+ * Each position gets its own stealth: the user signs a derivation message
+ * that includes the position's UUID, so two deposits into the same pool
+ * produce two distinct on-chain identities. This is the privacy boundary
+ * that lets users open multiple positions without an observer linking
+ * them through a shared stealth address.
+ *
+ * `positionId` is a UUIDv4 generated browser-side at the start of a new
+ * deposit flow and persisted alongside the position in localPositions.
+ * Claim / exit re-derives by passing the same positionId.
+ *
+ * Cache key includes positionId so the same orchestrator run reuses the
+ * keypair across its 11+ steps without re-prompting the wallet.
+ */
+export async function deriveStealthForPosition(args: {
+  mainWalletAddress: string;
+  poolAddress: string;
+  positionId: string;
+}): Promise<DerivedStealth> {
+  const cacheKey = `v2:${args.mainWalletAddress}:${args.poolAddress}:${args.positionId}`;
+  const cached = SESSION_CACHE.get(cacheKey);
+  if (cached) {
+    return { keypair: cached, publicKey: cached.publicKey.toBase58() };
+  }
+
+  const provider = getSigningProvider();
+  const message = buildDerivationMessageV2(args.poolAddress, args.positionId);
   const encoded = new TextEncoder().encode(message);
   const { signature } = await provider.signMessage!(encoded, "utf8");
 

@@ -46,6 +46,10 @@ export type PortfolioPosition = {
   /** Stealth pubkey that owns the on-chain position. Surfaced to the UI so
    *  it can read the wallet balance for the post-close sweep flow. */
   stealthPubkey?: string;
+  /** Stealth-derivation scheme for this position. Threaded into the
+   *  private-claim / private-exit modals so they pick the right derive
+   *  function. Missing or "v1" = per-pool legacy; "v2" = per-position. */
+  derivationVersion?: "v1" | "v2";
   /** True after `runWithdrawClose` settles. Position no longer exists on-chain
    *  but funds may still be sitting at `stealthPubkey` waiting to be swept. */
   closed?: boolean;

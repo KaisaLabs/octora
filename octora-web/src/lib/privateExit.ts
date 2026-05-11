@@ -1,5 +1,9 @@
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
-import { deriveStealthForPool, type DerivedStealth } from "./stealthVault";
+import {
+  deriveStealthForPool,
+  deriveStealthForPosition,
+  type DerivedStealth,
+} from "./stealthVault";
 import { breadcrumb } from "./observability";
 
 // Dynamic-import the mixer module the same way privateDeposit does so the
@@ -76,6 +80,12 @@ export interface PrivateExitInput {
   mainWalletAddress: string;
   /** LP pool address (the lb_pair). */
   poolAddress: string;
+  /**
+   * The position's UUID, persisted in localPositions at deposit time.
+   * Drives v2 stealth derivation. When omitted (legacy v1 positions),
+   * falls back to `deriveStealthForPool({wallet, pool})`.
+   */
+  positionId?: string;
   /** Override slippage on the swap-to-SOL leg in BPS (0–2000). Defaults to 500. */
   slippageBps?: number;
 }
@@ -257,13 +267,22 @@ export async function runPrivateExit(
   } = await loadMixer();
 
   // ── 1. derive stealth ─────────────────────────────────────────────
+  // v2 (per-position) when positionId is provided. v1 (per-pool) is the
+  // back-compat fallback for legacy positions opened before the
+  // per-position change.
   onStep({ step: "derive", status: "active", message: "Authorize private exit in your wallet…" });
   let stealth: DerivedStealth;
   try {
-    stealth = await deriveStealthForPool({
-      mainWalletAddress: input.mainWalletAddress,
-      poolAddress: input.poolAddress,
-    });
+    stealth = input.positionId
+      ? await deriveStealthForPosition({
+          mainWalletAddress: input.mainWalletAddress,
+          poolAddress: input.poolAddress,
+          positionId: input.positionId,
+        })
+      : await deriveStealthForPool({
+          mainWalletAddress: input.mainWalletAddress,
+          poolAddress: input.poolAddress,
+        });
   } catch (err) {
     onStep({ step: "derive", status: "error", message: describe(err) });
     throw err;

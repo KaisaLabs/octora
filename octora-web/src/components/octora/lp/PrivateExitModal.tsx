@@ -21,13 +21,16 @@ import { captureException } from "@/lib/observability";
 /** Minimal shape the modal needs — same fields are present on both
  *  StoredPosition (local index) and PortfolioPosition (page-level model). */
 export interface PrivateExitPosition {
-  /** localPositions positionId — used for marking closed. */
+  /** localPositions positionId — used for marking closed AND (when
+   *  `derivationVersion` is v2) keying the stealth derivation. */
   positionId: string;
   poolAddress: string;
   stealthPubkey: string;
   lowerBinId: number;
   upperBinId: number;
   depositedUsd: number;
+  /** Stealth-derivation version. Missing = v1 (per-pool) for back-compat. */
+  derivationVersion?: "v1" | "v2";
 }
 
 interface Props {
@@ -119,6 +122,8 @@ export function PrivateExitModal({ open, onOpenChange, position }: Props) {
         {
           mainWalletAddress: wallet.address,
           poolAddress: position.poolAddress,
+          positionId:
+            position.derivationVersion === "v1" ? undefined : position.positionId,
         },
         handleStep,
       );

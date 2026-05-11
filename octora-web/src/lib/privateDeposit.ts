@@ -1,6 +1,6 @@
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
-import { deriveStealthForPool, type DerivedStealth } from "./stealthVault";
-import { breadcrumb, captureException } from "./observability";
+import { deriveStealthForPosition, type DerivedStealth } from "./stealthVault";
+import { breadcrumb } from "./observability";
 
 // `@/lib/mixer` transitively imports circomlibjs and the snarkjs/witness
 // machinery (~3MB). Loading it at module level here would pull that whole
@@ -231,19 +231,32 @@ export async function runPrivateDeposit(
     pubkeyToFieldHash,
   } = await loadMixer();
 
+  // ── 0. mint a positionId up front ─────────────────────────────────
+  // Generated browser-side before the wallet popup so the v2 stealth
+  // derivation can include it in the signature message. The server
+  // accepts this id verbatim in step 3 (/deposits/prepare-private) so
+  // there's one canonical id across receipts, localPositions, and the
+  // signature trail.
+  const positionId = `pos_${cryptoRandomUuid()}`;
+
   // ── 1. derive stealth ─────────────────────────────────────────────
   onStep({ step: "derive", status: "active", message: "Authorize private session in your wallet…" });
   let stealth: DerivedStealth;
   try {
-    stealth = await deriveStealthForPool({
+    stealth = await deriveStealthForPosition({
       mainWalletAddress: input.mainWalletAddress,
       poolAddress: input.poolAddress,
+      positionId,
     });
   } catch (err) {
     onStep({ step: "derive", status: "error", message: describe(err) });
     throw err;
   }
-  onStep({ step: "derive", status: "ok", data: { stealthPubkey: stealth.publicKey } });
+  onStep({
+    step: "derive",
+    status: "ok",
+    data: { stealthPubkey: stealth.publicKey, positionId },
+  });
 
   // ── 2. fetch relayer binding info ─────────────────────────────────
   onStep({ step: "relayer-info", status: "active", message: "Fetching mixer config…" });
@@ -294,6 +307,10 @@ export async function runPrivateDeposit(
       shape: input.shape,
       range: { lower: input.lowerBinId, upper: input.upperBinId },
       denominationLamports: denominationParam,
+      // Send the browser-generated id so the server uses it verbatim.
+      // The stealth keypair is bound to this exact value; if the server
+      // ignored it and regenerated, the recovery story would break.
+      positionId,
     });
   } catch (err) {
     onStep({ step: "prepare", status: "error", message: describe(err) });
@@ -579,4 +596,23 @@ function describe(err: unknown): string {
     return [err.message, causeMsg].filter(Boolean).join(" / ");
   }
   return String(err);
+}
+
+/**
+ * Browser UUIDv4. Uses `crypto.randomUUID` when available (every browser
+ * since 2022), falls back to assembling one from `crypto.getRandomValues`
+ * for environments where the global helper is somehow missing.
+ */
+function cryptoRandomUuid(): string {
+  const c = (typeof globalThis !== "undefined" ? globalThis.crypto : undefined) as
+    | (Crypto & { randomUUID?: () => string })
+    | undefined;
+  if (c?.randomUUID) return c.randomUUID();
+  // RFC 4122 v4 from 16 random bytes
+  const b = new Uint8Array(16);
+  (c as Crypto).getRandomValues(b);
+  b[6] = (b[6]! & 0x0f) | 0x40; // version
+  b[8] = (b[8]! & 0x3f) | 0x80; // variant
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }

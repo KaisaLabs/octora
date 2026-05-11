@@ -13,7 +13,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Keypair } from "@solana/web3.js";
-import { clearStealthCache, deriveStealthForPool } from "../stealthVault";
+import {
+  clearStealthCache,
+  deriveStealthForPool,
+  deriveStealthForPosition,
+} from "../stealthVault";
 
 interface MockProvider {
   signMessage: ReturnType<typeof vi.fn>;
@@ -169,5 +173,134 @@ describe("deriveStealthForPool", () => {
     );
     const expected = Keypair.fromSeed(seed);
     expect(derived.publicKey).toBe(expected.publicKey.toBase58());
+  });
+});
+
+describe("deriveStealthForPosition", () => {
+  it("same positionId always derives the same stealth keypair", async () => {
+    const fixedSig = new Uint8Array(64).fill(13);
+    installMockProvider(fixedSig);
+
+    const a = await deriveStealthForPosition({
+      mainWalletAddress: "wallet-A",
+      poolAddress: "Pool1",
+      positionId: "pos-abc",
+    });
+
+    clearStealthCache();
+    uninstallProvider();
+    installMockProvider(fixedSig);
+
+    const b = await deriveStealthForPosition({
+      mainWalletAddress: "wallet-A",
+      poolAddress: "Pool1",
+      positionId: "pos-abc",
+    });
+
+    expect(a.publicKey).toBe(b.publicKey);
+    expect(a.keypair.secretKey).toEqual(b.keypair.secretKey);
+  });
+
+  it("different positionIds in the same pool produce different stealth identities", async () => {
+    // Mock returns a per-call distinct signature so a real wallet's
+    // different-message-different-signature property is preserved.
+    let nextByte = 0;
+    const provider = {
+      signMessage: vi.fn(async () => ({
+        signature: new Uint8Array(64).fill(nextByte++),
+      })),
+    };
+    (window as unknown as { phantom?: { solana: typeof provider } }).phantom = {
+      solana: provider,
+    };
+
+    const a = await deriveStealthForPosition({
+      mainWalletAddress: "wallet-A",
+      poolAddress: "Pool1",
+      positionId: "pos-001",
+    });
+    const b = await deriveStealthForPosition({
+      mainWalletAddress: "wallet-A",
+      poolAddress: "Pool1",
+      positionId: "pos-002",
+    });
+
+    expect(a.publicKey).not.toBe(b.publicKey);
+  });
+
+  it("signed message contains both pool and positionId", async () => {
+    const provider = installMockProvider(new Uint8Array(64));
+    await deriveStealthForPosition({
+      mainWalletAddress: "wallet-A",
+      poolAddress: "PoolXYZ",
+      positionId: "pos-001",
+    });
+
+    expect(provider.signMessage).toHaveBeenCalledTimes(1);
+    const [encoded] = provider.signMessage.mock.calls[0];
+    const message = new TextDecoder().decode(encoded as Uint8Array);
+    expect(message).toMatch(/PoolXYZ/);
+    expect(message).toMatch(/pos-001/);
+    expect(message).toMatch(/Version: 2/);
+  });
+
+  it("v1 and v2 derivations for the same (wallet, pool) produce different stealths", async () => {
+    // Per-pool v1 and per-position v2 sign different messages, so the
+    // resulting keypairs MUST differ. Otherwise re-deriving an old
+    // position with the new function would accidentally collide.
+    let nextByte = 0;
+    const provider = {
+      signMessage: vi.fn(async () => ({
+        signature: new Uint8Array(64).fill(nextByte++),
+      })),
+    };
+    (window as unknown as { phantom?: { solana: typeof provider } }).phantom = {
+      solana: provider,
+    };
+
+    const v1 = await deriveStealthForPool({
+      mainWalletAddress: "wallet-A",
+      poolAddress: "Pool1",
+    });
+    const v2 = await deriveStealthForPosition({
+      mainWalletAddress: "wallet-A",
+      poolAddress: "Pool1",
+      positionId: "pos-001",
+    });
+
+    expect(v1.publicKey).not.toBe(v2.publicKey);
+  });
+
+  it("cache key includes positionId so two positions don't share a cache slot", async () => {
+    let nextByte = 0;
+    const provider = {
+      signMessage: vi.fn(async () => ({
+        signature: new Uint8Array(64).fill(nextByte++),
+      })),
+    };
+    (window as unknown as { phantom?: { solana: typeof provider } }).phantom = {
+      solana: provider,
+    };
+
+    await deriveStealthForPosition({
+      mainWalletAddress: "wallet-A",
+      poolAddress: "Pool1",
+      positionId: "pos-001",
+    });
+    await deriveStealthForPosition({
+      mainWalletAddress: "wallet-A",
+      poolAddress: "Pool1",
+      positionId: "pos-002",
+    });
+    // Two distinct positions → two prompts.
+    expect(provider.signMessage).toHaveBeenCalledTimes(2);
+
+    // Re-deriving the first one is a cache hit, no extra prompt.
+    await deriveStealthForPosition({
+      mainWalletAddress: "wallet-A",
+      poolAddress: "Pool1",
+      positionId: "pos-001",
+    });
+    expect(provider.signMessage).toHaveBeenCalledTimes(2);
   });
 });

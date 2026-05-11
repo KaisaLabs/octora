@@ -26,6 +26,7 @@ import { isNetworkUnsafe, useNetworkStatus } from "@/lib/networkStatus";
 import { StealthExplainerModal } from "./StealthExplainerModal";
 import { DenominationSelector } from "./DenominationSelector";
 import { tierForAnonymity } from "./AnonymityBadge";
+import { StealthAddressDisplay } from "./StealthAddressDisplay";
 
 interface Props {
   open: boolean;
@@ -449,6 +450,9 @@ export function PrivateDepositModal({
             init: res.initSignature,
             fund: res.fundSignature,
           },
+          // Tag the record so privateClaim/Exit know to re-derive the
+          // stealth per-position (v2) instead of per-pool (v1).
+          derivationVersion: "v2",
         });
       } catch (err) {
         // Non-fatal: portfolio just won't show this entry until next deposit.
@@ -887,7 +891,7 @@ function SuccessBody({ pool, result }: { pool: Pool; result: PrivateDepositResul
         </div>
       </div>
 
-      <CopyRow label="Stealth address" value={result.stealthPubkey} />
+      <StealthAddressDisplay pubkey={result.stealthPubkey} />
       <CopyRow label="Position" value={result.positionPubkey} />
 
       <div className="space-y-2 rounded-xl border border-border bg-card/60 p-4">

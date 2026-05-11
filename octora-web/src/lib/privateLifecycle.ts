@@ -4,7 +4,34 @@ import {
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
-import { deriveStealthForPool, type DerivedStealth } from "./stealthVault";
+import {
+  deriveStealthForPool,
+  deriveStealthForPosition,
+  type DerivedStealth,
+} from "./stealthVault";
+
+/**
+ * Pick the right derive function based on which scheme this position
+ * was opened with. v2 needs the positionId (browser-generated UUID
+ * persisted in localPositions); v1 used per-pool derivation only.
+ */
+async function deriveForLifecycle(input: {
+  mainWalletAddress: string;
+  poolAddress: string;
+  positionId?: string;
+}): Promise<DerivedStealth> {
+  if (input.positionId) {
+    return deriveStealthForPosition({
+      mainWalletAddress: input.mainWalletAddress,
+      poolAddress: input.poolAddress,
+      positionId: input.positionId,
+    });
+  }
+  return deriveStealthForPool({
+    mainWalletAddress: input.mainWalletAddress,
+    poolAddress: input.poolAddress,
+  });
+}
 
 /**
  * Post-deposit lifecycle: claim fees + full-exit close.
@@ -42,6 +69,9 @@ export interface ClaimFeesInput {
    *  user doesn't have to remember the deposit's bins to claim/withdraw. */
   lowerBinId?: number;
   upperBinId?: number;
+  /** v2 positions: the per-position UUID drives stealth derivation. When
+   *  absent, fall back to v1 per-pool derive (legacy compat). */
+  positionId?: string;
 }
 
 export interface ClaimFeesResult {
@@ -136,10 +166,7 @@ async function deriveAndConfirm(
   buildPath: "/executor/claim-fees-tx" | "/executor/withdraw-close-tx",
 ): Promise<{ signature: string; exitRecipient: string; stealth: DerivedStealth }> {
   const connection = new Connection(RPC_URL, "confirmed");
-  const stealth = await deriveStealthForPool({
-    mainWalletAddress: input.mainWalletAddress,
-    poolAddress: input.poolAddress,
-  });
+  const stealth = await deriveForLifecycle(input);
   const config = await loadConfig(input, stealth.publicKey);
 
   const { transaction, exitRecipient } = await apiPost<{
@@ -178,6 +205,8 @@ export async function runWithdrawClose(input: ClaimFeesInput): Promise<WithdrawC
 export interface SweepStealthInput {
   mainWalletAddress: string;
   poolAddress: string;
+  /** v2 positions: per-position UUID. When absent, falls back to v1. */
+  positionId?: string;
 }
 
 export interface SweepStealthResult {
@@ -214,10 +243,7 @@ export async function runSweepStealthToMain(
   input: SweepStealthInput,
 ): Promise<SweepStealthResult> {
   const connection = new Connection(RPC_URL, "confirmed");
-  const stealth = await deriveStealthForPool({
-    mainWalletAddress: input.mainWalletAddress,
-    poolAddress: input.poolAddress,
-  });
+  const stealth = await deriveForLifecycle(input);
   const stealthPubkey = new PublicKey(stealth.publicKey);
   const recipient = new PublicKey(input.mainWalletAddress);
 

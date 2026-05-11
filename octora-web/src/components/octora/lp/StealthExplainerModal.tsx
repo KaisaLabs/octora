@@ -1,4 +1,4 @@
-import { Eye, KeyRound, RefreshCw, ShieldOff } from "lucide-react";
+import { AlertTriangle, Eye, KeyRound, RefreshCw, ShieldOff } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -83,6 +83,21 @@ export function StealthExplainerModal({ open, onContinue, onCancel }: StealthExp
                 Octora keeps the on-chain link broken, but a withdrawal that lands moments after
                 your deposit is statistically linkable. The longer you wait and the more
                 deposits queue up, the stronger the privacy.
+              </p>
+            </div>
+          </li>
+
+          <li className="flex gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+            <div>
+              <p className="font-medium">Each position gets its own private address — don't share it.</p>
+              <p className="text-muted-foreground">
+                Octora derives a fresh stealth address for every position you open, so even two
+                deposits into the same pool can't be linked. <span className="font-medium text-amber-200">
+                Don't paste these addresses into portfolio explorers</span> like Solscan, Step, or
+                Sonar. The lookup is logged on the explorer side and can later be tied back to
+                you through their session / IP history — that single search undoes the privacy
+                this product gives you.
               </p>
             </div>
           </li>
