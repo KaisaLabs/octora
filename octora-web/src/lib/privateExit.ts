@@ -1,5 +1,6 @@
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import { deriveStealthForPool, type DerivedStealth } from "./stealthVault";
+import { breadcrumb } from "./observability";
 
 // Dynamic-import the mixer module the same way privateDeposit does so the
 // ~3MB snarkjs/circomlibjs bundle is paid only on the first private-exit
@@ -231,8 +232,20 @@ interface RelayerWithdrawResp {
 
 export async function runPrivateExit(
   input: PrivateExitInput,
-  onStep: ExitStepCallback = () => {},
+  onStepRaw: ExitStepCallback = () => {},
 ): Promise<PrivateExitResult> {
+  // Mirror privateDeposit.ts — wrap onStep so every step transition
+  // lands in Sentry breadcrumbs, scrubbed by the observability layer.
+  const onStep: ExitStepCallback = (event) => {
+    breadcrumb(
+      "privateExit",
+      `${event.step}:${event.status}`,
+      event.data,
+      event.status === "error" ? "error" : "info",
+    );
+    onStepRaw(event);
+  };
+
   const connection = new Connection(RPC_URL, "confirmed");
   const slippageBps = input.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
   const {

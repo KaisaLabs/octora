@@ -1,5 +1,6 @@
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import { deriveStealthForPool, type DerivedStealth } from "./stealthVault";
+import { breadcrumb } from "./observability";
 
 type MixerModule = typeof import("./mixer");
 let mixerModulePromise: Promise<MixerModule> | null = null;
@@ -202,8 +203,18 @@ interface RelayerWithdrawResp {
 
 export async function runPrivateClaim(
   input: PrivateClaimInput,
-  onStep: ClaimStepCallback = () => {},
+  onStepRaw: ClaimStepCallback = () => {},
 ): Promise<PrivateClaimResult> {
+  const onStep: ClaimStepCallback = (event) => {
+    breadcrumb(
+      "privateClaim",
+      `${event.step}:${event.status}`,
+      event.data,
+      event.status === "error" ? "error" : "info",
+    );
+    onStepRaw(event);
+  };
+
   const connection = new Connection(RPC_URL, "confirmed");
   const slippageBps = input.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
   const {

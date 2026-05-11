@@ -20,6 +20,7 @@ import {
 } from "@/lib/privateDeposit";
 import { addLocalPosition } from "@/lib/localPositions";
 import { NETWORK } from "@/lib/api";
+import { captureException } from "@/lib/observability";
 import { hasSeenStealthExplainer, markStealthExplainerSeen } from "@/lib/stealthAck";
 import { isNetworkUnsafe, useNetworkStatus } from "@/lib/networkStatus";
 import { StealthExplainerModal } from "./StealthExplainerModal";
@@ -454,7 +455,8 @@ export function PrivateDepositModal({
         // eslint-disable-next-line no-console
         console.warn("[PrivateDepositModal] failed to persist position to local index:", err);
       }
-    } catch {
+    } catch (err) {
+      captureException(err, { flow: "privateDeposit", pool: pool.address });
       setPhase("error");
     }
   };

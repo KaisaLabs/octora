@@ -16,5 +16,15 @@ if (typeof globalThis.process === "undefined") {
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import "./index.css";
+import { initObservability } from "./lib/observability";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
-createRoot(document.getElementById("root")!).render(<App />);
+// Initialize Sentry before App mounts so breadcrumbs from app boot are
+// captured. No-op when VITE_SENTRY_DSN is unset (dev / local).
+initObservability();
+
+createRoot(document.getElementById("root")!).render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>,
+);

@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useSolana } from "@/providers/SolanaProvider";
+import { captureException } from "@/lib/observability";
 import {
   runPrivateClaim,
   type ClaimStepEvent,
@@ -120,7 +121,8 @@ export function PrivateClaimModal({ open, onOpenChange, position }: Props) {
       );
       setResult(res);
       setPhase("success");
-    } catch {
+    } catch (err) {
+      captureException(err, { flow: "privateClaim", pool: position.poolAddress });
       setPhase("error");
     }
   };

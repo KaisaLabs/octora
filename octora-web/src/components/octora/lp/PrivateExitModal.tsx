@@ -16,6 +16,7 @@ import {
   type PrivateExitResult,
 } from "@/lib/privateExit";
 import { markLocalPositionClosed } from "@/lib/localPositions";
+import { captureException } from "@/lib/observability";
 
 /** Minimal shape the modal needs — same fields are present on both
  *  StoredPosition (local index) and PortfolioPosition (page-level model). */
@@ -133,7 +134,8 @@ export function PrivateExitModal({ open, onOpenChange, position }: Props) {
       } catch {
         // Non-fatal — the on-chain close already succeeded.
       }
-    } catch {
+    } catch (err) {
+      captureException(err, { flow: "privateExit", pool: position.poolAddress });
       setPhase("error");
     }
   };

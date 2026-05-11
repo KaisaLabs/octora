@@ -1,5 +1,6 @@
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import { deriveStealthForPool, type DerivedStealth } from "./stealthVault";
+import { breadcrumb, captureException } from "./observability";
 
 // `@/lib/mixer` transitively imports circomlibjs and the snarkjs/witness
 // machinery (~3MB). Loading it at module level here would pull that whole
@@ -202,8 +203,22 @@ interface AddLiquidityResponse {
 
 export async function runPrivateDeposit(
   input: PrivateDepositInput,
-  onStep: DepositStepCallback = () => {},
+  onStepRaw: DepositStepCallback = () => {},
 ): Promise<PrivateDepositResult> {
+  // Wrap the caller's onStep so every step transition lands in Sentry as a
+  // breadcrumb. When the eventual error capture fires, the dashboard sees
+  // exactly which step the flow was on. Doesn't leak secret data — the
+  // observability layer scrubs sensitive keys per a regex.
+  const onStep: DepositStepCallback = (event) => {
+    breadcrumb(
+      "privateDeposit",
+      `${event.step}:${event.status}`,
+      event.data,
+      event.status === "error" ? "error" : "info",
+    );
+    onStepRaw(event);
+  };
+
   const width = input.upperBinId - input.lowerBinId + 1;
   if (width <= 0) throw new Error("upperBinId must be >= lowerBinId.");
 
