@@ -23,6 +23,7 @@ type ClosedView = "grid" | "list";
 export function PortfolioPage({ positions }: PortfolioPageProps) {
   const [tab, setTab] = useState<Tab>("overview");
   const [filter, setFilter] = useState<Filter>("all");
+  const [activeView, setActiveView] = useState<ClosedView>("grid");
   const [closedView, setClosedView] = useState<ClosedView>("grid");
   const { wallet } = useSolana();
   const [claimingId, setClaimingId] = useState<string | null>(null);
@@ -145,20 +146,23 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
 
       {tab === "active" && (
         <section className="panel-shell rounded-2xl p-4 sm:p-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Filter</span>
-            <FilterChip active={filter === "all"} onClick={() => setFilter("all")}>
-              All ({livePositions.length})
-            </FilterChip>
-            <FilterChip active={filter === "in-range"} onClick={() => setFilter("in-range")}>
-              In range
-            </FilterChip>
-            <FilterChip active={filter === "out-of-range"} onClick={() => setFilter("out-of-range")}>
-              Out of range
-            </FilterChip>
-            <FilterChip active={filter === "claimable"} onClick={() => setFilter("claimable")}>
-              Has fees
-            </FilterChip>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Filter</span>
+              <FilterChip active={filter === "all"} onClick={() => setFilter("all")}>
+                All ({livePositions.length})
+              </FilterChip>
+              <FilterChip active={filter === "in-range"} onClick={() => setFilter("in-range")}>
+                In range
+              </FilterChip>
+              <FilterChip active={filter === "out-of-range"} onClick={() => setFilter("out-of-range")}>
+                Out of range
+              </FilterChip>
+              <FilterChip active={filter === "claimable"} onClick={() => setFilter("claimable")}>
+                Has fees
+              </FilterChip>
+            </div>
+            <ViewToggle value={activeView} onChange={setActiveView} />
           </div>
 
           {filtered.length === 0 ? (
@@ -167,10 +171,16 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
                 ? "No active positions yet. Open a position from the Pools tab to get started."
                 : "No positions match this filter."}
             </div>
-          ) : (
+          ) : activeView === "grid" ? (
             <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {filtered.map((p) => (
                 <PositionCard key={p.id} position={p} onClaim={() => handleClaim(p)} />
+              ))}
+            </div>
+          ) : (
+            <div className="mt-5 flex flex-col gap-2">
+              {filtered.map((p) => (
+                <PositionListRow key={p.id} position={p} onClaim={() => handleClaim(p)} />
               ))}
             </div>
           )}

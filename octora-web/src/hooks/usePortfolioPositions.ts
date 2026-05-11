@@ -2,7 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 
 import type { DistributionShape, Pool, PortfolioPosition } from "@/components/octora/types";
-import { getPoolBins, getPositionState, NETWORK, type PositionStateView } from "@/lib/api";
+import {
+  getPoolBins,
+  getPoolDetail,
+  getPositionState,
+  mapPoolSummary,
+  NETWORK,
+  type PositionStateView,
+} from "@/lib/api";
 import {
   listLocalPositions,
   POSITIONS_CHANGED_EVENT,
@@ -44,7 +51,7 @@ export function usePortfolioPositions(
     [walletAddress, version],
   );
 
-  const poolByAddress = useMemo(() => {
+  const propPoolByAddress = useMemo(() => {
     const map = new Map<string, Pool>();
     for (const p of pools) map.set(p.address, p);
     return map;
@@ -55,6 +62,33 @@ export function usePortfolioPositions(
     for (const s of stored) set.add(s.poolAddress);
     return Array.from(set);
   }, [stored]);
+
+  // The pools prop is capped at 50 entries from the discovery page; positions
+  // on pools outside that window would otherwise fall back to a truncated
+  // address for `poolName`. Fan out a detail fetch per missing pool so the
+  // card shows the real pair name. Pool metadata barely changes, so a long
+  // staleTime is fine.
+  const missingPoolAddresses = useMemo(
+    () => uniquePoolAddresses.filter((addr) => !propPoolByAddress.has(addr)),
+    [uniquePoolAddresses, propPoolByAddress],
+  );
+  const poolDetailQueries = useQueries({
+    queries: missingPoolAddresses.map((addr) => ({
+      queryKey: ["pool-detail", NETWORK, addr],
+      queryFn: () => getPoolDetail(addr, NETWORK),
+      staleTime: 5 * 60_000,
+      retry: 1,
+    })),
+  });
+
+  const poolByAddress = useMemo(() => {
+    const map = new Map<string, Pool>(propPoolByAddress);
+    missingPoolAddresses.forEach((addr, i) => {
+      const detail = poolDetailQueries[i]?.data;
+      if (detail) map.set(addr, mapPoolSummary(detail));
+    });
+    return map;
+  }, [propPoolByAddress, missingPoolAddresses, poolDetailQueries]);
 
   // Fan out one bins query per unique pool. Shares cache with usePoolBins
   // (same query key shape) so the pool detail page warms it up.
