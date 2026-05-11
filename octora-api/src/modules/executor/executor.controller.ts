@@ -134,6 +134,46 @@ export function createExecutorController(executor: ExecutorService) {
     },
 
     /**
+     * POST /executor/dlmm-swap-tx
+     * Body: { stealth, lbPair, amountIn, minAmountOut, swapForY }
+     *
+     * Builds an unsigned dlmm_swap tx that the stealth wallet signs and
+     * submits. Used by the private-claim and private-exit orchestrators to
+     * consolidate non-SOL outputs back to SOL before the mixer deposit.
+     * Same-pool reject (source == LP target) is the caller's responsibility.
+     */
+    async dlmmSwapTx(
+      req: FastifyRequest<{
+        Body: {
+          stealth: string;
+          lbPair: string;
+          amountIn: string;
+          minAmountOut: string;
+          swapForY: boolean;
+        };
+      }>,
+      reply: FastifyReply,
+    ) {
+      const { stealth, lbPair, amountIn, minAmountOut, swapForY } = req.body;
+      try {
+        const result = await executor.buildDlmmSwapTx({
+          stealth: new PublicKey(stealth),
+          lbPair: new PublicKey(lbPair),
+          amountIn: BigInt(amountIn),
+          minAmountOut: BigInt(minAmountOut),
+          swapForY,
+        });
+        return reply.send(result);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[/executor/dlmm-swap-tx] failed:", err instanceof Error ? err.stack : err);
+        return reply
+          .status(400)
+          .send({ error: err instanceof Error ? err.message : "dlmm-swap-tx failed" });
+      }
+    },
+
+    /**
      * POST /executor/withdraw-close-tx
      * Body: { stealth, config } — exit_recipient is read from PoolAuthority.
      * Always full exit (BPS=10000) per the MVP scope decision.

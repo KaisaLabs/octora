@@ -46,6 +46,7 @@ import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { getPrices } from "#modules/prices";
+import { DlmmSwapClient, type BuildSwapTxArgs, type BuildSwapTxResult } from "./clients/dlmm-swap.client.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const IDL_PATH = join(__dirname, "..", "execution", "clients", "idl", "octora_executor.json");
@@ -96,6 +97,7 @@ export class ExecutorService {
   private programId: PublicKey;
   private program: Program;
   private provider: AnchorProvider;
+  private swapClient: DlmmSwapClient;
 
   constructor(config: ExecutorServiceConfig) {
     this.connection = new Connection(config.rpcUrl, "confirmed");
@@ -106,6 +108,25 @@ export class ExecutorService {
     this.provider = new AnchorProvider(this.connection, wallet, { commitment: "confirmed" });
     const idl = JSON.parse(readFileSync(IDL_PATH, "utf-8"));
     this.program = new Program(idl, this.provider);
+    this.swapClient = new DlmmSwapClient({
+      rpcUrl: config.rpcUrl,
+      relayerKeypair: config.relayerKeypair,
+      executorProgramId: config.executorProgramId,
+    });
+  }
+
+  /**
+   * Build the unsigned `dlmm_swap` tx for the stealth wallet to sign and
+   * submit. The server pre-signs as fee payer; stealth signs as the
+   * authorized swap user. Used by the browser-driven private-claim and
+   * private-exit orchestrators to consolidate non-SOL outputs back to SOL
+   * before the mixer deposit.
+   *
+   * Same-pool reject (swap source == LP target) is enforced upstream in
+   * `swap.service.validateSwapIntent`; this builder trusts its inputs.
+   */
+  async buildDlmmSwapTx(args: BuildSwapTxArgs): Promise<BuildSwapTxResult> {
+    return this.swapClient.buildSwapTx(args);
   }
 
   /**

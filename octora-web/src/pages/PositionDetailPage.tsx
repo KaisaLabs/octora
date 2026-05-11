@@ -16,13 +16,13 @@ import { Reveal } from "@/components/octora/lp/Reveal";
 import { projectUserShape } from "@/lib/bins";
 import { generatePositionPnLSeries } from "@/lib/pnl";
 import {
-  runClaimFees,
   runPrivateExitToMain,
   runSweepStealthToMain,
-  runWithdrawClose,
 } from "@/lib/privateLifecycle";
 import { markLocalPositionClosed, removeLocalPosition } from "@/lib/localPositions";
 import { useSolana } from "@/providers/SolanaProvider";
+import { PrivateClaimModal } from "@/components/octora/lp/PrivateClaimModal";
+import { PrivateExitModal } from "@/components/octora/lp/PrivateExitModal";
 
 interface Props {
   positions: PortfolioPosition[];
@@ -190,39 +190,21 @@ function ClaimSummary({ position }: { position: PortfolioPosition }) {
   const claimable = parseUsd(position.claimable);
   const canClaim = position.hasClaimableFees === true;
   const { wallet } = useSolana();
-  const queryClient = useQueryClient();
-  const [claiming, setClaiming] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
-  const handleClaim = async () => {
+  const handleClaim = () => {
     if (!wallet.address) {
       toast.error("Connect your wallet to claim.");
       return;
     }
-    setClaiming(true);
-    try {
-      const res = await runClaimFees({
-        mainWalletAddress: wallet.address,
-        poolAddress: position.poolAddress,
-        // Range is optional — runClaimFees can recover it from the on-chain
-        // PoolAuthority — but passing it skips an RPC round trip when known.
-        lowerBinId: position.rangeLowerBin,
-        upperBinId: position.rangeUpperBin,
-      });
-      toast.success("Fees claimed", {
-        description: `Routed to ${shorten(res.exitRecipient)} · ${shorten(res.signature)}`,
-      });
-      // Refresh on-chain state so claimable drops to $0 in the UI.
-      await queryClient.invalidateQueries({ queryKey: ["position-state", position.poolAddress] });
-    } catch (err) {
-      toast.error("Claim failed", {
-        description: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      setClaiming(false);
+    if (!position.stealthPubkey) {
+      toast.error("Stealth wallet missing on this position — re-open the deposit modal once.");
+      return;
     }
+    setModalOpen(true);
   };
 
-  const disabled = !canClaim || claiming || !wallet.connected;
+  const disabled = !canClaim || !wallet.connected;
 
   return (
     <div className="flex flex-col justify-between gap-4 rounded-2xl border border-border bg-card p-5">
@@ -255,23 +237,27 @@ function ClaimSummary({ position }: { position: PortfolioPosition }) {
           onClick={handleClaim}
           className="mt-3 w-full justify-center rounded-xl"
         >
-          {claiming ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Claiming…
-            </>
-          ) : (
-            <>
-              <Coins className="h-4 w-4" />
-              Claim privately
-            </>
-          )}
+          <Coins className="h-4 w-4" />
+          Claim privately
         </Button>
       </div>
 
       <p className="text-[11px] leading-5 text-muted-foreground">
-        Claims settle to your session wallet, then forward through the private route to your funding address.
+        Fees claim to the stealth wallet, swap to SOL, then route through the mixer
+        to your main wallet. Total time ~10 minutes; main wallet stays unlinked.
       </p>
+
+      {position.stealthPubkey && (
+        <PrivateClaimModal
+          open={modalOpen}
+          onOpenChange={setModalOpen}
+          position={{
+            positionId: position.id,
+            poolAddress: position.poolAddress,
+            stealthPubkey: position.stealthPubkey,
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -336,46 +322,19 @@ function ActionDrawer({
 }
 
 function WithdrawPanel({ position }: { position: PortfolioPosition }) {
-  const [pending, setPending] = useState(false);
   const { wallet } = useSolana();
-  const queryClient = useQueryClient();
+  const [modalOpen, setModalOpen] = useState(false);
 
-  const handleWithdraw = async () => {
+  const handleWithdraw = () => {
     if (!wallet.address) {
       toast.error("Connect your wallet to withdraw.");
       return;
     }
-    setPending(true);
-    const t = toast.loading("Deriving stealth + closing position…");
-    try {
-      const res = await runWithdrawClose({
-        mainWalletAddress: wallet.address,
-        poolAddress: position.poolAddress,
-        lowerBinId: position.rangeLowerBin,
-        upperBinId: position.rangeUpperBin,
-      });
-      // Position is closed on-chain but funds now sit at the stealth wallet.
-      // Mark closed (don't remove yet) so the user can sweep them out from
-      // this same page — `removeLocalPosition` runs after the sweep lands.
-      // Captured metadata feeds the Activity feed's Withdraw row.
-      markLocalPositionClosed(wallet.address, position.id, {
-        signature: res.signature,
-        recipient: res.exitRecipient,
-      });
-      // Belt-and-braces: also bust the on-chain state cache for this pool,
-      // so any stale read returns 404 (handled by getPositionState).
-      await queryClient.invalidateQueries({
-        queryKey: ["position-state", position.poolAddress],
-      });
-      toast.success(`Closed. Funds → ${shorten(res.exitRecipient)}`, {
-        id: t,
-        description: shorten(res.signature),
-      });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err), { id: t });
-    } finally {
-      setPending(false);
+    if (!position.stealthPubkey) {
+      toast.error("Stealth wallet missing on this position — re-open the deposit modal once.");
+      return;
     }
+    setModalOpen(true);
   };
 
   return (
@@ -390,15 +349,31 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
         size="lg"
         className="w-full justify-center rounded-xl"
         onClick={handleWithdraw}
-        disabled={pending || !wallet.connected}
+        disabled={!wallet.connected}
       >
-        {pending ? <Loader2 className="animate-spin" /> : null}
-        {pending ? "Withdrawing…" : "Withdraw privately"}
-        {!pending && <ArrowRight />}
+        Exit privately
+        <ArrowRight />
       </Button>
       <p className="text-xs leading-5 text-muted-foreground">
-        Funds return through the private route — your main wallet stays hidden from on-chain observers.
+        Close the position, swap residue to SOL, then route through the mixer to
+        your main wallet. ~10 minutes end-to-end; no on-chain link between the
+        stealth that held the position and the main wallet that receives the SOL.
       </p>
+
+      {position.stealthPubkey && (
+        <PrivateExitModal
+          open={modalOpen}
+          onOpenChange={setModalOpen}
+          position={{
+            positionId: position.id,
+            poolAddress: position.poolAddress,
+            stealthPubkey: position.stealthPubkey,
+            lowerBinId: position.rangeLowerBin ?? 0,
+            upperBinId: position.rangeUpperBin ?? 0,
+            depositedUsd: parseUsd(position.deposited),
+          }}
+        />
+      )}
     </div>
   );
 }

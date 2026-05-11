@@ -40,6 +40,7 @@ export async function registerExecutorRoutes(
   app.post("/executor/add-liquidity-tx", { schema: { tags } }, controller.addLiquidityTx);
   app.post("/executor/claim-fees-tx", { schema: { tags } }, controller.claimFeesTx);
   app.post("/executor/withdraw-close-tx", { schema: { tags } }, controller.withdrawCloseTx);
+  app.post("/executor/dlmm-swap-tx", { schema: { tags } }, controller.dlmmSwapTx);
   app.get("/executor/pool-authority", { schema: { tags } }, controller.poolAuthority);
   app.get("/executor/devnet-pools", { schema: { tags } }, controller.devnetPools);
   app.post("/executor/use-pool", { schema: { tags } }, controller.usePool);
