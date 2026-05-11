@@ -138,6 +138,25 @@ jobs:
         # PR shows up as a CI red, not as a comment in code review.
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Guard against DAMM re-introduction (P0-NEW-A landed)
+        # P0-NEW-A removed DAMM from product scope. The strict guard fails
+        # CI on any new DAMM reference (case-insensitive) so a future PR
+        # can't revive the dead surface by accident. The PoolRef::Damm
+        # variant + Damm* error variants in state/errors are intentionally
+        # retained as a reserved marker for on-chain backward compat with
+        # existing devnet PoolAuthority accounts, and use mixed-case
+        # `Damm`; the case-sensitive `damm` lower-case grep here only
+        # catches new entrypoints, modules, or CPI helpers.
+        run: |
+          matches=$(grep -RIn --include='*.rs' -e 'damm' \
+              programs/octora-executor/src || true)
+          if [ -n "$matches" ]; then
+            echo "::error::DAMM reference detected in executor sources." >&2
+            echo "::error::P0-NEW-A removed DAMM from product scope; do not re-introduce it." >&2
+            echo "$matches" >&2
+            exit 1
+          fi
+
   anchor:
     name: Anchor · build IDLs
     runs-on: ubuntu-latest
