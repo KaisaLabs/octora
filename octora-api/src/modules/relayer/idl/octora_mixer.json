@@ -53,8 +53,7 @@
               },
               {
                 "kind": "account",
-                "path": "mixer_pool.denomination",
-                "account": "MixerPool"
+                "path": "mixer_pool"
               }
             ]
           }
@@ -215,8 +214,7 @@
               },
               {
                 "kind": "account",
-                "path": "mixer_pool.denomination",
-                "account": "MixerPool"
+                "path": "mixer_pool"
               }
             ]
           }
@@ -277,8 +275,7 @@
               },
               {
                 "kind": "account",
-                "path": "mixer_pool.denomination",
-                "account": "MixerPool"
+                "path": "mixer_pool"
               }
             ]
           }
@@ -536,8 +533,23 @@
       "name": "MixerPool",
       "docs": [
         "Main mixer pool account (also serves as SOL vault).",
-        "PDA seeds: [b\"mixer_pool\", denomination.to_le_bytes()]"
+        "PDA seeds: [b\"mixer_pool\", denomination.to_le_bytes()]",
+        "",
+        "Marked `zero_copy` because the struct is ~8.8KB and Anchor's Borsh",
+        "deserialize generates a 17KB stack frame for `try_deserialize_unchecked`",
+        "— Solana's SBF stack limit is 4KB, so the previous `#[account]` layout",
+        "crashed/UB'd at handler entry under load. With zero-copy the handler",
+        "reads fields directly through a `Ref<MixerPool>` into the account data;",
+        "no stack allocation of the struct value.",
+        "",
+        "`is_paused` is `u8` instead of `bool` because `bytemuck::Pod` (which",
+        "zero_copy requires) rejects `bool` — its bit pattern is not all-valid.",
+        "Treat 0 = false, non-zero = true via `is_paused_bool()` below."
       ],
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
       "type": {
         "kind": "struct",
         "fields": [
@@ -616,9 +628,10 @@
           {
             "name": "is_paused",
             "docs": [
-              "Emergency pause flag"
+              "Emergency pause flag — 0 = active, non-zero = paused (bytemuck::Pod",
+              "disallows `bool`)."
             ],
-            "type": "bool"
+            "type": "u8"
           },
           {
             "name": "bump",
@@ -626,6 +639,22 @@
               "PDA bump seed"
             ],
             "type": "u8"
+          },
+          {
+            "name": "_pad_end",
+            "docs": [
+              "Trailing padding for `#[repr(C)]` alignment to the struct's u64",
+              "alignment (8). Without this, the compiler adds an implicit pad",
+              "byte after `bump` to round the struct size up to a multiple of 8;",
+              "declaring it explicitly keeps the on-chain byte layout",
+              "deterministic and matches `SPACE` exactly."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
           }
         ]
       }

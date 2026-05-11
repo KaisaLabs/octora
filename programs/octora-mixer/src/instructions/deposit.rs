@@ -12,14 +12,15 @@ pub struct Deposit<'info> {
     #[account(mut)]
     pub depositor: Signer<'info>,
 
-    // Boxed: see Initialize for the rationale (MixerPool is ~1.6KB after
-    // adding filled_subtrees and would overflow the SBF stack otherwise).
+    // Zero-copy — see Initialize for the rationale. The seed for the PDA
+    // is the load_init'd `denomination` field; AccountLoader's macro
+    // resolves this via a temporary load.
     #[account(
         mut,
-        seeds = [MIXER_POOL_SEED, &mixer_pool.denomination.to_le_bytes()],
-        bump = mixer_pool.bump,
+        seeds = [MIXER_POOL_SEED, &mixer_pool.load()?.denomination.to_le_bytes()],
+        bump = mixer_pool.load()?.bump,
     )]
-    pub mixer_pool: Box<Account<'info, MixerPool>>,
+    pub mixer_pool: AccountLoader<'info, MixerPool>,
 
     #[account(
         init,
@@ -46,16 +47,19 @@ pub fn handler(
     ctx: Context<Deposit>,
     commitment: [u8; 32],
 ) -> Result<()> {
-    // Safety checks (read state before mutable borrow)
-    require!(!ctx.accounts.mixer_pool.is_paused, MixerError::PoolPaused);
-    require!(
-        ctx.accounts.mixer_pool.next_leaf_index < MAX_LEAVES,
-        MixerError::TreeFull,
-    );
+    // Snapshot the fields we need before the mutable load so the SOL
+    // transfer's CPI can borrow `mixer_pool.to_account_info()` without
+    // a simultaneous data borrow.
+    let (denomination, leaf_index) = {
+        let pool = ctx.accounts.mixer_pool.load()?;
+        require!(pool.is_paused == 0, MixerError::PoolPaused);
+        require!(pool.next_leaf_index < MAX_LEAVES, MixerError::TreeFull);
+        (pool.denomination, pool.next_leaf_index)
+    };
 
-    let denomination = ctx.accounts.mixer_pool.denomination;
-
-    // Transfer denomination from depositor to pool (pool is the vault)
+    // Transfer denomination from depositor to pool (pool is the vault).
+    // The CpiContext only needs the AccountInfo, not the deserialized
+    // MixerPool — safe to call after the read-borrow above is dropped.
     system_program::transfer(
         CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
@@ -79,8 +83,7 @@ pub fn handler(
     //
     // Cost: TREE_LEVELS Poseidon syscalls per deposit. The tx must request
     // a higher compute budget — see the off-chain client.
-    let pool = &mut ctx.accounts.mixer_pool;
-    let leaf_index = pool.next_leaf_index;
+    let mut pool = ctx.accounts.mixer_pool.load_mut()?;
 
     let mut current_hash = commitment;
     let mut current_index = leaf_index;

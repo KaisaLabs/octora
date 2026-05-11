@@ -23,10 +23,10 @@ pub struct Initialize<'info> {
     #[cfg_attr(feature = "permissionless-init", account(mut))]
     pub authority: Signer<'info>,
 
-    // Boxed because MixerPool is now ~1.6KB after adding filled_subtrees,
-    // and the auto-generated `try_accounts` would otherwise blow the SBF
-    // 4KB stack budget. The Box puts the deserialized struct on the heap
-    // and leaves only an 8-byte pointer in the Accounts frame.
+    // Zero-copy: skips the 17KB stack frame Borsh deserialize would
+    // generate for this ~8.8KB struct. The handler accesses fields via
+    // `load_init()`, which returns a `RefMut<MixerPool>` into the raw
+    // account bytes — no struct value ever sits on the stack.
     #[account(
         init,
         payer = authority,
@@ -34,7 +34,7 @@ pub struct Initialize<'info> {
         seeds = [MIXER_POOL_SEED, &denomination.to_le_bytes()],
         bump,
     )]
-    pub mixer_pool: Box<Account<'info, MixerPool>>,
+    pub mixer_pool: AccountLoader<'info, MixerPool>,
 
     pub system_program: Program<'info, System>,
 }
@@ -42,13 +42,16 @@ pub struct Initialize<'info> {
 pub fn handler(ctx: Context<Initialize>, denomination: u64) -> Result<()> {
     require!(denomination > 0, crate::errors::MixerError::InvalidDenomination);
 
-    let pool = &mut ctx.accounts.mixer_pool;
+    // `load_init` is the zero-copy equivalent of `&mut Account<...>` for a
+    // freshly-`init`'d account — it zeroes the discriminator-prefixed
+    // memory and returns a writable Ref into the raw bytes.
+    let mut pool = ctx.accounts.mixer_pool.load_init()?;
 
     pool.authority = ctx.accounts.authority.key();
     pool.denomination = denomination;
     pool.next_leaf_index = 0;
     pool.current_root_index = 0;
-    pool.is_paused = false;
+    pool.is_paused = 0;
     pool.bump = ctx.bumps.mixer_pool;
 
     // Pre-fill every root_history slot with the empty-tree root so

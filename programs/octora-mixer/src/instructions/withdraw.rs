@@ -19,15 +19,16 @@ pub struct Withdraw<'info> {
     #[account(mut)]
     pub signer: Signer<'info>,
 
-    // Boxed: see Initialize for the rationale (MixerPool is ~1.6KB after
-    // adding filled_subtrees, and withdraw's try_accounts also carries the
-    // 256+160 byte instruction args, so this struct overflowed worst).
+    // Zero-copy — see Initialize for the rationale. Withdraw doesn't
+    // mutate the struct (only the AccountInfo's lamports field, via
+    // try_borrow_mut_lamports below), so a read-only load() is enough
+    // in the handler.
     #[account(
         mut,
-        seeds = [MIXER_POOL_SEED, &mixer_pool.denomination.to_le_bytes()],
-        bump = mixer_pool.bump,
+        seeds = [MIXER_POOL_SEED, &mixer_pool.load()?.denomination.to_le_bytes()],
+        bump = mixer_pool.load()?.bump,
     )]
-    pub mixer_pool: Box<Account<'info, MixerPool>>,
+    pub mixer_pool: AccountLoader<'info, MixerPool>,
 
     /// Nullifier PDA — init ensures double-spend prevention atomically
     #[account(
@@ -91,16 +92,17 @@ pub fn handler(
     );
     let fee = u64::from_be_bytes(fee_field[24..32].try_into().unwrap());
 
-    // Read pool values before mutable operations
-    let denomination = ctx.accounts.mixer_pool.denomination;
-    let is_paused = ctx.accounts.mixer_pool.is_paused;
-
-    // Safety checks
-    require!(!is_paused, MixerError::PoolPaused);
-    require!(fee < denomination, MixerError::FeeExceedsDenomination);
-
-    // Verify the root is in history
-    require!(ctx.accounts.mixer_pool.is_known_root(&root), MixerError::RootNotFound);
+    // Snapshot pool fields under a read-only load() so the borrow is
+    // released before we touch lamports via try_borrow_mut_lamports.
+    // is_paused is u8 (zero_copy can't use bool — bytemuck::Pod rejects it).
+    let denomination;
+    {
+        let pool = ctx.accounts.mixer_pool.load()?;
+        require!(pool.is_paused == 0, MixerError::PoolPaused);
+        require!(fee < pool.denomination, MixerError::FeeExceedsDenomination);
+        require!(pool.is_known_root(&root), MixerError::RootNotFound);
+        denomination = pool.denomination;
+    }
 
     // Reject recipient/relayer aliasing the pool. Aliasing is harmless to
     // the protocol (the user just burns their deposit) but is almost

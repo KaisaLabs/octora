@@ -13,27 +13,31 @@ use crate::state::MixerPool;
 pub struct SetPaused<'info> {
     pub authority: Signer<'info>,
 
+    // Zero-copy — see Initialize for the rationale.
     #[account(
         mut,
-        seeds = [MIXER_POOL_SEED, &mixer_pool.denomination.to_le_bytes()],
-        bump = mixer_pool.bump,
+        seeds = [MIXER_POOL_SEED, &mixer_pool.load()?.denomination.to_le_bytes()],
+        bump = mixer_pool.load()?.bump,
         has_one = authority @ MixerError::Unauthorized,
     )]
-    pub mixer_pool: Box<Account<'info, MixerPool>>,
+    pub mixer_pool: AccountLoader<'info, MixerPool>,
 }
 
 pub fn handler(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
-    let pool = &mut ctx.accounts.mixer_pool;
-    pool.is_paused = paused;
+    let mut pool = ctx.accounts.mixer_pool.load_mut()?;
+    // `is_paused` is u8 in the zero-copy struct (bytemuck::Pod rejects bool).
+    pool.is_paused = if paused { 1 } else { 0 };
+    let denomination = pool.denomination;
+    drop(pool);
 
     let clock = Clock::get()?;
     emit!(PausedEvent {
-        denomination: pool.denomination,
+        denomination,
         paused,
         authority: ctx.accounts.authority.key(),
         timestamp: clock.unix_timestamp,
     });
 
-    msg!("Mixer pool denomination {} pause = {}", pool.denomination, paused);
+    msg!("Mixer pool denomination {} pause = {}", denomination, paused);
     Ok(())
 }
