@@ -1,16 +1,20 @@
 /**
  * Single-sided SOL liquidity helper.
  *
- * MVP only supports single-sided SOL deposits: the chosen bin range sits
- * entirely on one side of the active bin, and only SOL (Wrapped SOL) is
- * deposited. Which side depends on whether SOL is `tokenX` or `tokenY` in
- * the DLMM pair (DLMM lex-orders mints, so the SOL side is fixed per pool):
+ * MVP only deposits SOL (Wrapped SOL): the non-SOL `amount` is always 0.
+ * The bin range may straddle the active bin — bins on the SOL side of
+ * active receive liquidity per the chosen distribution shape, bins on the
+ * non-SOL side receive nothing at deposit (their `amount` is the missing
+ * non-SOL token which we don't have). Those wrong-side bins capture SOL
+ * organically when price later moves into them, which is the standard
+ * "both-directions" LP strategy users expect.
  *
- *   - SOL = tokenY → range must satisfy upperBinId <  activeBinId (bid side)
- *   - SOL = tokenX → range must satisfy lowerBinId >  activeBinId (ask side)
- *
- * The non-SOL amount is forced to 0; the on-chain strategy expansion will
- * place the entire SOL amount across the chosen bins per the selected shape.
+ * The on-chain `*ImBalanced` strategy (index 6/7/8) tolerates a zero
+ * amount on one side — Meteora distributes only the non-zero side across
+ * the corresponding bins. Earlier revisions forced the range strictly
+ * to one side of active; the relaxed version below lets the user pick a
+ * straddling range, matching how the pool detail UI now lets the active
+ * marker sit inside the user's chosen min/max handles.
  */
 
 export type DistributionShape = "spot" | "curve" | "bid-ask";
@@ -70,12 +74,13 @@ export class SingleSidedRangeError extends Error {
 
 /**
  * Compute the executor's `dlmm_add_liquidity` parameters for a single-sided
- * SOL deposit. Validates the chosen range sits entirely on the SOL side of
- * the active bin and rejects with a clear error otherwise.
+ * SOL deposit. The range may straddle the active bin — the non-SOL side
+ * receives 0 amount, so wrong-side bins simply hold no liquidity at deposit.
  *
- * The validation is intentionally strict — DLMM will silently accept a
- * straddling range and split the deposit across both sides, which would
- * leak the non-SOL token amount the user never agreed to provide.
+ * Validates the input is sane (positive amount, well-ordered range) but
+ * does NOT constrain the range relative to active. Meteora's *ImBalanced
+ * strategy distributes only the non-zero amount across the corresponding
+ * side of active, leaving the other side empty.
  */
 export function planSingleSidedSol(input: SingleSidedSolInput): SingleSidedSolPlan {
   if (input.totalLamports <= 0n) {
@@ -87,18 +92,26 @@ export function planSingleSidedSol(input: SingleSidedSolInput): SingleSidedSolPl
     );
   }
 
+  // Range must overlap the SOL side of active by at least one bin —
+  // otherwise we'd be sending SOL into a range that has nothing but
+  // non-SOL bins, and Meteora would receive 0 deposit. Catch this here
+  // with a clear error rather than letting it look like a successful
+  // tx that did nothing.
   if (input.solIsTokenX) {
-    // SOL = X → ask side, strictly above active.
-    if (input.lowerBinId <= input.activeBinId) {
+    // SOL = X → SOL bins are >= activeBin. Range needs upper > active to
+    // include at least one SOL bin (bins above active receive X).
+    if (input.upperBinId < input.activeBinId) {
       throw new SingleSidedRangeError(
-        `Single-sided SOL (X side): lowerBinId (${input.lowerBinId}) must be > activeBinId (${input.activeBinId}).`,
+        `Single-sided SOL (X side): range [${input.lowerBinId}, ${input.upperBinId}] is entirely below active (${input.activeBinId}); ` +
+          "all bins would receive 0 SOL. Move upper above active.",
       );
     }
   } else {
-    // SOL = Y → bid side, strictly below active.
-    if (input.upperBinId >= input.activeBinId) {
+    // SOL = Y → SOL bins are <= activeBin.
+    if (input.lowerBinId > input.activeBinId) {
       throw new SingleSidedRangeError(
-        `Single-sided SOL (Y side): upperBinId (${input.upperBinId}) must be < activeBinId (${input.activeBinId}).`,
+        `Single-sided SOL (Y side): range [${input.lowerBinId}, ${input.upperBinId}] is entirely above active (${input.activeBinId}); ` +
+          "all bins would receive 0 SOL. Move lower below active.",
       );
     }
   }

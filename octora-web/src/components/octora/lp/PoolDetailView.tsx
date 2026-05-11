@@ -192,23 +192,16 @@ function DepositPanel({
     if (presetShape) setShape(presetShape);
   }, [presetShape]);
 
-  // Single-sided SOL clamp: privacy flow can only deposit one token, so a
-  // straddling range would silently widen into the non-SOL side and reject
-  // server-side. Detect the SOL side from the pool mints and constrain the
-  // initial range + every setRange call to bins on that side of active.
-  // Non-SOL pools fall back to the prior straddling default.
-  const SOL_MINT = "So11111111111111111111111111111111111111112";
-  const solSide: "x" | "y" | null =
-    pool.tokenAMint === SOL_MINT ? "x" : pool.tokenBMint === SOL_MINT ? "y" : null;
+  // Range guards: only enforce `lower <= upper`. Earlier versions hard-clamped
+  // the range to one side of `activeBinId` to keep single-sided SOL deposits
+  // strictly on the SOL side, but that prevented the user from picking a
+  // range that straddles the current price — a common LP strategy (cover
+  // both directions of price movement). The on-chain deposit still sends
+  // `amountX=0` or `amountY=0` (whichever isn't SOL), so wrong-side bins
+  // simply receive no liquidity at deposit; they capture SOL only if price
+  // later moves into them. See planSingleSidedSol on the backend.
   const clampRange = (r: { lower: number; upper: number }) => {
-    if (solSide === "y") {
-      const upper = Math.min(r.upper, activeBinId - 1);
-      return { lower: Math.min(r.lower, upper), upper };
-    }
-    if (solSide === "x") {
-      const lower = Math.max(r.lower, activeBinId + 1);
-      return { lower, upper: Math.max(r.upper, lower) };
-    }
+    if (r.upper < r.lower) return { lower: r.upper, upper: r.lower };
     return r;
   };
 
@@ -219,7 +212,7 @@ function DepositPanel({
   useEffect(() => {
     setRange(clampRange({ lower: activeBinId - 8, upper: activeBinId + 8 }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBinId, solSide]);
+  }, [activeBinId]);
 
   const setRangeClamped: typeof setRange = (next) => {
     setRange((prev) => {
@@ -324,9 +317,13 @@ function DepositPanel({
             />
             <p className="text-[11px] leading-5 text-muted-foreground">
               Single-sided SOL: you deposit SOL, MEME accumulates in your
-              bins as price moves. The mixer pool size is what gets routed
-              through the privacy chain — your withdrawal looks identical
-              to every other user's withdrawal from the same pool.
+              bins as price moves. Your range can sit above, below, or
+              straddle the current active price — bins on the wrong side
+              of active receive no SOL at deposit and capture it
+              organically as price moves into them. The mixer pool size
+              above is what gets routed through the privacy chain, so
+              your withdrawal looks identical to every other user's
+              withdrawal from the same pool.
             </p>
           </div>
         </div>
@@ -694,7 +691,7 @@ function RangeReadout({
           center ? "text-amber-400" : pct >= 0 ? "text-primary" : "text-muted-foreground"
         }`}
       >
-        {center ? "Mid price" : `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`}
+        {center ? "On-chain active" : `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`}
       </p>
     </div>
   );
