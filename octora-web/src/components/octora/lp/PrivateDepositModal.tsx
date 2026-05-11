@@ -35,6 +35,12 @@ interface Props {
   range: { lower: number; upper: number };
   /** Token-decimals fallback when /api/prices doesn't return data. Optional. */
   fallbackDecimals?: { tokenA: number; tokenB: number };
+  /**
+   * When the parent (PoolDetailView) already picked a mixer denomination,
+   * pass it here so the modal skips its own denomination-select phase and
+   * jumps straight to preview. Falsy = keep the in-modal picker.
+   */
+  preselectedDenominationLamports?: string | null;
 }
 
 type Phase = "denomination-select" | "preview" | "running" | "success" | "error";
@@ -105,6 +111,7 @@ export function PrivateDepositModal({
   shape,
   range,
   fallbackDecimals,
+  preselectedDenominationLamports,
 }: Props) {
   const { wallet } = useSolana();
   const networkStatus = useNetworkStatus();
@@ -126,12 +133,20 @@ export function PrivateDepositModal({
     setStealthExplainerOpen(!hasSeenStealthExplainer(wallet.address));
   }, [open, wallet.connected, wallet.address]);
 
-  const [phase, setPhase] = useState<Phase>("denomination-select");
+  // Initial phase: if the parent already picked a denom (e.g. via the pool
+  // detail page's denomination picker), skip the in-modal denom picker and
+  // jump to preview. Otherwise default to the picker so the modal works
+  // standalone from any caller.
+  const [phase, setPhase] = useState<Phase>(
+    preselectedDenominationLamports ? "preview" : "denomination-select",
+  );
   // Lamports string the user has chosen from /mixer/pools. Threaded into
   // runPrivateDeposit so every /mixer/* + /relayer/withdraw call routes
   // to the right pool. Reset to null on close so the next session picks
   // the highest-privacy default again.
-  const [selectedDenom, setSelectedDenom] = useState<string | null>(null);
+  const [selectedDenom, setSelectedDenom] = useState<string | null>(
+    preselectedDenominationLamports ?? null,
+  );
   // Tracks the anonymity-set tier of the currently selected pool. When
   // it's `weak` or `thin`, the API will reject the eventual withdrawal,
   // so we force the user through an explicit "I understand" checkbox
@@ -159,11 +174,15 @@ export function PrivateDepositModal({
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [result, setResult] = useState<PrivateDepositResult | null>(null);
 
-  // Reset every time the modal opens.
+  // Reset every time the modal opens. When the parent passed a
+  // pre-selected denomination, start at preview so the user doesn't
+  // re-pick — otherwise default to the in-modal denomination-select.
   useEffect(() => {
     if (!open) return;
-    setPhase("denomination-select");
-    setSelectedDenom(null);
+    setPhase(preselectedDenominationLamports ? "preview" : "denomination-select");
+    setSelectedDenom(preselectedDenominationLamports ?? null);
+    // suppress eslint dep warning — preselectedDenominationLamports is the
+    // signal we want to react to, alongside `open`.
     setSelectedAnonymity(null);
     setThinPoolAck(false);
     setErrorMessage("");
@@ -183,6 +202,7 @@ export function PrivateDepositModal({
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, pool.tokenAMint, pool.tokenBMint]);
 
   /**

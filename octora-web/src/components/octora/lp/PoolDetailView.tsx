@@ -4,15 +4,16 @@ import { toast } from "sonner";
 
 import type { DistributionShape, Pool } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BinLiquidityChart } from "@/components/octora/lp/BinLiquidityChart";
 import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
 import { PositionStatusPill } from "@/components/octora/lp/PositionStatusPill";
 import { PrivateDepositModal } from "@/components/octora/lp/PrivateDepositModal";
+import { AnonymityBadge } from "@/components/octora/lp/AnonymityBadge";
 import { usePoolBins } from "@/hooks/usePoolBins";
 import { useSolana } from "@/providers/SolanaProvider";
 import { runClaimFees, runWithdrawClose } from "@/lib/privateLifecycle";
+import { getPrices } from "@/lib/api";
 
 interface Props {
   pool: Pool;
@@ -32,9 +33,19 @@ interface Props {
  */
 type PositionStatus = "unknown" | "missing" | "exists";
 
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+
 export function PoolDetailView({ pool, presetShape, onBack }: Props) {
   const [detailTab, setDetailTab] = useState("deposit");
   const [positionStatus, setPositionStatus] = useState<PositionStatus>("unknown");
+
+  // Selected mixer denomination drives both the deposit form (below) and the
+  // allocation card (above). MVP is single-sided SOL only, so "allocation" =
+  // "how much SOL the user is putting in" — represented as their chosen
+  // mixer pool size. Reset to null until the user picks; the deposit panel
+  // pre-selects the highest-privacy default once /mixer/pools loads.
+  const [selectedDenomLamports, setSelectedDenomLamports] = useState<string | null>(null);
+  const [selectedAnonymity, setSelectedAnonymity] = useState<number | null>(null);
 
   return (
     <div className="space-y-5">
@@ -89,8 +100,16 @@ export function PoolDetailView({ pool, presetShape, onBack }: Props) {
           <InfoCard label="Depth" value={pool.depth} helper={pool.risk} />
           <InfoCard
             label="Allocation"
-            value={`${pool.allocation.tokenA}% ${pool.tokenA} / ${pool.allocation.tokenB}% ${pool.tokenB}`}
-            helper="Suggested split"
+            value={
+              selectedDenomLamports
+                ? `${formatSol(selectedDenomLamports)} · Single-sided SOL`
+                : "Single-sided SOL"
+            }
+            helper={
+              selectedAnonymity !== null
+                ? `Anonymity set: ${selectedAnonymity} unspent`
+                : "Pick a size below — MEME fills as price moves"
+            }
           />
           <InfoCard label="24h Fees" value={pool.fees24h} helper="Across active bins" />
         </div>
@@ -104,7 +123,15 @@ export function PoolDetailView({ pool, presetShape, onBack }: Props) {
         </TabsList>
 
         <TabsContent value="deposit" className="mt-4">
-          <DepositPanel pool={pool} presetShape={presetShape} />
+          <DepositPanel
+            pool={pool}
+            presetShape={presetShape}
+            selectedDenomLamports={selectedDenomLamports}
+            onChangeDenom={(d, anonymity) => {
+              setSelectedDenomLamports(d);
+              setSelectedAnonymity(anonymity);
+            }}
+          />
         </TabsContent>
         <TabsContent value="claim" className="mt-4">
           <ClaimPanel pool={pool} positionStatus={positionStatus} setPositionStatus={setPositionStatus} />
@@ -117,12 +144,49 @@ export function PoolDetailView({ pool, presetShape, onBack }: Props) {
   );
 }
 
-function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: DistributionShape }) {
+function DepositPanel({
+  pool,
+  presetShape,
+  selectedDenomLamports,
+  onChangeDenom,
+}: {
+  pool: Pool;
+  presetShape?: DistributionShape;
+  selectedDenomLamports: string | null;
+  onChangeDenom: (lamports: string, anonymitySet: number) => void;
+}) {
   const { bins, activeBinId, isLoading: binsLoading, isFallback } = usePoolBins(pool, 61);
 
-  const [depositUsd, setDepositUsd] = useState(2500);
   const [shape, setShape] = useState<DistributionShape>(presetShape ?? "curve");
   const [depositOpen, setDepositOpen] = useState(false);
+
+  // SOL/USD price drives the summary calculations (entry fee, daily est, etc.)
+  // since the user now picks SOL amount instead of USD freetext. Falls back
+  // to a sensible devnet value when /api/prices doesn't know SOL.
+  const [solUsdPrice, setSolUsdPrice] = useState<number>(200);
+  useEffect(() => {
+    let cancelled = false;
+    getPrices([SOL_MINT])
+      .then((prices) => {
+        if (cancelled) return;
+        const p = prices[SOL_MINT]?.usdPrice;
+        if (p && p > 0) setSolUsdPrice(p);
+      })
+      .catch(() => {
+        // Keep the $200 fallback — summary numbers are guidance, not
+        // settlement, so a missing oracle quote shouldn't block the flow.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Derived USD value drives the existing summary / projection block + the
+  // PrivateDepositModal's preview UI without us having to refactor that
+  // surface too.
+  const depositUsd = selectedDenomLamports
+    ? (Number(BigInt(selectedDenomLamports)) / 1_000_000_000) * solUsdPrice
+    : 0;
 
   useEffect(() => {
     if (presetShape) setShape(presetShape);
@@ -252,41 +316,18 @@ function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: Distrib
             <DistributionPreset value={shape} onChange={setShape} />
           </div>
 
-          <label className="block space-y-2">
-            <span className="text-sm text-muted-foreground">Deposit (USD)</span>
-            <Input
-              type="number"
-              min={100}
-              step={100}
-              value={depositUsd}
-              onChange={(e) => setDepositUsd(Number(e.target.value))}
-              className="h-12 rounded-xl border-border bg-background font-mono text-base tabular-nums"
+          <div className="space-y-2">
+            <span className="text-sm text-muted-foreground">Deposit size (mixer pool)</span>
+            <SolDenominationPicker
+              value={selectedDenomLamports}
+              onChange={onChangeDenom}
             />
-            <div className="flex flex-wrap gap-2 pt-1">
-              {[500, 1000, 5000, 10000].map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setDepositUsd(v)}
-                  className="rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  ${v.toLocaleString()}
-                </button>
-              ))}
-            </div>
-          </label>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <StrategyTile
-              title={`${pool.tokenA} allocation`}
-              value={`$${((depositUsd * pool.allocation.tokenA) / 100).toFixed(0)}`}
-              helper={`${pool.allocation.tokenA}%`}
-            />
-            <StrategyTile
-              title={`${pool.tokenB} allocation`}
-              value={`$${((depositUsd * pool.allocation.tokenB) / 100).toFixed(0)}`}
-              helper={`${pool.allocation.tokenB}%`}
-            />
+            <p className="text-[11px] leading-5 text-muted-foreground">
+              Single-sided SOL: you deposit SOL, MEME accumulates in your
+              bins as price moves. The mixer pool size is what gets routed
+              through the privacy chain — your withdrawal looks identical
+              to every other user's withdrawal from the same pool.
+            </p>
           </div>
         </div>
 
@@ -305,7 +346,7 @@ function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: Distrib
             size="lg"
             className="mt-5 w-full justify-center rounded-xl"
             onClick={() => setDepositOpen(true)}
-            disabled={depositUsd <= 0 || range.upper < range.lower}
+            disabled={!selectedDenomLamports || range.upper < range.lower}
           >
             Deposit privately
             <ArrowRight />
@@ -323,6 +364,7 @@ function DepositPanel({ pool, presetShape }: { pool: Pool; presetShape?: Distrib
         depositUsd={depositUsd}
         shape={shape}
         range={range}
+        preselectedDenominationLamports={selectedDenomLamports}
       />
     </section>
   );
@@ -679,16 +721,6 @@ function InfoCard({ label, value, helper }: { label: string; value: string; help
   );
 }
 
-function StrategyTile({ title, value, helper }: { title: string; value: string; helper: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <p className="text-xs text-muted-foreground">{title}</p>
-      <p className="mt-1.5 text-xl font-semibold text-foreground sm:text-2xl">{value}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{helper}</p>
-    </div>
-  );
-}
-
 function ClaimTile({ label, value, sub }: { label: string; value: string; sub: string }) {
   return (
     <div className="rounded-xl border border-border bg-card p-4">
@@ -739,4 +771,133 @@ function OutcomeRow({ label, value, accent }: { label: string; value: string; ac
       </span>
     </div>
   );
+}
+
+/**
+ * Mixer-denomination picker for the deposit form. Pulls the live pool list
+ * from /mixer/pools so the displayed sizes + anonymity sets match what the
+ * server will actually accept. Mirrors the modal-side `DenominationSelector`
+ * but is laid out inline (no preview body, no pop-over copy).
+ */
+const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "/api";
+
+interface MixerPoolEntry {
+  denomination: string;
+  initialized?: boolean;
+  anonymitySet?: number;
+  isPaused?: boolean;
+}
+
+function SolDenominationPicker({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (lamports: string, anonymitySet: number) => void;
+}) {
+  const [pools, setPools] = useState<MixerPoolEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/mixer/pools`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<{ pools: MixerPoolEntry[]; anonymitySetMin?: number }>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setPools(data.pools ?? []);
+        // Auto-select largest "strong" pool when nothing chosen yet, so the
+        // header allocation card and the projection numbers populate
+        // without the user having to click first.
+        if (!value && data.pools && data.pools.length > 0) {
+          const min = data.anonymitySetMin ?? 20;
+          const strong = [...data.pools]
+            .filter((p) => (p.anonymitySet ?? 0) >= min)
+            .sort((a, b) => Number(b.denomination) - Number(a.denomination))[0];
+          const fallback = data.pools[0]!;
+          const chosen = strong ?? fallback;
+          onChange(chosen.denomination, chosen.anonymitySet ?? 0);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (error) {
+    return (
+      <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+        Couldn't load mixer pools: {error}
+      </div>
+    );
+  }
+  if (!pools) {
+    return (
+      <div className="flex items-center gap-2 rounded-md border border-border/60 bg-card/40 px-3 py-3 text-xs text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Loading mixer pools…
+      </div>
+    );
+  }
+  if (pools.length === 0) {
+    return (
+      <div className="rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
+        No mixer pools configured on this network.
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      {pools.map((pool) => {
+        const selected = pool.denomination === value;
+        const usable = pool.initialized !== false && pool.isPaused !== true;
+        return (
+          <button
+            key={pool.denomination}
+            type="button"
+            disabled={!usable}
+            onClick={() => onChange(pool.denomination, pool.anonymitySet ?? 0)}
+            className={[
+              "flex flex-col items-stretch gap-1.5 rounded-xl border px-3 py-3 text-left transition-colors",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+              selected
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border bg-card/60 text-muted-foreground hover:border-border hover:text-foreground",
+            ].join(" ")}
+          >
+            <span className="font-mono text-base font-semibold tabular-nums">
+              {formatSol(pool.denomination)}
+            </span>
+            {pool.anonymitySet !== undefined ? (
+              <AnonymityBadge anonymitySet={pool.anonymitySet} compact />
+            ) : (
+              <span className="text-[10px] uppercase tracking-wide opacity-70">
+                Not initialized
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatSol(lamportsStr: string): string {
+  try {
+    const lamports = BigInt(lamportsStr);
+    const whole = lamports / 1_000_000_000n;
+    const frac = lamports % 1_000_000_000n;
+    if (frac === 0n) return `${whole} SOL`;
+    const fracStr = frac.toString().padStart(9, "0").replace(/0+$/, "");
+    return `${whole}.${fracStr} SOL`;
+  } catch {
+    return `${lamportsStr} lamports`;
+  }
 }
