@@ -18,7 +18,7 @@ pub mod octora_executor {
     //
     // `init_config` is gated on `EXECUTOR_ADMIN_AUTHORITY` (see
     // `constants.rs`) and must be the very first instruction sent to a
-    // freshly deployed program — every state-mutating DLMM/DAMM instruction
+    // freshly deployed program — every state-mutating DLMM instruction
     // requires the global `Config` PDA to exist *and* `paused == false`.
 
     pub fn init_config(ctx: Context<InitConfig>) -> Result<()> {
@@ -62,35 +62,17 @@ pub mod octora_executor {
         instructions::dlmm::withdraw_close::handler(ctx, from_bin_id, to_bin_id, bps_to_remove)
     }
 
-    // ═══ DAMM Instructions ═══
-
-    pub fn damm_init<'info>(
-        ctx: Context<'_, '_, '_, 'info, DammInit<'info>>,
-        exit_recipient: Pubkey,
+    /// Pause-gated, slippage-enforced wrapper around Meteora DLMM `swap`.
+    /// Used by the swap layer to convert SOL ↔ target token before LP, so any
+    /// DLMM pair (including memecoins) can be reached without per-token mixer
+    /// pools. Source pool must differ from the LP target pool — enforced by
+    /// the backend orchestrator, not this instruction.
+    pub fn dlmm_swap<'info>(
+        ctx: Context<'_, '_, '_, 'info, DlmmSwap<'info>>,
+        amount_in: u64,
+        min_amount_out: u64,
     ) -> Result<()> {
-        instructions::damm::init::handler(ctx, exit_recipient)
+        instructions::dlmm::swap::handler(ctx, amount_in, min_amount_out)
     }
 
-    pub fn damm_deposit<'info>(
-        ctx: Context<'_, '_, '_, 'info, DammDeposit<'info>>,
-        pool_token_amount: u64,
-        max_sol: u64,
-    ) -> Result<()> {
-        instructions::damm::deposit::handler(ctx, pool_token_amount, max_sol)
-    }
-
-    pub fn damm_withdraw<'info>(
-        ctx: Context<'_, '_, '_, 'info, DammWithdraw<'info>>,
-        pool_token_amount: u64,
-        min_sol_out: u64,
-    ) -> Result<()> {
-        instructions::damm::withdraw::handler(ctx, pool_token_amount, min_sol_out)
-    }
-
-    pub fn damm_claim_fees<'info>(
-        ctx: Context<'_, '_, '_, 'info, DammClaimFees<'info>>,
-        max_amount: u64,
-    ) -> Result<()> {
-        instructions::damm::claim_fees::handler(ctx, max_amount)
-    }
 }

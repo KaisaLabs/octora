@@ -77,10 +77,10 @@ describe("OctoraExecutorClient", () => {
     const expectedDisc = anchorDiscriminator("dlmm_init_position");
     expect(ix.data.subarray(0, 8).equals(expectedDisc)).toBe(true);
 
-    // 5 outer (stealth, poolAuthority, lbPair, dlmmProgram, systemProgram)
+    // 6 outer (stealth, poolAuthority, lbPair, dlmmProgram, config, systemProgram)
     // + 8 DLMM remaining accounts (relayer, position, lbPair, PA, sysProgram,
     // rent, event_authority, dlmm_program).
-    expect(ix.keys.length).toBe(13);
+    expect(ix.keys.length).toBe(14);
 
     // Spot-check the DLMM tail: idx -2 should be the event_authority,
     // idx -1 should be the DLMM program (matches init_position.rs layout).
@@ -114,8 +114,8 @@ describe("OctoraExecutorClient", () => {
     const expectedDisc = anchorDiscriminator("dlmm_claim_fees");
     expect(ix.data.subarray(0, 8).equals(expectedDisc)).toBe(true);
 
-    // 4 outer (stealth, poolAuthority, lbPair, dlmmProgram) + 14 remaining = 18.
-    expect(ix.keys.length).toBe(18);
+    // 5 outer (stealth, poolAuthority, lbPair, dlmmProgram, config) + 14 remaining = 19.
+    expect(ix.keys.length).toBe(19);
   });
 
   it("buildWithdrawCloseIx serialises (i32, i32, u16) args after the dlmm_withdraw_close discriminator", async () => {
@@ -146,7 +146,7 @@ describe("OctoraExecutorClient", () => {
     expect(ix.data.readInt32LE(12)).toBe(5);
     expect(ix.data.readUInt16LE(16)).toBe(10000);
 
-    // 4 outer + 17 remaining = 21.
-    expect(ix.keys.length).toBe(21);
+    // 5 outer (stealth, poolAuthority, lbPair, dlmmProgram, config) + 17 remaining = 22.
+    expect(ix.keys.length).toBe(22);
   });
 });

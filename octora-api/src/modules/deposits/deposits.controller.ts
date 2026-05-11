@@ -8,6 +8,8 @@ export interface PreparePrivateDepositBody {
   stealthPubkey: string;
   shape: "spot" | "curve" | "bid-ask";
   range: { lower: number; upper: number };
+  /** Optional — when omitted, falls back to the first configured denomination. */
+  denominationLamports?: string;
 }
 
 export interface PreparePrivateDepositResponse {
@@ -16,8 +18,8 @@ export interface PreparePrivateDepositResponse {
 }
 
 export interface DepositsControllerConfig {
-  /** Fixed mixer pool denomination (lamports) — surfaced on the privacy receipt. */
-  denominationLamports: bigint;
+  /** Allowed mixer pool denominations (lamports). First entry is the default. */
+  denominationsLamports: readonly bigint[];
 }
 
 export function createDepositsController(
@@ -44,12 +46,34 @@ export function createDepositsController(
       const validation = validateBody(body);
       if (validation) return reply.status(400).send({ error: validation });
 
+      const allowed = config.denominationsLamports;
+      const defaultDenom = allowed[0]!;
+      let chosen = defaultDenom;
+      if (body.denominationLamports !== undefined) {
+        let parsed: bigint;
+        try {
+          parsed = BigInt(body.denominationLamports);
+        } catch {
+          return reply.status(400).send({
+            error: "denominationLamports must be a base-10 lamports string.",
+          });
+        }
+        if (!allowed.some((d) => d === parsed)) {
+          return reply.status(400).send({
+            error: "denominationLamports does not match a configured pool.",
+            requested: parsed.toString(),
+            available: allowed.map((d) => d.toString()),
+          });
+        }
+        chosen = parsed;
+      }
+
       const positionId = `pos_${randomUUID()}`;
       const receipt = await privacy.prepareFunding({
         positionId,
         intentId: positionId,
         poolSlug: body.poolAddress,
-        amount: config.denominationLamports.toString(),
+        amount: chosen.toString(),
         mode: "fast-private",
         stealthPubkey: body.stealthPubkey,
       });

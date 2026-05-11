@@ -41,7 +41,12 @@ function fakeService(over: Partial<RelayerService> = {}): RelayerService {
 
 async function bindController(service: RelayerService) {
   const app = Fastify({ logger: false });
-  const controller = createRelayerController(service, ADVERTISED_INFO);
+  // Resolver pattern: tests dispatch every request to the same fake service
+  // regardless of denomination. Production wiring routes via RelayerRegistry.
+  const controller = createRelayerController(
+    () => ({ service, info: ADVERTISED_INFO }),
+    ADVERTISED_INFO,
+  );
   app.get("/relayer/info", controller.getInfo);
   app.post("/relayer/withdraw", controller.withdraw);
   return app;

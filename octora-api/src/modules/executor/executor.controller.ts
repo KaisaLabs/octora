@@ -34,24 +34,37 @@ export function createExecutorController(executor: ExecutorService) {
       return reply.send(result);
     },
 
-    /** POST /executor/init-position-tx */
+    /**
+     * POST /executor/init-position-tx
+     *
+     * `exit_recipient` is intentionally ignored if the caller supplies one —
+     * the privacy invariant from CORE_FEATURES_MVP_PLAN §0.5 requires that
+     * every claim_fees / withdraw_close routes proceeds to the stealth ATA,
+     * never directly to the main wallet. The PoolAuthority PDA stores this
+     * value at init time and downstream instructions read from it, so a
+     * client-supplied override here would silently leak every future claim
+     * and close. Server-side forcing closes that hole.
+     */
     async initPositionTx(
       req: FastifyRequest<{
         Body: {
           stealth: string;
           lbPair: string;
-          exitRecipient: string;
           lowerBinId: number;
           width: number;
+          // Accepted for back-compat and explicitly ignored. New clients
+          // should omit it.
+          exitRecipient?: string;
         };
       }>,
       reply: FastifyReply,
     ) {
-      const { stealth, lbPair, exitRecipient, lowerBinId, width } = req.body;
+      const { stealth, lbPair, lowerBinId, width } = req.body;
+      const stealthPubkey = new PublicKey(stealth);
       const result = await executor.buildInitPositionTx({
-        stealth: new PublicKey(stealth),
+        stealth: stealthPubkey,
         lbPair: new PublicKey(lbPair),
-        exitRecipient: new PublicKey(exitRecipient),
+        exitRecipient: stealthPubkey,
         lowerBinId,
         width,
       });

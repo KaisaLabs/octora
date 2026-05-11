@@ -3,8 +3,8 @@ import { RelayerAdapter } from "#modules/execution/adapters";
 import { createDepositsController } from "./deposits.controller.js";
 
 export interface DepositsRoutesOptions {
-  /** Mixer pool denomination in lamports — surfaced on the privacy receipt. */
-  mixerDenomination: bigint;
+  /** All configured mixer pool denominations (lamports). First = default. */
+  mixerDenominations: readonly bigint[];
 }
 
 /**
@@ -29,7 +29,7 @@ export async function registerDepositsRoutes(
   // the stealth pubkey from the caller.
   const privacy = new RelayerAdapter();
   const controller = createDepositsController(privacy, {
-    denominationLamports: opts.mixerDenomination,
+    denominationsLamports: opts.mixerDenominations,
   });
 
   app.post(

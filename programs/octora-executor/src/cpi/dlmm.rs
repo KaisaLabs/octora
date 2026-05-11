@@ -3,7 +3,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::AccountMeta;
 
-use super::{anchor_discriminator, invoke_signed_ix};
+use super::{anchor_discriminator, invoke_ix, invoke_signed_ix};
 use crate::constants::DLMM_PROGRAM_ID;
 use crate::errors::ExecutorError;
 
@@ -50,4 +50,13 @@ pub fn invoke_dlmm_signed(
     signer_seeds: &[&[&[u8]]],
 ) -> Result<()> {
     invoke_signed_ix(ix, account_infos, signer_seeds)
+}
+
+/// Invoke a DLMM CPI without PDA signer seeds. Used for `swap_via_dlmm` where
+/// the only signer is the stealth wallet — already authorized by the outer tx.
+pub fn invoke_dlmm(
+    ix: &anchor_lang::solana_program::instruction::Instruction,
+    account_infos: &[AccountInfo],
+) -> Result<()> {
+    invoke_ix(ix, account_infos)
 }

@@ -4,9 +4,17 @@ pub const TREE_LEVELS: usize = 20;
 /// Maximum number of leaves in the tree
 pub const MAX_LEAVES: u32 = 1 << TREE_LEVELS; // 1,048,576
 
-/// Number of recent roots to keep in ring buffer
-/// 30 roots ≈ 6 minutes of validity at ~400ms slot time
-pub const ROOT_HISTORY_SIZE: usize = 30;
+/// Number of recent roots to keep in ring buffer.
+///
+/// 256 roots ≈ 100 seconds of validity at ~400ms slot time, but rolling a
+/// fresh root happens per *deposit*, not per slot. The bound that matters is
+/// how many deposits can land between a user reading a Merkle root in the
+/// browser and that user's withdrawal landing on-chain. Under a busy multi-
+/// denomination beta (3 pools × ~1 deposit/min sustained), the previous
+/// 30-slot buffer rolled in under a minute and surfaced as spurious
+/// `RootNotFound` errors at the relayer. 256 gives ~hours of headroom while
+/// still costing only ~7KB extra per pool account.
+pub const ROOT_HISTORY_SIZE: usize = 256;
 
 /// Zero value for empty Merkle leaves (big-endian representation of 0)
 pub const ZERO_VALUE: [u8; 32] = [0u8; 32];

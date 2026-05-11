@@ -19,8 +19,21 @@ export interface AppConfig {
   mixerProgramId: string;
   /** Path to the relayer hot wallet keypair JSON. Pays gas for executor txs. */
   executorRelayerKeypairPath: string;
-  /** Fixed-amount mixer pool denomination in lamports (must match the on-chain pool). */
+  /** Fixed-amount mixer pool denomination in lamports (must match the on-chain pool).
+   *
+   * Retained for backward-compatibility with single-denomination wiring
+   * (relayer, deposits orchestrator, executor receipts). Defaults to the
+   * first entry of `mixerDenominations` when not explicitly set.
+   */
   mixerDenomination: bigint;
+  /** Full set of supported mixer pool denominations in lamports (sorted ascending).
+   *
+   * Surfaced by `/mixer/pools` so the frontend can render the denomination
+   * selector with per-pool anonymity-set badges. The doc spec is
+   * `[100_000_000, 1_000_000_000, 10_000_000_000]` (0.1, 1, 10 SOL); override
+   * via `MIXER_DENOMINATIONS` env (comma-separated lamports).
+   */
+  mixerDenominations: bigint[];
   /** Mixer relayer config — `null` when the relayer is disabled (default). */
   mixerRelayer: MixerRelayerConfig | null;
   /**
@@ -60,8 +73,15 @@ export interface BetaCapsConfig {
 export interface MixerRelayerConfig {
   rpcUrl: string;
   mixerProgramId: string;
-  /** Pool denomination in lamports — one relayer instance services one pool. */
+  /** Default pool denomination in lamports (= first entry of `denominations`). */
   poolDenomination: bigint;
+  /**
+   * Optional multi-pool list. When set, the relayer registry creates one
+   * service per entry, all sharing the same hot wallet. When omitted, the
+   * registry falls back to a single-pool relayer using `poolDenomination`,
+   * preserving the legacy single-denom config path.
+   */
+  denominations?: bigint[];
   /** Inline JSON byte array OR `file:<absolute-path>` to a 0600 keypair file. */
   hotWalletSecret: string;
   /**
@@ -99,6 +119,7 @@ export function loadConfig(): AppConfig {
       process.env.OCTORA_EXECUTOR_RELAYER_KEYPAIR ??
       `${process.env.HOME ?? ""}/.config/solana/id.json`,
     mixerDenomination: BigInt(process.env.MIXER_DENOMINATION ?? "1000000000"),
+    mixerDenominations: loadMixerDenominations(),
     mixerRelayer: loadMixerRelayerConfig(),
     betaCaps: {
       maxPositionSol: Number(process.env.BETA_MAX_POSITION_SOL ?? "2.5"),
@@ -140,6 +161,54 @@ function loadFrontendUrl(): string | string[] {
   return origins.length === 1 ? origins[0]! : origins;
 }
 
+/**
+ * Parse `MIXER_DENOMINATIONS` into a sorted, deduplicated bigint list.
+ *
+ * Defaults to the doc spec (0.1, 1, 10 SOL) when unset so a fresh dev env
+ * picks up the multi-pool config without explicit wiring. Throws if any
+ * entry isn't a positive integer literal — silently coercing strings would
+ * make a typo land as a single-denom config without obvious failure.
+ */
+function loadMixerDenominations(): bigint[] {
+  const raw = process.env.MIXER_DENOMINATIONS?.trim();
+  if (!raw) {
+    return [100_000_000n, 1_000_000_000n, 10_000_000_000n];
+  }
+  const parsed = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .map((s) => {
+      let v: bigint;
+      try {
+        v = BigInt(s);
+      } catch {
+        throw new Error(
+          `MIXER_DENOMINATIONS contains a non-integer entry: ${JSON.stringify(s)}`,
+        );
+      }
+      if (v <= 0n) {
+        throw new Error(
+          `MIXER_DENOMINATIONS entries must be > 0 lamports; got ${v.toString()}`,
+        );
+      }
+      return v;
+    });
+  if (parsed.length === 0) {
+    throw new Error("MIXER_DENOMINATIONS parsed to an empty list — set or unset the env var.");
+  }
+  // Dedup + sort ascending so the UI picks a stable order regardless of env.
+  const seen = new Set<string>();
+  const unique = parsed.filter((d) => {
+    const k = d.toString();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  unique.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return unique;
+}
+
 function loadMixerRelayerConfig(): MixerRelayerConfig | null {
   if (process.env.OCTORA_MIXER_RELAYER_ENABLED !== "true") return null;
 
@@ -153,10 +222,32 @@ function loadMixerRelayerConfig(): MixerRelayerConfig | null {
     return v;
   };
 
+  // Multi-denom config: OCTORA_MIXER_RELAYER_DENOMINATIONS overrides if set,
+  // otherwise fall back to the single OCTORA_MIXER_POOL_DENOMINATION list.
+  const denomEnv = process.env.OCTORA_MIXER_RELAYER_DENOMINATIONS?.trim();
+  const denominations: bigint[] | undefined = denomEnv
+    ? denomEnv
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+        .map((s) => {
+          const v = BigInt(s);
+          if (v <= 0n) {
+            throw new Error(
+              `OCTORA_MIXER_RELAYER_DENOMINATIONS entries must be > 0; got ${v.toString()}`,
+            );
+          }
+          return v;
+        })
+    : undefined;
+  const poolDenomination = BigInt(required("OCTORA_MIXER_POOL_DENOMINATION"));
+
   return {
     rpcUrl: required("OCTORA_MIXER_RELAYER_RPC_URL"),
     mixerProgramId: required("OCTORA_MIXER_PROGRAM_ID"),
-    poolDenomination: BigInt(required("OCTORA_MIXER_POOL_DENOMINATION")),
+    poolDenomination,
+    denominations:
+      denominations && denominations.length > 0 ? denominations : undefined,
     hotWalletSecret: required("OCTORA_MIXER_RELAYER_HOT_WALLET"),
     minFeeLamports: BigInt(required("OCTORA_MIXER_RELAYER_MIN_FEE")),
     privacyDelayMs: Number(process.env.OCTORA_MIXER_PRIVACY_DELAY_MS ?? "13000"),

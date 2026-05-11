@@ -11,6 +11,10 @@ import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  MIXER_POOL_IS_PAUSED_OFFSET,
+  MIXER_POOL_NEXT_LEAF_INDEX_OFFSET,
+} from "./layout.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const IDL_PATH = join(__dirname, "..", "relayer", "idl", "octora_mixer.json");
@@ -18,6 +22,47 @@ const IDL_PATH = join(__dirname, "..", "relayer", "idl", "octora_mixer.json");
 const MIXER_POOL_SEED = Buffer.from("mixer_pool");
 const COMMITMENT_SEED = Buffer.from("commitment");
 const NULLIFIER_SEED = Buffer.from("nullifier");
+
+/**
+ * Minimum anonymity set required to permit a withdrawal build.
+ *
+ * The anonymity set is `next_leaf_index - withdrawals_so_far` — the count
+ * of *unspent* deposits in the pool, which is the upper bound on how many
+ * leaves a chain observer could plausibly link to any given withdrawal.
+ *
+ * Twenty is the smallest set where naive intersection attacks (overlap the
+ * deposits set with a candidate stealth wallet's known link set) stop being
+ * trivially decisive — Tornado Cash's empirical analysis showed sharp
+ * de-anonymization risk under ~10 and acceptable mixing above ~20.
+ *
+ * Override via `MIXER_MIN_ANONYMITY_SET` env for staging/dev where you
+ * need to test the withdraw path before twenty real deposits have landed.
+ */
+export const MIN_ANONYMITY_SET = (() => {
+  const env = process.env.MIXER_MIN_ANONYMITY_SET;
+  if (!env) return 20;
+  const n = Number.parseInt(env, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 20;
+})();
+
+/**
+ * Thrown when a withdrawal build is rejected because the target pool has
+ * fewer unspent deposits than `MIN_ANONYMITY_SET`. Surfaced by mixer +
+ * relayer controllers as HTTP 400 `ANONYMITY_SET_TOO_THIN`.
+ */
+export class AnonymitySetTooThinError extends Error {
+  readonly code = "ANONYMITY_SET_TOO_THIN" as const;
+  constructor(
+    readonly current: number,
+    readonly required: number,
+    readonly denomination: bigint,
+  ) {
+    super(
+      `Anonymity set too thin: pool has ${current} unspent deposit(s), required ${required}.`,
+    );
+    this.name = "AnonymitySetTooThinError";
+  }
+}
 
 export interface MixerServiceConfig {
   rpcUrl: string;
@@ -60,6 +105,14 @@ export class MixerService {
   // by `hydrateFromChain()` and kept warm via `recordDeposit()` callbacks
   // from /mixer/confirm-deposit.
   private deposits = new Map<string, PublicDepositRecord>();
+
+  // Spent-nullifier set tracked per-pool. We can't filter `getProgramAccounts`
+  // by pool key (the NullifierAccount only stores a bump, not the pool seed),
+  // so we count WithdrawEvent emissions on this pool's signatures during
+  // hydration and rely on relayer/controller callbacks to keep the count warm
+  // between scans. The set keys are decimal-string nullifier hashes; that
+  // makes recordWithdrawal() idempotent so a re-scan can't double-count.
+  private knownNullifiers = new Set<string>();
 
   constructor(config: MixerServiceConfig) {
     this.connection = new Connection(config.rpcUrl, "confirmed");
@@ -159,7 +212,11 @@ export class MixerService {
   async hydrateFromChain(opts: {
     maxPages?: number;
     log?: (msg: string) => void;
-  } = {}): Promise<{ scannedSignatures: number; depositsLoaded: number }> {
+  } = {}): Promise<{
+    scannedSignatures: number;
+    depositsLoaded: number;
+    withdrawalsLoaded: number;
+  }> {
     const maxPages = opts.maxPages ?? 50; // up to 50_000 signatures
     const log = opts.log ?? (() => {});
 
@@ -176,9 +233,18 @@ export class MixerService {
     );
     if (!depositEventEntry) {
       log("hydrateFromChain: DepositEvent not found in IDL — cannot hydrate");
-      return { scannedSignatures: 0, depositsLoaded: 0 };
+      return { scannedSignatures: 0, depositsLoaded: 0, withdrawalsLoaded: 0 };
     }
     const depositDiscriminator = Buffer.from(depositEventEntry.discriminator);
+
+    // WithdrawEvent discriminator is optional — older IDLs predate the
+    // anonymity-set gate. When missing we just skip the withdraw tally.
+    const withdrawEventEntry = idl.events?.find(
+      (e) => e.name === "WithdrawEvent" || e.name === "withdrawEvent",
+    );
+    const withdrawDiscriminator = withdrawEventEntry
+      ? Buffer.from(withdrawEventEntry.discriminator)
+      : null;
 
     const signatures: ConfirmedSignatureInfo[] = [];
     let before: string | undefined;
@@ -211,6 +277,7 @@ export class MixerService {
     let programDataLines = 0;
     let discriminatorMatches = 0;
     let depositsLoaded = 0;
+    let withdrawalsLoaded = 0;
 
     for (const sig of signatures) {
       if (sig.err) continue;
@@ -242,19 +309,35 @@ export class MixerService {
           continue;
         }
 
-        // Layout: 8-byte discriminator || 32-byte commitment || 4-byte leaf_index (LE) || 8-byte timestamp (LE)
-        if (payload.length < 8 + 32 + 4) continue;
-        if (!payload.subarray(0, 8).equals(depositDiscriminator)) continue;
-        discriminatorMatches++;
+        if (payload.length < 8 + 32) continue;
+        const disc = payload.subarray(0, 8);
 
-        const commitmentBuf = payload.subarray(8, 40);
-        const commitment = BigInt("0x" + commitmentBuf.toString("hex"));
-        const leafIndex = payload.readUInt32LE(40);
+        // DepositEvent layout: 8-byte disc || 32-byte commitment || 4-byte leaf_index (LE) || 8-byte ts (LE)
+        if (disc.equals(depositDiscriminator)) {
+          if (payload.length < 8 + 32 + 4) continue;
+          discriminatorMatches++;
+          const commitmentBuf = payload.subarray(8, 40);
+          const commitment = BigInt("0x" + commitmentBuf.toString("hex"));
+          const leafIndex = payload.readUInt32LE(40);
+          const key = commitment.toString();
+          if (!this.deposits.has(key)) {
+            this.deposits.set(key, { commitment: key, leafIndex, txSignature: sig.signature });
+            depositsLoaded++;
+          }
+          continue;
+        }
 
-        const key = commitment.toString();
-        if (!this.deposits.has(key)) {
-          this.deposits.set(key, { commitment: key, leafIndex, txSignature: sig.signature });
-          depositsLoaded++;
+        // WithdrawEvent layout: 8-byte disc || 32-byte nullifier_hash || 32-byte recipient
+        //                       || 32-byte relayer || 8-byte fee || 8-byte ts
+        if (withdrawDiscriminator && disc.equals(withdrawDiscriminator)) {
+          discriminatorMatches++;
+          const nullifierBuf = payload.subarray(8, 40);
+          const nullifier = BigInt("0x" + nullifierBuf.toString("hex")).toString();
+          if (!this.knownNullifiers.has(nullifier)) {
+            this.knownNullifiers.add(nullifier);
+            withdrawalsLoaded++;
+          }
+          continue;
         }
       }
     }
@@ -262,10 +345,58 @@ export class MixerService {
     log(
       `hydrateFromChain: scanned=${signatures.length} programDataLines=${programDataLines} ` +
         `discriminatorMatches=${discriminatorMatches} depositsLoaded=${depositsLoaded} ` +
-        `cacheSize=${this.deposits.size} pool=${this.poolPDA.toBase58()}`,
+        `withdrawalsLoaded=${withdrawalsLoaded} cacheSize=${this.deposits.size} ` +
+        `withdrawals=${this.knownNullifiers.size} pool=${this.poolPDA.toBase58()}`,
     );
 
-    return { scannedSignatures: signatures.length, depositsLoaded };
+    return { scannedSignatures: signatures.length, depositsLoaded, withdrawalsLoaded };
+  }
+
+  /**
+   * Record a confirmed withdrawal so the anonymity-set snapshot reflects it
+   * immediately, without waiting for the next on-chain re-scan. Called by
+   * the relayer right after a successful `/relayer/withdraw`. Idempotent on
+   * nullifier hash so a relayer-then-rescan can't double-count.
+   */
+  recordWithdrawal(nullifierHashDecimal: string): void {
+    this.knownNullifiers.add(nullifierHashDecimal);
+  }
+
+  /**
+   * Current anonymity-set snapshot. The "anonymity set" is the count of
+   * unspent deposits — `nextLeafIndex` minus the number of nullifiers we
+   * know to have been spent. Source of truth is in-memory state hydrated
+   * at startup (`hydrateFromChain`) plus relayer callbacks; the floor
+   * `max(0, …)` guards against an under-hydrated cache that overcounts
+   * withdrawals.
+   */
+  async getAnonymitySetSnapshot(): Promise<{
+    nextLeafIndex: number;
+    withdrawalCount: number;
+    anonymitySet: number;
+  }> {
+    const status = await this.getPoolStatus();
+    const nextLeafIndex = status?.nextLeafIndex ?? 0;
+    const withdrawalCount = this.knownNullifiers.size;
+    const anonymitySet = Math.max(0, nextLeafIndex - withdrawalCount);
+    return { nextLeafIndex, withdrawalCount, anonymitySet };
+  }
+
+  /**
+   * Throws `AnonymitySetTooThinError` when the current pool has fewer than
+   * `MIN_ANONYMITY_SET` unspent deposits. Called by `buildWithdrawTransaction`
+   * and by the relayer before submitting on-chain.
+   */
+  async assertAnonymitySetSatisfied(): Promise<void> {
+    if (MIN_ANONYMITY_SET <= 0) return;
+    const snap = await this.getAnonymitySetSnapshot();
+    if (snap.anonymitySet < MIN_ANONYMITY_SET) {
+      throw new AnonymitySetTooThinError(
+        snap.anonymitySet,
+        MIN_ANONYMITY_SET,
+        this.denomination,
+      );
+    }
   }
 
   /**
@@ -281,6 +412,7 @@ export class MixerService {
     nullifierHash: string,
   ): Promise<{ transaction: string }> {
     await this.assertPoolInitialized();
+    await this.assertAnonymitySetSatisfied();
     const signer = new PublicKey(signerPubkey);
     const recipient = new PublicKey(recipientPubkey);
     const nullifierHashBuf = this.bigintToBytes32(BigInt(nullifierHash));
@@ -334,12 +466,11 @@ export class MixerService {
 
       const balance = await this.connection.getBalance(this.poolPDA);
 
-      // Layout: discriminator(8) + authority(32) + denomination(8) +
-      //         next_leaf_index(4) + current_root_index(1) + root_history(32*30) +
-      //         is_paused(1) + bump(1)
+      // Layout offsets are defined in ./layout.ts and must stay in lockstep
+      // with programs/octora-mixer/src/state.rs::MixerPool.
       const data = accountInfo.data;
-      const nextLeafIndex = data.readUInt32LE(8 + 32 + 8);
-      const isPaused = data[8 + 32 + 8 + 4 + 1 + 32 * 30] === 1;
+      const nextLeafIndex = data.readUInt32LE(MIXER_POOL_NEXT_LEAF_INDEX_OFFSET);
+      const isPaused = data[MIXER_POOL_IS_PAUSED_OFFSET] === 1;
 
       return {
         poolAddress: this.poolPDA.toBase58(),
@@ -352,6 +483,67 @@ export class MixerService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Stateless read of any mixer pool's on-chain status, independent of which
+   * denomination this service instance was constructed for.
+   *
+   * Used by `/mixer/pools` and other surfaces that need to enumerate all
+   * configured pools before we have a full denom-aware service layer. Returns
+   * `null` when the pool PDA isn't initialized on-chain, matching the contract
+   * of `getPoolStatus`.
+   *
+   * Approximation: `anonymitySet` is currently returned as `depositCount`
+   * (= `next_leaf_index`). The accurate value subtracts the count of spent
+   * nullifier PDAs, but that requires a `getProgramAccounts` scan we do not
+   * want to hot-path here. The lower-bound is what the UI surfaces as
+   * "≥ N deposits", which is the conservative direction for an anonymity gate.
+   */
+  static async readPoolStatus(
+    connection: Connection,
+    programId: PublicKey,
+    denomination: bigint,
+  ): Promise<{
+    poolAddress: string;
+    denomination: string;
+    nextLeafIndex: number;
+    depositCount: number;
+    withdrawalCount: number;
+    anonymitySet: number;
+    isPaused: boolean;
+    balance: string;
+  } | null> {
+    const denomBuf = Buffer.alloc(8);
+    denomBuf.writeBigUInt64LE(denomination);
+    const [poolPDA] = PublicKey.findProgramAddressSync(
+      [MIXER_POOL_SEED, denomBuf],
+      programId,
+    );
+
+    const accountInfo = await connection.getAccountInfo(poolPDA);
+    if (!accountInfo) return null;
+
+    const balance = await connection.getBalance(poolPDA);
+    const data = accountInfo.data;
+    const nextLeafIndex = data.readUInt32LE(MIXER_POOL_NEXT_LEAF_INDEX_OFFSET);
+    const isPaused = data[MIXER_POOL_IS_PAUSED_OFFSET] === 1;
+
+    return {
+      poolAddress: poolPDA.toBase58(),
+      denomination: denomination.toString(),
+      nextLeafIndex,
+      depositCount: nextLeafIndex,
+      // Tracking withdrawal count requires either persistent state in the
+      // relayer or a getProgramAccounts scan for nullifier PDAs. Both land
+      // with the MIN_ANONYMITY_SET enforcement task; until then, treat 0 as
+      // the lower-bound (over-estimates anonymity set, but only for pools
+      // that have actually seen withdrawals — early-beta pools will be 0).
+      withdrawalCount: 0,
+      anonymitySet: nextLeafIndex,
+      isPaused,
+      balance: balance.toString(),
+    };
   }
 
   /** Build an unsigned initialize transaction. */

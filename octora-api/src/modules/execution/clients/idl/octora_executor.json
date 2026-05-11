@@ -8,294 +8,6 @@
   },
   "instructions": [
     {
-      "name": "damm_claim_fees",
-      "discriminator": [
-        114,
-        41,
-        120,
-        208,
-        35,
-        117,
-        34,
-        212
-      ],
-      "accounts": [
-        {
-          "name": "stealth",
-          "signer": true
-        },
-        {
-          "name": "pool_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  111,
-                  111,
-                  108,
-                  45,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "stealth"
-              },
-              {
-                "kind": "account",
-                "path": "pool_authority.pool_ref",
-                "account": "PoolAuthority"
-              }
-            ]
-          }
-        },
-        {
-          "name": "pool"
-        },
-        {
-          "name": "damm_program"
-        }
-      ],
-      "args": [
-        {
-          "name": "max_amount",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "damm_deposit",
-      "discriminator": [
-        211,
-        243,
-        140,
-        9,
-        229,
-        228,
-        174,
-        0
-      ],
-      "accounts": [
-        {
-          "name": "stealth",
-          "signer": true
-        },
-        {
-          "name": "pool_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  111,
-                  111,
-                  108,
-                  45,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "stealth"
-              },
-              {
-                "kind": "account",
-                "path": "pool_authority.pool_ref",
-                "account": "PoolAuthority"
-              }
-            ]
-          }
-        },
-        {
-          "name": "damm_program"
-        },
-        {
-          "name": "pool"
-        }
-      ],
-      "args": [
-        {
-          "name": "pool_token_amount",
-          "type": "u64"
-        },
-        {
-          "name": "max_sol",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "damm_init",
-      "discriminator": [
-        213,
-        25,
-        65,
-        229,
-        98,
-        220,
-        66,
-        143
-      ],
-      "accounts": [
-        {
-          "name": "stealth",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "pool_authority",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  111,
-                  111,
-                  108,
-                  45,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "stealth"
-              },
-              {
-                "kind": "account",
-                "path": "pool"
-              }
-            ]
-          }
-        },
-        {
-          "name": "pool",
-          "docs": [
-            "DAMM pool account"
-          ]
-        },
-        {
-          "name": "lp_mint",
-          "docs": [
-            "LP mint for this DAMM pool"
-          ]
-        },
-        {
-          "name": "damm_program"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "exit_recipient",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
-      "name": "damm_withdraw",
-      "discriminator": [
-        150,
-        57,
-        252,
-        139,
-        232,
-        99,
-        118,
-        164
-      ],
-      "accounts": [
-        {
-          "name": "stealth",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "pool_authority",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  111,
-                  111,
-                  108,
-                  45,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "stealth"
-              },
-              {
-                "kind": "account",
-                "path": "pool_authority.pool_ref",
-                "account": "PoolAuthority"
-              }
-            ]
-          }
-        },
-        {
-          "name": "damm_program"
-        },
-        {
-          "name": "pool"
-        }
-      ],
-      "args": [
-        {
-          "name": "pool_token_amount",
-          "type": "u64"
-        },
-        {
-          "name": "min_sol_out",
-          "type": "u64"
-        }
-      ]
-    },
-    {
       "name": "dlmm_add_liquidity",
       "discriminator": [
         107,
@@ -351,6 +63,24 @@
         },
         {
           "name": "lb_pair"
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -416,6 +146,24 @@
         },
         {
           "name": "dlmm_program"
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -480,6 +228,24 @@
           "name": "dlmm_program"
         },
         {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
         }
@@ -496,6 +262,67 @@
         {
           "name": "exit_recipient",
           "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "dlmm_swap",
+      "docs": [
+        "Pause-gated, slippage-enforced wrapper around Meteora DLMM `swap`.",
+        "Used by the swap layer to convert SOL ↔ target token before LP, so any",
+        "DLMM pair (including memecoins) can be reached without per-token mixer",
+        "pools. Source pool must differ from the LP target pool — enforced by",
+        "the backend orchestrator, not this instruction."
+      ],
+      "discriminator": [
+        16,
+        217,
+        101,
+        223,
+        4,
+        0,
+        193,
+        110
+      ],
+      "accounts": [
+        {
+          "name": "stealth",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "dlmm_program"
+        },
+        {
+          "name": "lb_pair"
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_in",
+          "type": "u64"
+        },
+        {
+          "name": "min_amount_out",
+          "type": "u64"
         }
       ]
     },
@@ -557,6 +384,24 @@
         },
         {
           "name": "dlmm_program"
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -573,9 +418,114 @@
           "type": "u16"
         }
       ]
+    },
+    {
+      "name": "init_config",
+      "discriminator": [
+        23,
+        235,
+        115,
+        232,
+        168,
+        96,
+        1,
+        231
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "address": "6LQkmEbJwJcM89p4XETZu77EtJSbRhwSUSjZMGQ6zNpp"
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "set_paused",
+      "discriminator": [
+        91,
+        60,
+        125,
+        192,
+        176,
+        225,
+        166,
+        218
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "paused",
+          "type": "bool"
+        }
+      ]
     }
   ],
   "accounts": [
+    {
+      "name": "Config",
+      "discriminator": [
+        155,
+        12,
+        170,
+        224,
+        30,
+        250,
+        204,
+        130
+      ]
+    },
     {
       "name": "PoolAuthority",
       "discriminator": [
@@ -705,9 +655,69 @@
       "code": 6022,
       "name": "TokenMintMismatch",
       "msg": "SPL token account mint does not match the expected mint"
+    },
+    {
+      "code": 6023,
+      "name": "Paused",
+      "msg": "Executor is paused — all state-mutating instructions are disabled"
+    },
+    {
+      "code": 6024,
+      "name": "Unauthorized",
+      "msg": "Caller is not authorized for this admin instruction"
+    },
+    {
+      "code": 6025,
+      "name": "SwapSlippageExceeded",
+      "msg": "Realised swap output below min_amount_out — slippage exceeded"
+    },
+    {
+      "code": 6026,
+      "name": "SwapSourceEqualsTarget",
+      "msg": "Swap source pool must differ from LP target pool"
     }
   ],
   "types": [
+    {
+      "name": "Config",
+      "docs": [
+        "Global executor config — emergency pause + admin authority.",
+        "",
+        "Mirrors `octora-mixer`'s pause model so that a DLMM/DAMM CPI bug or",
+        "upstream Meteora incident can halt every state-mutating instruction",
+        "from a single multisig signature, without requiring a program upgrade.",
+        "",
+        "PDA seeds: `[b\"config\"]` — single global account."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "docs": [
+              "Key authorized to flip `paused`. Set once at `init_config` and",
+              "thereafter only this key can call `set_paused`. Should be a Squads",
+              "(or equivalent) multisig PDA on mainnet."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "paused",
+            "docs": [
+              "When true, every state-mutating executor instruction fails closed."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
     {
       "name": "PoolAuthority",
       "docs": [

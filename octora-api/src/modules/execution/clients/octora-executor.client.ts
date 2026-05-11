@@ -18,6 +18,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const IDL_PATH = join(__dirname, "idl", "octora_executor.json");
 
 export const POOL_AUTHORITY_SEED = Buffer.from("pool-authority");
+export const CONFIG_SEED = Buffer.from("config");
 
 export const DLMM_PROGRAM_ID = new PublicKey(
   "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
@@ -96,8 +97,14 @@ export class OctoraExecutorClient {
     );
   }
 
+  /** Derive the global Config PDA: [config]. Required by every DLMM ix (pause gate). */
+  deriveConfig(): [PublicKey, number] {
+    return PublicKey.findProgramAddressSync([CONFIG_SEED], this.programId);
+  }
+
   async buildInitPositionIx(p: InitPositionParams): Promise<TransactionInstruction> {
     const [pa] = this.derivePoolAuthority(p.stealth, p.lbPair);
+    const [config] = this.deriveConfig();
 
     return (this.program.methods as any)
       .dlmmInitPosition(p.lowerBinId, p.width, p.exitRecipient)
@@ -106,6 +113,7 @@ export class OctoraExecutorClient {
         poolAuthority: pa,
         lbPair: p.lbPair,
         dlmmProgram: DLMM_PROGRAM_ID,
+        config,
         systemProgram: SystemProgram.programId,
       })
       .remainingAccounts([
@@ -123,6 +131,7 @@ export class OctoraExecutorClient {
 
   async buildAddLiquidityIx(p: AddLiquidityParams): Promise<TransactionInstruction> {
     const [pa] = this.derivePoolAuthority(p.stealth, p.lbPair);
+    const [config] = this.deriveConfig();
 
     return (this.program.methods as any)
       .dlmmAddLiquidity(p.liquidityParams)
@@ -131,6 +140,7 @@ export class OctoraExecutorClient {
         poolAuthority: pa,
         lbPair: p.lbPair,
         dlmmProgram: DLMM_PROGRAM_ID,
+        config,
       })
       .remainingAccounts(p.dlmmRemainingAccounts)
       .instruction();
@@ -138,6 +148,7 @@ export class OctoraExecutorClient {
 
   async buildClaimFeesIx(p: ClaimFeesParams): Promise<TransactionInstruction> {
     const [pa] = this.derivePoolAuthority(p.stealth, p.lbPair);
+    const [config] = this.deriveConfig();
 
     return (this.program.methods as any)
       .dlmmClaimFees()
@@ -146,6 +157,7 @@ export class OctoraExecutorClient {
         poolAuthority: pa,
         lbPair: p.lbPair,
         dlmmProgram: DLMM_PROGRAM_ID,
+        config,
       })
       .remainingAccounts(p.dlmmRemainingAccounts)
       .instruction();
@@ -153,6 +165,7 @@ export class OctoraExecutorClient {
 
   async buildWithdrawCloseIx(p: WithdrawCloseParams): Promise<TransactionInstruction> {
     const [pa] = this.derivePoolAuthority(p.stealth, p.lbPair);
+    const [config] = this.deriveConfig();
 
     return (this.program.methods as any)
       .dlmmWithdrawClose(p.fromBinId, p.toBinId, p.bpsToRemove)
@@ -161,6 +174,7 @@ export class OctoraExecutorClient {
         poolAuthority: pa,
         lbPair: p.lbPair,
         dlmmProgram: DLMM_PROGRAM_ID,
+        config,
       })
       .remainingAccounts(p.dlmmRemainingAccounts)
       .instruction();

@@ -1,22 +1,29 @@
 import type { FastifyInstance } from "fastify";
-import { PublicKey } from "@solana/web3.js";
 import type { PrismaClient } from "@prisma/client";
+import { PublicKey } from "@solana/web3.js";
 import type { MixerRelayerConfig } from "#common/config";
 import { makeRateLimiter } from "#modules/mixer/rate-limit";
-import { RelayerService } from "./relayer.service.js";
-import { OnChainNullifierRegistry } from "./nullifier-registry.js";
-import { createPrismaRootSeenRepository } from "./root-seen.repository.js";
-import { createMixerClient, deriveMixerPoolPDA } from "./solana-client.js";
-import type { RelayerConfig, WithdrawRequest } from "./types.js";
+import {
+  createRelayerController,
+  type RelayerEntry,
+  type WithdrawBody,
+} from "./relayer.controller.js";
+import { RelayerRegistry } from "./relayer.registry.js";
+import {
+  InvalidDenominationError,
+  MixerRegistry,
+  UnknownDenominationError,
+  parseDenomination,
+} from "#modules/mixer/mixer.registry";
+import { AnonymitySetTooThinError } from "#modules/mixer/mixer.service";
 
 /**
  * Mixer relayer routes.
  *
- * Wires up `RelayerService` against the **on-chain** nullifier registry —
- * NEVER use `InMemoryNullifierRegistry` here. In-memory state evaporates on
- * restart, opening a window where the cache is empty and concurrent dup
- * requests both pass the cache check; the on-chain variant uses the
- * authoritative PDA-existence check as the source of truth.
+ * Wires N `RelayerService` instances (one per configured pool denomination)
+ * behind a single set of routes. Each endpoint accepts an optional
+ * `denomination` parameter; when absent, the registry default is used —
+ * preserves single-denom behaviour for legacy clients.
  *
  * Disabled by default. Set `OCTORA_MIXER_RELAYER_ENABLED=true` plus the
  * other `OCTORA_MIXER_RELAYER_*` env vars to turn it on. The relayer holds
@@ -24,147 +31,172 @@ import type { RelayerConfig, WithdrawRequest } from "./types.js";
  * filesystem is shared or env vars are logged.
  *
  * Endpoints:
- *   GET  /relayer/info     — pubkey + fee + denomination (browser binds these
- *                            into the Groth16 proof)
- *   GET  /relayer/status   — counters / hot-wallet balance
- *   GET  /relayer/health   — 503 when unhealthy, with breakdown
- *   POST /relayer/validate — dry-run proof verification
- *   POST /relayer/withdraw — submit a proven withdrawal; relayer pays gas
+ *   GET  /relayer/info         — multi-pool info bundle (relayer pubkey + per-denom pool addresses)
+ *   GET  /relayer/status       — per-denom counters / hot-wallet balance
+ *   GET  /relayer/health       — 503 when any pool is unhealthy
+ *   POST /relayer/validate     — dry-run proof verification
+ *   POST /relayer/withdraw     — submit a proven withdrawal; relayer pays gas
  */
 export async function registerRelayerRoutes(
   app: FastifyInstance,
   cfg: MixerRelayerConfig,
   prisma: PrismaClient | null = null,
+  mixerRegistry: MixerRegistry | null = null,
 ): Promise<void> {
   const tags = ["Relayer"];
 
-  const serviceConfig: RelayerConfig = {
-    // baseFeelamports is informational metadata — minFeeLamports is the
-    // actual gate enforced in `guardRequest`. Setting them equal means the
-    // advertised fee floor matches what's actually charged.
-    baseFeelamports: cfg.minFeeLamports,
-    minFeeLamports: cfg.minFeeLamports,
-    hotWalletSecret: cfg.hotWalletSecret,
-    rpcUrl: cfg.rpcUrl,
-    mixerProgramId: cfg.mixerProgramId,
-    poolDenomination: cfg.poolDenomination,
-    privacyDelayMs: cfg.privacyDelayMs,
-  };
-
-  // Build the Solana client once, derive the pool PDA, and use that to
-  // construct the on-chain nullifier registry. The same client instance
-  // is reused inside RelayerService when it calls initializeClient().
-  const client = createMixerClient(serviceConfig);
-  const [poolPDA] = deriveMixerPoolPDA(client.programId, cfg.poolDenomination);
-
-  const nullifiers = new OnChainNullifierRegistry(
-    client.provider.connection,
-    client.programId,
-    poolPDA,
-  );
-
-  // Persistent root-seen state — required so a relayer restart can't be
-  // used to bypass the privacy-delay timing-correlation gate (P0-15).
-  // When `prisma` is null (test harness), the gate is disabled.
-  const rootSeenRepo = prisma ? createPrismaRootSeenRepository(prisma) : null;
-  if (!rootSeenRepo) {
+  if (!prisma) {
     app.log.warn(
       "mixer relayer running without a Prisma client — privacy-delay gate is disabled.",
     );
   }
 
-  const relayer = new RelayerService(serviceConfig, nullifiers, rootSeenRepo);
-  relayer.initializeClient();
-
-  // Snapshot the public-facing identity once at registration. These values
-  // never change for a relayer instance, and they're what the browser binds
-  // into the Groth16 proof — caching avoids re-deriving them per /info hit.
-  const info = {
-    relayerPubkey: client.hotWallet.publicKey.toBase58(),
-    feeLamports: cfg.minFeeLamports.toString(),
-    denominationLamports: cfg.poolDenomination.toString(),
-    mixerPoolAddress: poolPDA.toBase58(),
-  };
+  const registry = await RelayerRegistry.create(cfg, prisma);
 
   app.log.info(
     {
-      hotWallet: info.relayerPubkey,
-      poolPDA: info.mixerPoolAddress,
-      programId: client.programId.toBase58(),
-      denomination: info.denominationLamports,
-      minFeeLamports: info.feeLamports,
+      hotWallet: registry.infoBundle.relayerPubkey,
+      denominations: registry.denominations.map((d) => d.toString()),
+      pools: registry.infoBundle.pools,
     },
     "mixer relayer initialized",
   );
 
+  const resolver = (denomination?: bigint): RelayerEntry =>
+    registry.get(denomination ?? registry.defaultDenomination);
+
+  // Wire the anonymity-set tracker into the relayer pipeline:
+  //   - `preSubmit` enforces MIN_ANONYMITY_SET *before* gas is paid.
+  //   - `postCommit` marks the spent nullifier so the next /mixer/pools
+  //     and the next withdraw build see the updated count immediately,
+  //     without waiting for an on-chain re-scan.
+  // When `mixerRegistry` is null (single-process test wiring with no
+  // mixer routes registered), both hooks no-op and the relayer behaves
+  // as it did before the gate existed.
+  const controller = createRelayerController(resolver, registry.infoBundle, {
+    preSubmit: async (entry) => {
+      if (!mixerRegistry) return;
+      const denom = BigInt(entry.info.denominationLamports);
+      await mixerRegistry.get(denom).assertAnonymitySetSatisfied();
+    },
+    postCommit: (entry, body) => {
+      if (!mixerRegistry) return;
+      const denom = BigInt(entry.info.denominationLamports);
+      mixerRegistry.get(denom).recordWithdrawal(body.nullifierHash);
+    },
+  });
+
   // Rate-limit ceilings:
-  //   - withdraw is the expensive endpoint (hits proof verification +
-  //     RPC submission), so 10/min/IP keeps a single abusive client from
-  //     burning the relayer's CPU.
-  //   - validate is a dry-run, slightly more permissive but still
-  //     bounded so it can't be used to spam the verifier.
-  //   - status/info are read-only, looser limit.
+  //   - withdraw is the expensive endpoint, 10/min/IP
+  //   - validate is a dry-run, 30/min/IP
+  //   - status/info are read-only, 60/min/IP
   const withdrawLimiter = makeRateLimiter({ windowMs: 60_000, max: 10 });
   const validateLimiter = makeRateLimiter({ windowMs: 60_000, max: 30 });
   const statusLimiter = makeRateLimiter({ windowMs: 60_000, max: 60 });
 
+  function resolveDenominationParam(
+    raw: unknown,
+    reply: import("fastify").FastifyReply,
+  ): RelayerEntry | null {
+    let denomination: bigint | null;
+    try {
+      denomination = parseDenomination(raw);
+    } catch (err) {
+      reply
+        .status(400)
+        .send({ error: err instanceof Error ? err.message : "invalid denomination" });
+      return null;
+    }
+    try {
+      return resolver(denomination ?? undefined);
+    } catch (err) {
+      if (err instanceof UnknownDenominationError) {
+        reply.status(400).send({
+          error: err.message,
+          requested: err.requested.toString(),
+          available: err.available.map((d) => d.toString()),
+        });
+        return null;
+      }
+      if (err instanceof InvalidDenominationError) {
+        reply.status(400).send({ error: err.message });
+        return null;
+      }
+      throw err;
+    }
+  }
+
   await app.register(async (scope) => {
     scope.addHook("onRequest", statusLimiter);
 
-    scope.get("/relayer/info", { schema: { tags } }, async () => info);
+    scope.get("/relayer/info", { schema: { tags } }, controller.getInfo);
 
-    scope.get(
+    scope.get<{ Querystring: { denomination?: string } }>(
       "/relayer/status",
       { schema: { tags } },
-      async () => {
-        const status = await relayer.status();
-        return status;
+      async (req, reply) => {
+        const entry = resolveDenominationParam(req.query?.denomination, reply);
+        if (!entry) return;
+        return entry.service.status();
       },
     );
 
-    // /relayer/health is shaped for monitoring tools: returns 200 when
-    // healthy, 503 when any threshold trips (low balance, queue
-    // backed up, client uninitialized). The body lists the specific
-    // failed checks so a human can debug without consulting logs.
+    // /relayer/health aggregates across every configured pool. The
+    // top-level `healthy` flag is the AND of all per-pool flags so a
+    // single failing pool flips the LB out of rotation — preferred over
+    // silently routing around a degraded denomination.
     scope.get(
       "/relayer/health",
       { schema: { tags } },
       async (_req, reply) => {
-        const health = await relayer.health();
-        if (!health.healthy) reply.code(503);
-        return health;
+        const perPool = await Promise.all(
+          registry.list().map(async (entry) => {
+            const health = await entry.service.health();
+            return { denomination: entry.info.denominationLamports, ...health };
+          }),
+        );
+        const overall = perPool.every((p) => p.healthy);
+        if (!overall) reply.code(503);
+        return { healthy: overall, pools: perPool };
       },
     );
   });
 
   await app.register(async (scope) => {
     scope.addHook("onRequest", validateLimiter);
-    scope.post<{ Body: WithdrawRequest }>(
+    scope.post<{ Body: WithdrawBody }>(
       "/relayer/validate",
       { schema: { tags } },
-      async (req) => {
+      async (req, reply) => {
+        const entry = resolveDenominationParam(req.body?.denomination, reply);
+        if (!entry) return;
         const body = parseWithdrawBody(req.body);
-        return relayer.validateProof(body);
+        return entry.service.validateProof({ ...body, relayer: entry.info.relayerPubkey });
       },
     );
   });
 
   await app.register(async (scope) => {
     scope.addHook("onRequest", withdrawLimiter);
-    scope.post<{ Body: WithdrawRequest }>(
+    // The controller delegates the gate to the `preSubmit` hook wired
+    // above; we surface `AnonymitySetTooThinError` here as HTTP 400 so
+    // the structured error matches the `/mixer/withdraw` shape.
+    scope.setErrorHandler((err, _req, reply) => {
+      if (err instanceof AnonymitySetTooThinError) {
+        return reply.status(400).send({
+          error: err.code,
+          message: err.message,
+          current: err.current,
+          required: err.required,
+          denomination: err.denomination.toString(),
+        });
+      }
+      throw err;
+    });
+    scope.post<{ Body: WithdrawBody }>(
       "/relayer/withdraw",
       { schema: { tags } },
-      async (req, reply) => {
-        const body = parseWithdrawBody(req.body);
-        const result = await relayer.processWithdrawal(body);
-        if (!result.success) {
-          // 4xx vs 5xx isn't worth a deep distinction here — the body
-          // tells the client what went wrong. Use 400 for "valid request,
-          // refused" and let unhandled errors bubble to Fastify's 500.
-          reply.code(400);
-        }
-        return result;
-      },
+      controller.withdraw,
     );
   });
 }
@@ -174,7 +206,7 @@ export async function registerRelayerRoutes(
  * Fastify will already have parsed JSON; we just guard against missing
  * fields so the relayer's proof verifier doesn't crash on undefined.
  */
-function parseWithdrawBody(body: unknown): WithdrawRequest {
+function parseWithdrawBody(body: unknown): Omit<WithdrawBody, "relayer"> & { relayer?: string } {
   if (!body || typeof body !== "object") {
     throw new Error("Body must be a JSON object.");
   }
@@ -185,7 +217,6 @@ function parseWithdrawBody(body: unknown): WithdrawRequest {
     "root",
     "nullifierHash",
     "recipient",
-    "relayer",
     "fee",
   ] as const;
   for (const k of required) {
@@ -193,15 +224,12 @@ function parseWithdrawBody(body: unknown): WithdrawRequest {
       throw new Error(`Missing required field: ${k}`);
     }
   }
-  // recipient + relayer must be valid base58 pubkeys; reject early so the
-  // service doesn't have to special-case malformed strings.
   try {
     new PublicKey(b.recipient as string);
-    new PublicKey(b.relayer as string);
   } catch (err) {
     throw new Error(
-      `recipient/relayer must be valid base58 pubkeys: ${err instanceof Error ? err.message : "unknown"}`,
+      `recipient must be a valid base58 pubkey: ${err instanceof Error ? err.message : "unknown"}`,
     );
   }
-  return b as unknown as WithdrawRequest;
+  return b as unknown as Omit<WithdrawBody, "relayer"> & { relayer?: string };
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowRight, Check, Copy, ExternalLink, FlaskConical, Loader2, ShieldCheck, X } from "lucide-react";
 
 import {
@@ -23,6 +23,8 @@ import { NETWORK } from "@/lib/api";
 import { hasSeenStealthExplainer, markStealthExplainerSeen } from "@/lib/stealthAck";
 import { isNetworkUnsafe, useNetworkStatus } from "@/lib/networkStatus";
 import { StealthExplainerModal } from "./StealthExplainerModal";
+import { DenominationSelector } from "./DenominationSelector";
+import { tierForAnonymity } from "./AnonymityBadge";
 
 interface Props {
   open: boolean;
@@ -35,7 +37,7 @@ interface Props {
   fallbackDecimals?: { tokenA: number; tokenB: number };
 }
 
-type Phase = "preview" | "running" | "success" | "error";
+type Phase = "denomination-select" | "preview" | "running" | "success" | "error";
 
 interface Breakdown {
   usdA: number;
@@ -124,7 +126,18 @@ export function PrivateDepositModal({
     setStealthExplainerOpen(!hasSeenStealthExplainer(wallet.address));
   }, [open, wallet.connected, wallet.address]);
 
-  const [phase, setPhase] = useState<Phase>("preview");
+  const [phase, setPhase] = useState<Phase>("denomination-select");
+  // Lamports string the user has chosen from /mixer/pools. Threaded into
+  // runPrivateDeposit so every /mixer/* + /relayer/withdraw call routes
+  // to the right pool. Reset to null on close so the next session picks
+  // the highest-privacy default again.
+  const [selectedDenom, setSelectedDenom] = useState<string | null>(null);
+  // Tracks the anonymity-set tier of the currently selected pool. When
+  // it's `weak` or `thin`, the API will reject the eventual withdrawal,
+  // so we force the user through an explicit "I understand" checkbox
+  // before letting them proceed to preview.
+  const [thinPoolAck, setThinPoolAck] = useState(false);
+  const [selectedAnonymity, setSelectedAnonymity] = useState<number | null>(null);
   const initialStepStatuses = (): Record<DepositStepKey, "pending" | "active" | "ok" | "error"> => ({
     derive: "pending",
     "relayer-info": "pending",
@@ -149,7 +162,10 @@ export function PrivateDepositModal({
   // Reset every time the modal opens.
   useEffect(() => {
     if (!open) return;
-    setPhase("preview");
+    setPhase("denomination-select");
+    setSelectedDenom(null);
+    setSelectedAnonymity(null);
+    setThinPoolAck(false);
     setErrorMessage("");
     setResult(null);
     setStepStatuses(initialStepStatuses());
@@ -276,7 +292,21 @@ export function PrivateDepositModal({
   // unreachable (P1-35). The explainer modal does NOT block submit
   // (it's UX, not a security gate); we just open it on first deposit.
   const ready =
-    wallet.connected && breakdown.hasPrices && phase === "preview" && !networkUnsafe;
+    wallet.connected &&
+    breakdown.hasPrices &&
+    phase === "preview" &&
+    !networkUnsafe &&
+    selectedDenom !== null;
+
+  // "Continue" from the denomination picker is gated on:
+  //   - a pool actually selected
+  //   - if the selected pool is below MIN_ANONYMITY_SET (20), an explicit
+  //     ack that the eventual withdrawal will be rejected until the pool
+  //     fills up. Without this, users would happily deposit into an empty
+  //     pool and only discover the wait at withdraw time.
+  const selectedTier = selectedAnonymity !== null ? tierForAnonymity(selectedAnonymity) : null;
+  const continueFromDenomSelect =
+    selectedDenom !== null && (selectedTier === "strong" || thinPoolAck);
 
   const [mintState, setMintState] = useState<{
     status: "idle" | "loading" | "ok" | "error";
@@ -370,6 +400,7 @@ export function PrivateDepositModal({
           lowerBinId: effective.lowerBinId,
           upperBinId: effective.upperBinId,
           shape,
+          denominationLamports: selectedDenom ?? undefined,
         },
         handleStep,
       );
@@ -439,6 +470,21 @@ export function PrivateDepositModal({
         </DialogHeader>
 
         <div className="px-6 py-5">
+          {phase === "denomination-select" && (
+            <DenominationSelectBody
+              value={selectedDenom}
+              onChange={(d, anonymity) => {
+                setSelectedDenom(d);
+                setSelectedAnonymity(anonymity);
+                // Reset the ack whenever the selected pool changes — the
+                // checkbox should never carry across choices.
+                setThinPoolAck(false);
+              }}
+              thinPoolAck={thinPoolAck}
+              onThinAckChange={setThinPoolAck}
+              anonymitySet={selectedAnonymity}
+            />
+          )}
           {phase === "preview" && (
             <PreviewBody
               pool={pool}
@@ -452,6 +498,9 @@ export function PrivateDepositModal({
               onMintTestTokens={handleMintCurrent}
               onBootstrapTestPool={bootstrapTestPool}
               testTarget={testTarget}
+              selectedDenomLamports={selectedDenom}
+              selectedAnonymity={selectedAnonymity}
+              onChangeDenomination={() => setPhase("denomination-select")}
             />
           )}
           {(phase === "running" || phase === "error") && (
@@ -467,10 +516,25 @@ export function PrivateDepositModal({
         </div>
 
         <div className="flex items-center justify-end gap-3 border-t border-border/60 bg-card/40 px-6 py-4">
-          {phase === "preview" && (
+          {phase === "denomination-select" && (
             <>
               <Button variant="ghost" onClick={() => onOpenChange(false)}>
                 Cancel
+              </Button>
+              <Button
+                variant="hero"
+                onClick={() => setPhase("preview")}
+                disabled={!continueFromDenomSelect}
+              >
+                Continue
+                <ArrowRight className="ml-1 h-4 w-4" />
+              </Button>
+            </>
+          )}
+          {phase === "preview" && (
+            <>
+              <Button variant="ghost" onClick={() => setPhase("denomination-select")}>
+                Back
               </Button>
               <Button variant="hero" onClick={start} disabled={!ready}>
                 Authorize private session
@@ -513,6 +577,55 @@ interface TestTargetSummary {
   upperBinId: number;
 }
 
+function DenominationSelectBody({
+  value,
+  onChange,
+  thinPoolAck,
+  onThinAckChange,
+  anonymitySet,
+}: {
+  value: string | null;
+  onChange: (denominationLamports: string, anonymitySet: number) => void;
+  thinPoolAck: boolean;
+  onThinAckChange: (checked: boolean) => void;
+  anonymitySet: number | null;
+}) {
+  const tier = anonymitySet !== null ? tierForAnonymity(anonymitySet) : null;
+  return (
+    <div className="space-y-4 text-sm">
+      <div>
+        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+          Choose deposit size
+        </p>
+        <p className="mt-1.5 text-xs text-muted-foreground/80">
+          Mixer pools accept a fixed amount of SOL. The same denomination as
+          everyone else's deposit is what makes your withdrawal indistinguishable
+          from theirs.
+        </p>
+      </div>
+
+      <DenominationSelector value={value} onChange={onChange} />
+
+      {tier && tier !== "strong" && (
+        <label className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          <input
+            type="checkbox"
+            checked={thinPoolAck}
+            onChange={(e) => onThinAckChange(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            I understand this pool currently has fewer than 20 unspent deposits.
+            My deposit will succeed, but the withdrawal will wait until enough
+            other deposits land — the server refuses withdrawals from thin
+            pools to protect anonymity.
+          </span>
+        </label>
+      )}
+    </div>
+  );
+}
+
 function PreviewBody({
   pool,
   depositUsd,
@@ -525,6 +638,9 @@ function PreviewBody({
   onMintTestTokens,
   onBootstrapTestPool,
   testTarget,
+  selectedDenomLamports,
+  selectedAnonymity,
+  onChangeDenomination,
 }: {
   pool: Pool;
   depositUsd: number;
@@ -537,6 +653,9 @@ function PreviewBody({
   onMintTestTokens: () => void;
   onBootstrapTestPool: () => void;
   testTarget: TestTargetSummary | null;
+  selectedDenomLamports: string | null;
+  selectedAnonymity: number | null;
+  onChangeDenomination: () => void;
 }) {
   // When a fresh test pool is in play, display the test pool's params instead
   // of the pool the user originally navigated to.
@@ -571,6 +690,22 @@ function PreviewBody({
         <Row label="Shape" value={capitalize(shape)} />
         <Row label="Range" value={`${binsCovered} bins (${displayLower} → ${displayUpper})`} />
         <Row label="Total" value={`$${depositUsd.toLocaleString()}`} />
+        {selectedDenomLamports && (
+          <Row
+            label="Mixer pool"
+            value={
+              <button
+                type="button"
+                onClick={onChangeDenomination}
+                className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+              >
+                {formatSolLamports(selectedDenomLamports)}
+                {selectedAnonymity !== null ? ` · ${selectedAnonymity} unspent` : ""}
+                <span className="opacity-60">(change)</span>
+              </button>
+            }
+          />
+        )}
         {testTarget && (
           <Row
             label="Test pool"
@@ -795,13 +930,26 @@ function StepDot({ status }: { status: "pending" | "active" | "ok" | "error" }) 
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-3 text-sm">
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="font-mono tabular-nums">{value}</dd>
     </div>
   );
+}
+
+function formatSolLamports(lamportsStr: string): string {
+  try {
+    const lamports = BigInt(lamportsStr);
+    const whole = lamports / 1_000_000_000n;
+    const frac = lamports % 1_000_000_000n;
+    if (frac === 0n) return `${whole} SOL`;
+    const fracStr = frac.toString().padStart(9, "0").replace(/0+$/, "");
+    return `${whole}.${fracStr} SOL`;
+  } catch {
+    return `${lamportsStr} lamports`;
+  }
 }
 
 function CopyRow({ label, value }: { label: string; value: string }) {

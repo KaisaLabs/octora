@@ -17,6 +17,7 @@ import { registerPricesRoutes } from '#modules/prices/prices.routes'
 import { createPrismaWaitlistRepository, type WaitlistRepository } from '#modules/waitlist/waitlist.repository'
 import { registerWaitlistRoutes } from '#modules/waitlist/waitlist.routes'
 import { registerMixerRoutes } from '#modules/mixer/mixer.routes'
+import { MixerRegistry } from '#modules/mixer/mixer.registry'
 import { registerExecutorRoutes } from '#modules/executor/executor.routes'
 import { registerDepositsRoutes } from '#modules/deposits'
 import { registerRelayerRoutes } from '#modules/relayer'
@@ -26,7 +27,7 @@ import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
 import { createActivityService } from '#modules/positions/activity.service'
 import { createIndexerService } from '#modules/indexer'
 import { createRecoveryWorker } from '#modules/positions/recovery-worker'
-import { Connection } from '@solana/web3.js'
+import { Connection, PublicKey } from '@solana/web3.js'
 
 export interface AppRepositories {
   positionRepo: PositionRepository
@@ -190,18 +191,32 @@ export async function createApp(options: CreateAppOptions = {}) {
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)
   app.register(registerWaitlistRoutes, { waitlistRepo: repos.waitlistRepo })
-  app.register(registerMixerRoutes, { mixerProgramId: config.mixerProgramId })
+  // Build the MixerRegistry once and share it across routes so the
+  // anonymity-set tracker (spent-nullifier set + deposit count) stays
+  // consistent: the mixer routes hydrate it from chain at startup, and
+  // the relayer route bumps it on every successful withdrawal.
+  const mixerRegistry = new MixerRegistry({
+    rpcUrl: process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
+    programId: new PublicKey(config.mixerProgramId),
+    denominations: config.mixerDenominations,
+  })
+
+  app.register(registerMixerRoutes, {
+    mixerProgramId: config.mixerProgramId,
+    mixerDenominations: config.mixerDenominations,
+    registry: mixerRegistry,
+  })
   app.register(registerExecutorRoutes, {
     executorProgramId: config.executorProgramId,
     relayerKeypairPath: config.executorRelayerKeypairPath,
   })
-  app.register(registerDepositsRoutes, { mixerDenomination: config.mixerDenomination })
+  app.register(registerDepositsRoutes, { mixerDenominations: config.mixerDenominations })
 
   // Mixer relayer is opt-in: only mount when explicitly enabled, since it
   // holds a hot wallet. Driven by OCTORA_MIXER_RELAYER_ENABLED=true plus the
   // other OCTORA_MIXER_RELAYER_* env vars (see common/config.ts).
   if (config.mixerRelayer) {
-    await registerRelayerRoutes(app, config.mixerRelayer, prismaClient ?? null)
+    await registerRelayerRoutes(app, config.mixerRelayer, prismaClient ?? null, mixerRegistry)
   }
 
   // Recovery worker (P1-29). Polls every 30s to advance stuck positions

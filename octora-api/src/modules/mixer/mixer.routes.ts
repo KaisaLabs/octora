@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { PublicKey } from "@solana/web3.js";
-import { MixerService } from "./mixer.service.js";
 import { createMixerController } from "./mixer.controller.js";
+import { MixerRegistry } from "./mixer.registry.js";
 import { makeRateLimiter } from "./rate-limit.js";
 
 // MAINNET_BLOCKER: default falls back to devnet. On mainnet deploy,
@@ -9,16 +9,7 @@ import { makeRateLimiter } from "./rate-limit.js";
 // Triton, etc.) — public mainnet-beta rate-limits aggressively and
 // `getSignaturesForAddress` truncates under load. See docs/test-plan.md §14.
 const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
-// 1 SOL — single denomination for the MVP. Changing this is a *new pool*
-// (denomination is part of the PDA seeds), so MIXER_DENOMINATION must stay
-// stable across server restarts for the same pool to be reused.
-const DENOMINATION = BigInt(process.env.MIXER_DENOMINATION || "1000000000");
 
-// Rate-limit ceilings — chosen to allow normal interactive use of the test
-// page (a few clicks per minute) while bounding what an abusive client can
-// do. /mixer/withdraw and /mixer/deposit each cost an RPC roundtrip
-// (getLatestBlockhash) so they're tighter; the read-only endpoints are
-// mostly cache hits and can be looser.
 const WRITE_LIMIT = { windowMs: 60_000, max: 30 };
 const READ_LIMIT = { windowMs: 60_000, max: 120 };
 
@@ -26,16 +17,27 @@ const READ_LIMIT = { windowMs: 60_000, max: 120 };
  * Mixer routes intentionally do NOT include endpoints for:
  *   - generating commitments (secret + nullifier)
  *   - generating stealth wallets (private key)
- *   - generating ZK proofs (consumes secret + nullifier as private witness)
+ *   - generating ZK proofs
  *
- * Those operations all require the user's secret material and must happen
- * in the user's browser. Exposing them here would let the API operator
- * (or anyone with access to logs / network traces) withdraw any deposit.
- *
- * The browser-side equivalents live in octora-web/src/lib/mixer/.
+ * Those operations require the user's secret material and must happen in
+ * the user's browser. Exposing them here would let the API operator (or
+ * anyone with log/network access) withdraw any deposit. The browser-side
+ * equivalents live in octora-web/src/lib/mixer/.
  */
 export interface MixerRoutesOptions {
   mixerProgramId: string;
+  /**
+   * All configured pool denominations (lamports). The first entry is the
+   * default denomination used when a caller omits `denomination` on a
+   * request — preserves single-denom behaviour for legacy clients.
+   */
+  mixerDenominations: bigint[];
+  /**
+   * Optional pre-built registry. Pass when other routes (e.g. the relayer)
+   * need to share the same per-denom `MixerService` instances so the
+   * anonymity-set tracker stays consistent across endpoints.
+   */
+  registry?: MixerRegistry;
 }
 
 export async function registerMixerRoutes(
@@ -44,76 +46,74 @@ export async function registerMixerRoutes(
 ) {
   const tags = ["Mixer"];
 
-  const mixer = new MixerService({
-    rpcUrl: RPC_URL,
-    denomination: DENOMINATION,
-    programId: new PublicKey(opts.mixerProgramId),
-  });
+  const programId = new PublicKey(opts.mixerProgramId);
+  const registry =
+    opts.registry ??
+    new MixerRegistry({
+      rpcUrl: RPC_URL,
+      programId,
+      denominations: opts.mixerDenominations,
+    });
 
-  // Rehydrate the deposit cache from on-chain DepositEvent logs so a
-  // server restart doesn't blank the public deposit history that
-  // browsers rely on for Merkle-tree reconstruction.
-  //
-  // Awaited (not background): if /mixer/deposits serves a partial leaf set
-  // before hydration finishes, browsers rebuild a tree that doesn't match
-  // the on-chain root and withdrawals fail with RootNotFound. The 5–15s
-  // boot cost is a fair trade for not silently corrupting every deposit
-  // that races a fresh restart.
-  try {
-    const res = await mixer.hydrateFromChain({ log: (m) => app.log.warn(m) });
-    app.log.info(
-      { depositsLoaded: res.depositsLoaded, scannedSignatures: res.scannedSignatures },
-      "mixer: hydrated deposit cache from chain",
+  // Rehydrate the deposit cache from on-chain logs for every configured
+  // pool. Without per-pool hydration, a server restart would blank the
+  // public deposit history for non-default denominations and any browser
+  // rebuilding the Merkle tree would see a partial leaf set → RootNotFound.
+  // Skipped under vitest: tests hit `createApp` repeatedly, and N pools ×
+  // public-RPC 429-backoff blows past the 10s hook timeout.
+  if (process.env.VITEST !== "true") {
+    await Promise.all(
+      registry.list().map(async ({ denomination, service }) => {
+        try {
+          const res = await service.hydrateFromChain({ log: (m) => app.log.warn(m) });
+          app.log.info(
+            {
+              denomination: denomination.toString(),
+              depositsLoaded: res.depositsLoaded,
+              scannedSignatures: res.scannedSignatures,
+            },
+            "mixer: hydrated deposit cache from chain",
+          );
+        } catch (err) {
+          app.log.warn(
+            { err, denomination: denomination.toString() },
+            "mixer: hydrateFromChain failed",
+          );
+        }
+      }),
     );
-  } catch (err) {
-    app.log.warn({ err }, "mixer: hydrateFromChain failed");
   }
 
-  const controller = createMixerController(mixer);
+  const controller = createMixerController(
+    (denomination) => registry.get(denomination ?? registry.defaultDenomination),
+    {
+      rpcUrl: RPC_URL,
+      programId,
+      denominations: [...registry.denominations],
+    },
+  );
 
-  // Independent buckets per route family so heavy abuse on one endpoint
-  // doesn't starve unrelated reads. Applied via scoped onRequest hooks
-  // inside two `register` blocks so each route's request-body inference
-  // (which collides with route-level preHandler typing) stays clean.
   const readLimiter = makeRateLimiter(READ_LIMIT);
   const writeLimiter = makeRateLimiter(WRITE_LIMIT);
 
-  // ── Read-only endpoints (looser limit) ─────────────────────────
+  // ── Read-only endpoints ────────────────────────────────────────
   await app.register(async (scope) => {
     scope.addHook("onRequest", readLimiter);
-
-    // Pool status
     scope.get("/mixer/status", { schema: { tags } }, controller.getStatus);
-
-    // Public deposit history — used by the browser to reconstruct the Merkle
-    // tree locally before computing inclusion proofs. Returns only public data.
+    scope.get("/mixer/pools", { schema: { tags } }, controller.listPools);
     scope.get("/mixer/deposits", { schema: { tags } }, controller.listDeposits);
   });
 
-  // ── Build-an-unsigned-tx / write-ish endpoints (tighter limit) ─
+  // ── Write-ish (build-an-unsigned-tx) endpoints ─────────────────
   await app.register(async (scope) => {
     scope.addHook("onRequest", writeLimiter);
-
-    // Initialize pool (build unsigned tx)
     scope.post("/mixer/initialize", { schema: { tags } }, controller.initialize);
-
-    // Build deposit transaction (unsigned, frontend signs).
-    // Body: { depositor, commitment } — the on-chain program computes the new
-    // Merkle root deterministically.
     scope.post("/mixer/deposit", { schema: { tags } }, controller.deposit);
-
-    // Record a confirmed deposit so future depositors can rebuild the tree.
-    // Best-effort: even if this fails, the on-chain DepositEvent is the
-    // authoritative source (and the next server start will pick it up via
-    // hydrateFromChain).
     scope.post(
       "/mixer/confirm-deposit",
       { schema: { tags } },
       controller.confirmDeposit,
     );
-
-    // Build withdraw transaction (unsigned, frontend signs).
-    // Proof + public-input bytes come from the browser-side prover.
     scope.post("/mixer/withdraw", { schema: { tags } }, controller.withdraw);
   });
 }

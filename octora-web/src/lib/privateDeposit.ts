@@ -67,6 +67,12 @@ export interface PrivateDepositInput {
   lowerBinId: number;
   upperBinId: number;
   shape: DistributionShape;
+  /**
+   * Selected mixer pool denomination in lamports (base-10 string). When
+   * omitted, the orchestrator uses whichever denomination the server
+   * advertises as the default in `/relayer/info`.
+   */
+  denominationLamports?: string;
 }
 
 export interface PrivateDepositResult {
@@ -124,8 +130,12 @@ function decodeBase64Tx(base64: string): Transaction {
 interface RelayerInfo {
   relayerPubkey: string;
   feeLamports: string;
+  /** Default-pool denomination — kept for legacy single-pool clients. */
   denominationLamports: string;
+  /** Default-pool mixer PDA. */
   mixerPoolAddress: string;
+  /** Multi-pool list — newer clients pick the entry matching the user's choice. */
+  pools?: Array<{ denomination: string; mixerPoolAddress: string }>;
 }
 
 interface PreparePrivateResponse {
@@ -229,7 +239,29 @@ export async function runPrivateDeposit(
     onStep({ step: "relayer-info", status: "error", message: describe(err) });
     throw err;
   }
-  const denomination = BigInt(relayerInfo.denominationLamports);
+
+  // Resolve which denomination this run targets. When the caller asked for a
+  // specific pool, look it up in the multi-pool list; otherwise fall back to
+  // the server's default. The denomination is plumbed into every subsequent
+  // /mixer and /relayer call so the registry dispatches to the right pool.
+  let denomination: bigint;
+  if (input.denominationLamports !== undefined) {
+    const requested = BigInt(input.denominationLamports);
+    const matched = relayerInfo.pools?.find(
+      (p) => BigInt(p.denomination) === requested,
+    );
+    if (!matched) {
+      const err = new Error(
+        `Requested denomination ${requested} not advertised by /relayer/info.`,
+      );
+      onStep({ step: "relayer-info", status: "error", message: err.message });
+      throw err;
+    }
+    denomination = requested;
+  } else {
+    denomination = BigInt(relayerInfo.denominationLamports);
+  }
+  const denominationParam = denomination.toString();
   const fee = BigInt(relayerInfo.feeLamports);
   onStep({
     step: "relayer-info",
@@ -246,6 +278,7 @@ export async function runPrivateDeposit(
       stealthPubkey: stealth.publicKey,
       shape: input.shape,
       range: { lower: input.lowerBinId, upper: input.upperBinId },
+      denominationLamports: denominationParam,
     });
   } catch (err) {
     onStep({ step: "prepare", status: "error", message: describe(err) });
@@ -270,12 +303,15 @@ export async function runPrivateDeposit(
     // pool serializes commitments through `next_leaf_index` so this read-then-
     // submit pattern is race-free as long as we don't have multiple concurrent
     // deposits from the same browser tab.
-    const preStatus = await apiGet<MixerStatus>("/mixer/status");
+    const preStatus = await apiGet<MixerStatus>(
+      `/mixer/status?denomination=${denominationParam}`,
+    );
     leafIndex = preStatus.nextLeafIndex;
 
     const { transaction: depositB64 } = await apiPost<MixerDepositTxResp>("/mixer/deposit", {
       depositor: input.mainWalletAddress,
       commitment: commitmentBundle.commitment.toString(),
+      denomination: denominationParam,
     });
     const depositTx = decodeBase64Tx(depositB64);
     const signed = await getInjectedSigner().signTransaction(depositTx);
@@ -301,6 +337,7 @@ export async function runPrivateDeposit(
       commitment: commitmentBundle.commitment.toString(),
       leafIndex,
       txSignature: mixerDepositSig,
+      denomination: denominationParam,
     });
   } catch (err) {
     // Best-effort — the server can still rehydrate from chain logs.
@@ -312,7 +349,9 @@ export async function runPrivateDeposit(
   onStep({ step: "build-tree", status: "active", message: "Reconstructing Merkle tree…" });
   let tree;
   try {
-    const list = await apiGet<MixerDepositList>("/mixer/deposits");
+    const list = await apiGet<MixerDepositList>(
+      `/mixer/deposits?denomination=${denominationParam}`,
+    );
     const ordered = [...list.deposits].sort((a, b) => a.leafIndex - b.leafIndex);
     const leaves = ordered.map((d) => BigInt(d.commitment));
     tree = await createMixerMerkleTree(undefined, leaves);
@@ -375,6 +414,7 @@ export async function runPrivateDeposit(
       nullifierHash: commitmentBundle.nullifierHash.toString(),
       recipient: stealth.publicKey,
       fee: fee.toString(),
+      denomination: denominationParam,
     });
     if (!result.success || !result.txSignature) {
       throw new Error(result.error ?? "relayer.withdraw failed");

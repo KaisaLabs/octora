@@ -76,4 +76,10 @@ pub enum ExecutorError {
 
     #[msg("Caller is not authorized for this admin instruction")]
     Unauthorized,
+
+    #[msg("Realised swap output below min_amount_out — slippage exceeded")]
+    SwapSlippageExceeded,
+
+    #[msg("Swap source pool must differ from LP target pool")]
+    SwapSourceEqualsTarget,
 }

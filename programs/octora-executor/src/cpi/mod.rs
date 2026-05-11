@@ -1,12 +1,12 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{
-    instruction::Instruction, program::invoke_signed, system_program, sysvar,
+    instruction::Instruction,
+    program::{invoke, invoke_signed},
+    system_program, sysvar,
 };
 
-pub mod damm;
 pub mod dlmm;
 
-pub use damm::*;
 pub use dlmm::*;
 
 use crate::errors::ExecutorError;
@@ -66,6 +66,22 @@ pub fn invoke_signed_ix(
     signer_seeds: &[&[&[u8]]],
 ) -> Result<()> {
     invoke_signed(ix, account_infos, signer_seeds).map_err(Into::into)
+}
+
+/// Plain CPI invoke (no PDA signers). Used by instructions whose only signer
+/// is the stealth wallet — the outer tx already carries that signature.
+pub fn invoke_ix(ix: &Instruction, account_infos: &[AccountInfo]) -> Result<()> {
+    invoke(ix, account_infos).map_err(Into::into)
+}
+
+/// Read the `amount` field (bytes 64..72) of an SPL Token / Token-2022 token
+/// account. Used for balance-delta slippage enforcement around CPIs whose
+/// internal `min_out` we don't fully trust.
+pub fn read_token_account_amount(token_account: &AccountInfo) -> Result<u64> {
+    let data = token_account.try_borrow_data()?;
+    require!(data.len() >= 165, ExecutorError::InvalidTokenAccount);
+    let amount_bytes: [u8; 8] = data[64..72].try_into().unwrap();
+    Ok(u64::from_le_bytes(amount_bytes))
 }
 
 /// Validate a token account's mint matches the expected mint.

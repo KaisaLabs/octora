@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import Fastify from "fastify";
 import { createMixerController } from "../mixer.controller";
 import {
+  AnonymitySetTooThinError,
   MixerPoolNotInitializedError,
   type MixerService,
 } from "../mixer.service";
@@ -37,7 +38,10 @@ function fakeService(over: Partial<MixerService> = {}): MixerService {
 
 async function bindController(service: MixerService) {
   const app = Fastify({ logger: false });
-  const controller = createMixerController(service);
+  // Resolver pattern: tests don't care about denomination dispatch, so the
+  // resolver returns the same fake service regardless of what the controller
+  // asks for.
+  const controller = createMixerController(() => service);
   app.get("/mixer/status", controller.getStatus);
   app.get("/mixer/deposits", controller.listDeposits);
   app.post("/mixer/deposit", controller.deposit);
@@ -155,6 +159,35 @@ describe("mixer controller", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/cannot convert|invalid|not.+number/i);
+
+    await app.close();
+  });
+
+  it("POST /mixer/withdraw returns 400 ANONYMITY_SET_TOO_THIN when the gate trips", async () => {
+    const service = fakeService({
+      buildWithdrawTransaction: vi.fn(async () => {
+        throw new AnonymitySetTooThinError(3, 20, 1_000_000_000n);
+      }),
+    } as Partial<MixerService>);
+    const app = await bindController(service);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/mixer/withdraw",
+      payload: {
+        signer: "Dep11111111111111111111111111111111111111111",
+        recipient: "Rec11111111111111111111111111111111111111111",
+        proofBytes: "AAAA",
+        publicInputsBytes: "AAAA",
+        nullifierHash: "1",
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error).toBe("ANONYMITY_SET_TOO_THIN");
+    expect(body.current).toBe(3);
+    expect(body.required).toBe(20);
+    expect(body.denomination).toBe("1000000000");
 
     await app.close();
   });

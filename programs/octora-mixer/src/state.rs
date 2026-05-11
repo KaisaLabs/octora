@@ -43,8 +43,8 @@ pub struct MixerPool {
 impl MixerPool {
     /// Account discriminator (8) + authority (32) + denomination (8) +
     /// next_leaf_index (4) + current_root_index (1) +
-    /// root_history (32 * 30 = 960) + filled_subtrees (32 * 20 = 640) +
-    /// is_paused (1) + bump (1) = 1655
+    /// root_history (32 * 256 = 8192) + filled_subtrees (32 * 20 = 640) +
+    /// is_paused (1) + bump (1) = 8887
     pub const SPACE: usize =
         8 + 32 + 8 + 4 + 1 + (32 * ROOT_HISTORY_SIZE) + (32 * TREE_LEVELS) + 1 + 1;
 
