@@ -35,8 +35,6 @@ interface Props {
   depositUsd: number;
   shape: DistributionShape;
   range: { lower: number; upper: number };
-  /** Token-decimals fallback when /api/prices doesn't return data. Optional. */
-  fallbackDecimals?: { tokenA: number; tokenB: number };
   /**
    * When the parent (PoolDetailView) already picked a mixer denomination,
    * pass it here so the modal skips its own denomination-select phase and
@@ -48,20 +46,26 @@ interface Props {
 type Phase = "denomination-select" | "preview" | "running" | "success" | "error";
 
 interface Breakdown {
-  usdA: number;
-  usdB: number;
-  tokenAmountA: number;
-  tokenAmountB: number;
-  amountX: bigint;
-  amountY: bigint;
-  hasPrices: boolean;
-  /** True when devnet 1:1 fallback was used to fill in missing oracle prices. */
+  /** Lamports the mixer will route to the stealth account, sourced from `selectedDenom`. */
+  solLamports: bigint;
+  /** Same amount, in SOL units, for display. */
+  solAmount: number;
+  /** USD value at current SOL price (0 if SOL price unavailable). */
+  usdEstimate: number;
+  /** True when /api/prices returned a usable SOL/USD quote. */
+  hasSolPrice: boolean;
+  /** True when neither pool-token had an oracle quote — used to detect
+   *  test-mint pools where the devnet helper UI should kick in. */
+  poolTokensMissingPrice: boolean;
+  /** True when the devnet 1:1 fallback filled in a missing SOL/USD quote. */
   usedDevnetFallback: boolean;
 }
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "/api";
 const RPC_URL =
   (import.meta.env.VITE_RPC_URL as string | undefined) ?? "https://api.devnet.solana.com";
+
+const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 /**
  * Devnet test mode — relaxes UX gates so dev pools (test mints with no
@@ -112,7 +116,6 @@ export function PrivateDepositModal({
   depositUsd,
   shape,
   range,
-  fallbackDecimals,
   preselectedDenominationLamports,
 }: Props) {
   const { wallet } = useSolana();
@@ -194,7 +197,7 @@ export function PrivateDepositModal({
     let cancelled = false;
     setPrices(null);
     setPricesError(null);
-    getPrices([pool.tokenAMint, pool.tokenBMint])
+    getPrices([pool.tokenAMint, pool.tokenBMint, SOL_MINT])
       .then((p) => {
         if (!cancelled) setPrices(p);
       })
@@ -255,67 +258,50 @@ export function PrivateDepositModal({
   );
 
   const breakdown = useMemo<Breakdown>(() => {
-    const usdA = (depositUsd * pool.allocation.tokenA) / 100;
-    const usdB = (depositUsd * pool.allocation.tokenB) / 100;
+    // Only SOL leaves the wallet — sized by the mixer denomination. The
+    // pool's `allocation` is irrelevant here: the on-chain deposit is
+    // single-sided SOL (see runPrivateDeposit's "add-liquidity" step),
+    // and the meme side accumulates organically as price moves.
+    const solLamports = selectedDenom ? BigInt(selectedDenom) : 0n;
+    const solAmount = Number(solLamports) / 1_000_000_000;
 
-    const priceA = prices?.[effective.tokenAMint];
-    const priceB = prices?.[effective.tokenBMint];
-    let usdPriceA = priceA?.usdPrice ?? 0;
-    let usdPriceB = priceB?.usdPrice ?? 0;
-    const decA =
-      priceA?.decimals ?? testTarget?.decimals ?? fallbackDecimals?.tokenA ?? DEVNET_FALLBACK_DECIMALS;
-    const decB =
-      priceB?.decimals ?? testTarget?.decimals ?? fallbackDecimals?.tokenB ?? DEVNET_FALLBACK_DECIMALS;
-
-    // Devnet shortcut: when the oracle has no quote (typical for test mints),
-    // pretend $1 = 1 token so the UI can complete the flow without a real
-    // price source. Mainnet builds never hit this branch.
+    let solUsdPrice = prices?.[SOL_MINT]?.usdPrice ?? 0;
     let usedDevnetFallback = false;
-    if (IS_DEVNET) {
-      if (usdPriceA <= 0) {
-        usdPriceA = 1;
-        usedDevnetFallback = true;
-      }
-      if (usdPriceB <= 0) {
-        usdPriceB = 1;
-        usedDevnetFallback = true;
-      }
+    if (IS_DEVNET && solUsdPrice <= 0) {
+      solUsdPrice = 1;
+      usedDevnetFallback = true;
     }
+    const usdEstimate = solAmount * solUsdPrice;
 
-    const tokenAmountA = usdPriceA > 0 ? usdA / usdPriceA : 0;
-    const tokenAmountB = usdPriceB > 0 ? usdB / usdPriceB : 0;
-
-    const amountX = BigInt(Math.floor(tokenAmountA * 10 ** decA));
-    const amountY = BigInt(Math.floor(tokenAmountB * 10 ** decB));
+    // We still glance at the pool-token oracle quotes — not for sizing,
+    // but to detect test-mint pools where the devnet helper UI should
+    // kick in (mint test tokens / bootstrap a relayer-owned pool).
+    const priceA = prices?.[effective.tokenAMint]?.usdPrice ?? 0;
+    const priceB = prices?.[effective.tokenBMint]?.usdPrice ?? 0;
+    const poolTokensMissingPrice = priceA <= 0 || priceB <= 0;
 
     return {
-      usdA,
-      usdB,
-      tokenAmountA,
-      tokenAmountB,
-      amountX,
-      amountY,
-      hasPrices: usdPriceA > 0 && usdPriceB > 0,
+      solLamports,
+      solAmount,
+      usdEstimate,
+      hasSolPrice: solUsdPrice > 0,
+      poolTokensMissingPrice,
       usedDevnetFallback,
     };
   }, [
     prices,
-    depositUsd,
-    pool.allocation.tokenA,
-    pool.allocation.tokenB,
+    selectedDenom,
     effective.tokenAMint,
     effective.tokenBMint,
-    testTarget?.decimals,
-    fallbackDecimals?.tokenA,
-    fallbackDecimals?.tokenB,
   ]);
 
   // Block submit when the genesis-hash check failed or the RPC is
   // unreachable (P1-35). The explainer modal does NOT block submit
   // (it's UX, not a security gate); we just open it on first deposit.
+  // Oracle prices are NOT a precondition — the on-chain deposit uses
+  // the fixed mixer denomination, not USD-derived amounts.
   const ready =
     wallet.connected &&
-    breakdown.hasPrices &&
     phase === "preview" &&
     !networkUnsafe &&
     selectedDenom !== null;
@@ -514,7 +500,6 @@ export function PrivateDepositModal({
           {phase === "preview" && (
             <PreviewBody
               pool={pool}
-              depositUsd={depositUsd}
               shape={shape}
               range={range}
               breakdown={breakdown}
@@ -654,7 +639,6 @@ function DenominationSelectBody({
 
 function PreviewBody({
   pool,
-  depositUsd,
   shape,
   range,
   breakdown,
@@ -669,7 +653,6 @@ function PreviewBody({
   onChangeDenomination,
 }: {
   pool: Pool;
-  depositUsd: number;
   shape: DistributionShape;
   range: { lower: number; upper: number };
   breakdown: Breakdown;
@@ -690,32 +673,36 @@ function PreviewBody({
   const displayLower = testTarget?.lowerBinId ?? range.lower;
   const displayUpper = testTarget?.upperBinId ?? range.upper;
   const binsCovered = Math.max(0, displayUpper - displayLower + 1);
+  // The non-SOL side of the pool — purely for the explanatory text below
+  // the SOL tile. SOL itself never appears as the "meme" side.
+  const memeSymbol = displayTokenA === "SOL" ? displayTokenB : displayTokenA;
+  const totalDisplay = breakdown.hasSolPrice
+    ? `$${breakdown.usdEstimate.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+    : "—";
 
   return (
     <div className="space-y-5 text-sm">
       <div>
         <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">You'll deposit</p>
-        <div className="mt-2 grid grid-cols-2 gap-3">
+        <div className="mt-2">
           <DepositTile
-            symbol={displayTokenA}
-            usd={breakdown.usdA}
-            tokens={breakdown.tokenAmountA}
-            placeholder={!breakdown.hasPrices}
-          />
-          <DepositTile
-            symbol={displayTokenB}
-            usd={breakdown.usdB}
-            tokens={breakdown.tokenAmountB}
-            placeholder={!breakdown.hasPrices}
+            symbol="SOL"
+            usd={breakdown.usdEstimate}
+            tokens={breakdown.solAmount}
+            placeholder={breakdown.solLamports === 0n}
           />
         </div>
+        <p className="mt-2 text-[11px] leading-5 text-muted-foreground/80">
+          Single-sided: only SOL leaves your wallet. {memeSymbol} accumulates
+          in your bins organically as price moves into them.
+        </p>
       </div>
 
       <dl className="space-y-2.5 rounded-xl border border-border bg-card/60 p-4 text-sm">
         <Row label="Pool" value={`${displayTokenA}/${displayTokenB}`} />
         <Row label="Shape" value={capitalize(shape)} />
         <Row label="Range" value={`${binsCovered} bins (${displayLower} → ${displayUpper})`} />
-        <Row label="Total" value={`$${depositUsd.toLocaleString()}`} />
+        <Row label="Total" value={totalDisplay} />
         {selectedDenomLamports && (
           <Row
             label="Mixer pool"
@@ -749,7 +736,7 @@ function PreviewBody({
         on-chain. Your main wallet never appears as the LP owner.
       </div>
 
-      {IS_DEVNET && (breakdown.usedDevnetFallback || testTarget) && (
+      {IS_DEVNET && (breakdown.poolTokensMissingPrice || breakdown.usedDevnetFallback || testTarget) && (
         <div className="space-y-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-xs leading-5 text-amber-200">
           <div className="flex items-center gap-1.5 font-medium text-amber-300">
             <FlaskConical className="h-3.5 w-3.5" />

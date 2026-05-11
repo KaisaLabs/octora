@@ -1,18 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Coins, Copy, Flame, Loader2, Minus } from "lucide-react";
-import { toast } from "sonner";
+import { ArrowLeft, ArrowRight, Copy, Loader2 } from "lucide-react";
 
 import type { DistributionShape, Pool } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BinLiquidityChart } from "@/components/octora/lp/BinLiquidityChart";
 import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
 import { PositionStatusPill } from "@/components/octora/lp/PositionStatusPill";
 import { PrivateDepositModal } from "@/components/octora/lp/PrivateDepositModal";
 import { AnonymityBadge } from "@/components/octora/lp/AnonymityBadge";
 import { usePoolBins } from "@/hooks/usePoolBins";
-import { useSolana } from "@/providers/SolanaProvider";
-import { runClaimFees, runWithdrawClose } from "@/lib/privateLifecycle";
 import { getPrices } from "@/lib/api";
 
 interface Props {
@@ -21,24 +17,9 @@ interface Props {
   onBack: () => void;
 }
 
-/**
- * Tri-state position presence shared by Claim and Withdraw panels.
- *
- * - "unknown" = haven't checked yet (no wallet click).
- * - "missing" = either /executor/pool-authority returned 404 on a previous
- *   click, OR the user just closed the position via withdraw-close.
- *   Both panels grey out their action button and show empty-state copy.
- * - "exists"  = at least one successful CPI happened this session against a
- *   live PoolAuthority. Buttons stay enabled.
- */
-type PositionStatus = "unknown" | "missing" | "exists";
-
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 export function PoolDetailView({ pool, presetShape, onBack }: Props) {
-  const [detailTab, setDetailTab] = useState("deposit");
-  const [positionStatus, setPositionStatus] = useState<PositionStatus>("unknown");
-
   // Selected mixer denomination drives both the deposit form (below) and the
   // allocation card (above). MVP is single-sided SOL only, so "allocation" =
   // "how much SOL the user is putting in" — represented as their chosen
@@ -115,31 +96,15 @@ export function PoolDetailView({ pool, presetShape, onBack }: Props) {
         </div>
       </div>
 
-      <Tabs value={detailTab} onValueChange={setDetailTab}>
-        <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-lg border border-border bg-secondary/60 p-1 sm:w-auto">
-          <TabsTrigger value="deposit" className="rounded-md px-4 py-2 text-sm data-[state=active]:bg-surface-elevated">Add liquidity</TabsTrigger>
-          <TabsTrigger value="claim" className="rounded-md px-4 py-2 text-sm data-[state=active]:bg-surface-elevated">Claim</TabsTrigger>
-          <TabsTrigger value="withdraw" className="rounded-md px-4 py-2 text-sm data-[state=active]:bg-surface-elevated">Withdraw</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="deposit" className="mt-4">
-          <DepositPanel
-            pool={pool}
-            presetShape={presetShape}
-            selectedDenomLamports={selectedDenomLamports}
-            onChangeDenom={(d, anonymity) => {
-              setSelectedDenomLamports(d);
-              setSelectedAnonymity(anonymity);
-            }}
-          />
-        </TabsContent>
-        <TabsContent value="claim" className="mt-4">
-          <ClaimPanel pool={pool} positionStatus={positionStatus} setPositionStatus={setPositionStatus} />
-        </TabsContent>
-        <TabsContent value="withdraw" className="mt-4">
-          <WithdrawPanel pool={pool} positionStatus={positionStatus} setPositionStatus={setPositionStatus} />
-        </TabsContent>
-      </Tabs>
+      <DepositPanel
+        pool={pool}
+        presetShape={presetShape}
+        selectedDenomLamports={selectedDenomLamports}
+        onChangeDenom={(d, anonymity) => {
+          setSelectedDenomLamports(d);
+          setSelectedAnonymity(anonymity);
+        }}
+      />
     </div>
   );
 }
@@ -367,275 +332,6 @@ function DepositPanel({
   );
 }
 
-function ClaimPanel({
-  pool,
-  positionStatus,
-  setPositionStatus,
-}: {
-  pool: Pool;
-  positionStatus: PositionStatus;
-  setPositionStatus: (s: PositionStatus) => void;
-}) {
-  const { wallet } = useSolana();
-  const fees = (parseFloat(pool.apr) / 365) * 30 * 100;
-  const [pending, setPending] = useState(false);
-  const [lastSig, setLastSig] = useState<string | null>(null);
-
-  const handleClaim = async () => {
-    if (!wallet.address) {
-      toast.error("Connect your wallet first.");
-      return;
-    }
-    setPending(true);
-    const t = toast.loading("Deriving stealth + locating your position…");
-    try {
-      const res = await runClaimFees({
-        mainWalletAddress: wallet.address,
-        poolAddress: pool.address,
-      });
-      setPositionStatus("exists");
-      setLastSig(res.signature);
-      toast.success(`Claimed. Funds → ${shorten(res.exitRecipient)}`, {
-        id: t,
-        description: shorten(res.signature),
-      });
-    } catch (err) {
-      if (isPositionMissingError(err)) {
-        setPositionStatus("missing");
-        toast.error(
-          "No private position in this pool yet. Open one from the Add Liquidity tab.",
-          { id: t },
-        );
-      } else {
-        toast.error(describeErr(err), { id: t });
-      }
-    } finally {
-      setPending(false);
-    }
-  };
-
-  return (
-    <section className="space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Earnings</p>
-          <h3 className="mt-1 text-xl font-semibold text-foreground sm:text-2xl">Claim fees & rewards</h3>
-        </div>
-        <Coins className="h-5 w-5 text-primary" />
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-3">
-        <ClaimTile label="Unclaimed fees" value={`$${fees.toFixed(2)}`} sub={pool.tokenA + " + " + pool.tokenB} />
-        <ClaimTile label="MET rewards" value="124.8 MET" sub="≈ $38.20" />
-        <ClaimTile label="Last claim" value="3 days ago" sub="Privately settled" />
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Button
-          variant="hero"
-          size="lg"
-          className="w-full justify-center rounded-xl"
-          onClick={handleClaim}
-          disabled={pending || !wallet.connected || positionStatus === "missing"}
-        >
-          {pending ? <Loader2 className="animate-spin" /> : <Coins />}
-          {pending ? "Claiming…" : positionStatus === "missing" ? "No position to claim" : "Claim fees"}
-        </Button>
-        <Button
-          variant="premium"
-          size="lg"
-          className="w-full justify-center rounded-xl"
-          disabled
-          // MAINNET_BLOCKER: MET rewards CPI not implemented. Disable and
-          // explain rather than wire to a fake handler. Pre-mainnet sweep:
-          // implement claim_rewards on the executor program + bridge here.
-          title="MET rewards claim is coming soon — for now this only claims swap fees."
-        >
-          <Flame />
-          Claim rewards
-        </Button>
-      </div>
-
-      {lastSig && (
-        <p className="text-xs leading-5 text-muted-foreground">
-          Last tx: <span className="font-mono text-foreground">{shorten(lastSig)}</span>
-        </p>
-      )}
-      <p className="text-xs leading-5 text-muted-foreground">
-        {!wallet.connected
-          ? "Connect your wallet to claim fees from your private position in this pool."
-          : positionStatus === "missing"
-            ? "No private position detected here. Open one from the Add Liquidity tab and try again."
-            : "Claim runs the on-chain dlmm_claim_fees CPI from your stealth wallet. Fees settle to your private exit address."}
-      </p>
-    </section>
-  );
-}
-
-function WithdrawPanel({
-  pool,
-  positionStatus,
-  setPositionStatus,
-}: {
-  pool: Pool;
-  positionStatus: PositionStatus;
-  setPositionStatus: (s: PositionStatus) => void;
-}) {
-  const { wallet } = useSolana();
-  const [pct, setPct] = useState(100);
-  const [pending, setPending] = useState(false);
-  const [lastSig, setLastSig] = useState<string | null>(null);
-  const positionValue = 12480;
-  const withdrawValue = (positionValue * pct) / 100;
-
-  const handleWithdraw = async () => {
-    if (!wallet.address) {
-      toast.error("Connect your wallet first.");
-      return;
-    }
-    if (pct !== 100) {
-      // MAINNET_BLOCKER: partial withdraws not implemented. The slider is
-      // cosmetic — runWithdrawClose always closes 100%. Pre-mainnet sweep:
-      // pass bps_to_remove from UI through to /executor/withdraw-close-tx.
-      toast.message("MVP exits 100% of the position. Partial withdraws are coming.");
-    }
-    setPending(true);
-    const t = toast.loading("Deriving stealth + locating your position…");
-    try {
-      const res = await runWithdrawClose({
-        mainWalletAddress: wallet.address,
-        poolAddress: pool.address,
-      });
-      // The position account is closed on a 100% bps exit, so the next
-      // claim/withdraw against this (wallet, pool) MUST find nothing on
-      // chain. Mark missing immediately so the UI doesn't have to wait
-      // for the next click to discover that.
-      setPositionStatus("missing");
-      setLastSig(res.signature);
-      toast.success(`Closed. Funds → ${shorten(res.exitRecipient)}`, {
-        id: t,
-        description: shorten(res.signature),
-      });
-    } catch (err) {
-      if (isPositionMissingError(err)) {
-        setPositionStatus("missing");
-        toast.error(
-          "No private position in this pool yet. Open one from the Add Liquidity tab.",
-          { id: t },
-        );
-      } else {
-        toast.error(describeErr(err), { id: t });
-      }
-    } finally {
-      setPending(false);
-    }
-  };
-
-  return (
-    <section className="space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Remove liquidity</p>
-          <h3 className="mt-1 text-xl font-semibold text-foreground sm:text-2xl">Withdraw from {pool.name}</h3>
-        </div>
-        <Minus className="h-5 w-5 text-primary" />
-      </div>
-
-      <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">Withdraw amount</p>
-          <p className="text-sm font-medium text-foreground">{pct}%</p>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={pct}
-          onChange={(e) => setPct(Number(e.target.value))}
-          className="mt-3 w-full accent-[hsl(var(--primary))]"
-        />
-        <div className="mt-3 flex flex-wrap gap-2">
-          {[25, 50, 75, 100].map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setPct(v)}
-              className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-                pct === v
-                  ? "border-primary/40 bg-surface-elevated text-foreground"
-                  : "border-border bg-card text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {v}%
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-3">
-        <ClaimTile label="Receive" value={`$${withdrawValue.toFixed(0)}`} sub="Estimated value" />
-        <ClaimTile
-          label={pool.tokenA}
-          value={`${((withdrawValue * pool.allocation.tokenA) / 100).toFixed(2)}`}
-          sub="Tokens"
-        />
-        <ClaimTile
-          label={pool.tokenB}
-          value={`${((withdrawValue * pool.allocation.tokenB) / 100).toFixed(2)}`}
-          sub="Tokens"
-        />
-      </div>
-
-      <Button
-        variant="hero"
-        size="lg"
-        className="w-full justify-center rounded-xl"
-        onClick={handleWithdraw}
-        disabled={pending || !wallet.connected || positionStatus === "missing"}
-      >
-        {pending ? <Loader2 className="animate-spin" /> : null}
-        {pending
-          ? "Withdrawing…"
-          : positionStatus === "missing"
-            ? "No position to withdraw"
-            : "Withdraw privately"}
-        {!pending && positionStatus !== "missing" && <ArrowRight />}
-      </Button>
-      {lastSig && (
-        <p className="text-xs leading-5 text-muted-foreground">
-          Last tx: <span className="font-mono text-foreground">{shorten(lastSig)}</span>
-        </p>
-      )}
-      <p className="text-xs leading-5 text-muted-foreground">
-        {!wallet.connected
-          ? "Connect your wallet to withdraw your private position in this pool."
-          : positionStatus === "missing"
-            ? "No private position detected (or it has been closed). Open a new one from the Add Liquidity tab."
-            : "Withdraw runs the on-chain dlmm_withdraw_close CPI from your stealth wallet. Funds return to your private exit address — your main wallet stays unlinked."}
-      </p>
-    </section>
-  );
-}
-
-function shorten(addr: string): string {
-  if (!addr || addr.length <= 12) return addr;
-  return `${addr.slice(0, 6)}…${addr.slice(-6)}`;
-}
-
-function describeErr(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
-/**
- * Recognise the "PoolAuthority not initialised" 404 from /executor/pool-authority
- * surfaced through privateLifecycle.ts as `Error("API 404: ...")`. Anything
- * else (network errors, tx failures, RPC outages) keeps the generic toast.
- */
-function isPositionMissingError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  return /\b404\b/.test(err.message) || /not initialised|not initialized|PoolAuthority/i.test(err.message);
-}
 
 function formatPrice(p: number): string {
   if (!Number.isFinite(p) || p === 0) return "—";
@@ -719,16 +415,6 @@ function InfoCard({ label, value, helper }: { label: string; value: string; help
       <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
       <p className="mt-2 text-sm font-medium text-foreground">{value}</p>
       <p className="mt-1 text-xs text-muted-foreground">{helper}</p>
-    </div>
-  );
-}
-
-function ClaimTile({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
-      <p className="mt-2 text-lg font-semibold text-foreground sm:text-xl">{value}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
     </div>
   );
 }

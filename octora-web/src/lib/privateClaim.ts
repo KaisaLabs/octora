@@ -5,6 +5,7 @@ import {
   type DerivedStealth,
 } from "./stealthVault";
 import { breadcrumb } from "./observability";
+import { NETWORK } from "./api";
 
 type MixerModule = typeof import("./mixer");
 let mixerModulePromise: Promise<MixerModule> | null = null;
@@ -353,7 +354,8 @@ export async function runPrivateClaim(
         `/dlmm/pools/${input.poolAddress}/swap-quote` +
           `?amountIn=${nonSolFee.toString()}` +
           `&swapForY=${swapForY}` +
-          `&allowedSlippageBps=${slippageBps}`,
+          `&allowedSlippageBps=${slippageBps}` +
+          `&network=${NETWORK}`,
       );
       const minOut = BigInt(quote.minOut);
       const { transaction } = await apiPost<BuildSwapTxResp>("/executor/dlmm-swap-tx", {

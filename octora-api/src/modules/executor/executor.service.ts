@@ -803,6 +803,7 @@ export class ExecutorService {
     stealthPubkey: string;
     lbPair: string;
     position: string;
+    positionPubkey: string;
     exitRecipient: string;
     /** On-chain DLMM position bin range — populated when the position account
      *  is decodable. The pool detail page uses this so the user doesn't have
@@ -873,6 +874,7 @@ export class ExecutorService {
       stealthPubkey: acct.stealthPubkey.toBase58(),
       lbPair: dlmm.lbPair.toBase58(),
       position: dlmm.position.toBase58(),
+      positionPubkey: dlmm.position.toBase58(),
       exitRecipient: acct.exitRecipient.toBase58(),
       ...extras,
     };
