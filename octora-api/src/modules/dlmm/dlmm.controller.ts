@@ -10,6 +10,7 @@ import {
   getVolumeHistory,
   getProtocolMetrics,
   getPoolBins,
+  getSwapQuote,
   MeteoraApiError,
 } from './dlmm.service'
 import {
@@ -206,6 +207,67 @@ export async function getSwapSourceHandler(
         message: err.message,
       })
     }
+    return handleError(err, reply)
+  }
+}
+
+interface SwapQuoteQuery extends NetworkQuery {
+  /** Lamports the user is paying in. Decimal string so non-SOL-priced
+   *  amounts like 1e15 meme-lamports survive JSON without precision loss. */
+  amountIn: string
+  /** Direction flag — tokenX → tokenY when true. */
+  swapForY: boolean
+  /** Slippage tolerance for the returned `minOut`, 0–2000 BPS. */
+  allowedSlippageBps?: number
+}
+
+/**
+ * GET /dlmm/pools/:address/swap-quote — compute expected output and
+ * slippage-protected `minOut` for a swap against the named DLMM pool.
+ *
+ * The browser orchestrators (privateExit, privateClaim) call this before
+ * submitting `dlmm_swap` so the on-chain `min_amount_out` arg reflects the
+ * actual pool depth and price impact for the user's swap size. Without
+ * this, the orchestrators previously used a 1:1 placeholder that caused
+ * every real swap for tokens with non-unit per-lamport value to revert.
+ */
+export async function getSwapQuoteHandler(
+  request: FastifyRequest<{
+    Params: AddressParams
+    Querystring: SwapQuoteQuery
+  }>,
+  reply: FastifyReply,
+) {
+  const network = request.query.network ?? 'devnet'
+  if (!request.query.amountIn) {
+    return reply.code(400).send({ message: 'amountIn is required (lamports as decimal string).' })
+  }
+  let amountIn: bigint
+  try {
+    amountIn = BigInt(request.query.amountIn)
+    if (amountIn <= 0n) throw new Error('amountIn must be > 0')
+  } catch (err) {
+    return reply
+      .code(400)
+      .send({ message: `amountIn must be a positive lamports integer: ${err instanceof Error ? err.message : 'invalid'}` })
+  }
+  // Fastify's query parser delivers booleans as strings — coerce so
+  // `swapForY=false` doesn't silently behave as truthy.
+  const swapForYRaw = request.query.swapForY as unknown
+  const swapForY =
+    swapForYRaw === true || swapForYRaw === 'true' || swapForYRaw === 1 || swapForYRaw === '1'
+  const allowedSlippageBps =
+    request.query.allowedSlippageBps !== undefined
+      ? Number(request.query.allowedSlippageBps)
+      : undefined
+  try {
+    const result = await getSwapQuote(request.params.address, network, {
+      amountIn,
+      swapForY,
+      allowedSlippageBps,
+    })
+    return reply.send(result)
+  } catch (err) {
     return handleError(err, reply)
   }
 }

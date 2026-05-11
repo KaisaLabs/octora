@@ -1,5 +1,6 @@
 import { Connection, PublicKey } from '@solana/web3.js'
 import DLMM from '@meteora-ag/dlmm'
+import { BN } from '@coral-xyz/anchor'
 import type {
   PoolSummary,
   PoolDetail,
@@ -802,4 +803,88 @@ function labelForMint(mint: PublicKey): string {
   const NATIVE_MINT_BS58 = 'So11111111111111111111111111111111111111112'
   if (mint.toBase58() === NATIVE_MINT_BS58) return 'SOL'
   return mint.toBase58().slice(0, 4)
+}
+
+export interface SwapQuoteResult {
+  /** Lamports the user is paying in. Echoed back for caller sanity-check. */
+  amountIn: string
+  /** Lamports the user receives after fees and slippage (pre-slippage estimate). */
+  expectedOut: string
+  /** Lamports the user is guaranteed to receive (after `allowedSlippageBps`). */
+  minOut: string
+  /** Slippage tolerance the quote was computed with, in BPS. */
+  allowedSlippageBps: number
+  /** Lamports of the input the swap actually consumed (partial fills possible). */
+  consumedIn: string
+  /** Total fee paid in output-token lamports. */
+  feeLamports: string
+  /** Decimal price impact, e.g. "0.0124" for 1.24 %. */
+  priceImpact: string
+  /** End price after the swap (output-token-per-input-token). */
+  endPrice: string
+  /** Direction echoed back: tokenX → tokenY when true. */
+  swapForY: boolean
+}
+
+/**
+ * Compute an unsigned swap quote against a DLMM pool.
+ *
+ * The browser orchestrators (privateExit, privateClaim) call this to learn
+ * how much SOL their stealth-held non-SOL balance will yield before they
+ * build the on-chain `dlmm_swap` tx — without an accurate quote the
+ * `min_amount_out` arg has to be set to 1 (no protection) or a placeholder
+ * that misreads tokens with non-unit per-lamport value, causing every swap
+ * for real meme tokens to revert.
+ *
+ * Wraps Meteora SDK's `swapQuote`. Returns lamports as decimal strings so
+ * the browser doesn't have to handle BNs.
+ */
+export async function getSwapQuote(
+  poolAddress: string,
+  network: Network,
+  opts: {
+    amountIn: bigint
+    swapForY: boolean
+    allowedSlippageBps?: number
+  },
+): Promise<SwapQuoteResult> {
+  const allowedSlippageBps = Math.max(0, Math.min(opts.allowedSlippageBps ?? 500, 2000))
+  let dlmm: any
+  try {
+    dlmm = await getDlmmInstance(poolAddress, network)
+  } catch (err: any) {
+    throw new MeteoraApiError(404, `DLMM pool not found: ${err?.message ?? String(err)}`)
+  }
+
+  // Pull a window of bin arrays around the active bin. `getBinArrayForSwap`
+  // walks outward from the active bin in the direction the swap will move
+  // the price, so the SDK's quote routine sees enough liquidity to reach
+  // the requested input size without an out-of-bins error on big swaps.
+  const binArrays = await dlmm.getBinArrayForSwap(opts.swapForY, 4)
+
+  const inAmountBn = new BN(opts.amountIn.toString())
+  const allowedSlippageBn = new BN(allowedSlippageBps)
+
+  let quote: any
+  try {
+    quote = dlmm.swapQuote(inAmountBn, opts.swapForY, allowedSlippageBn, binArrays, false)
+  } catch (err: any) {
+    throw new MeteoraApiError(
+      422,
+      `Swap quote failed: ${err?.message ?? String(err)}. ` +
+        'Pool may have insufficient liquidity in the requested direction.',
+    )
+  }
+
+  return {
+    amountIn: opts.amountIn.toString(),
+    expectedOut: quote.outAmount.toString(),
+    minOut: quote.minOutAmount.toString(),
+    allowedSlippageBps,
+    consumedIn: quote.consumedInAmount.toString(),
+    feeLamports: quote.fee.toString(),
+    priceImpact: quote.priceImpact.toString(),
+    endPrice: quote.endPrice.toString(),
+    swapForY: opts.swapForY,
+  }
 }

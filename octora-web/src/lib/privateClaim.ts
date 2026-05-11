@@ -162,6 +162,18 @@ interface BuildSwapTxResp {
   userTokenOut: string;
 }
 
+interface SwapQuoteResp {
+  amountIn: string;
+  expectedOut: string;
+  minOut: string;
+  allowedSlippageBps: number;
+  consumedIn: string;
+  feeLamports: string;
+  priceImpact: string;
+  endPrice: string;
+  swapForY: boolean;
+}
+
 interface MixerStatus {
   poolAddress: string;
   denomination: string;
@@ -301,8 +313,16 @@ export async function runPrivateClaim(
     }
     const nonSolFee = BigInt(xIsSol ? position.feeYLamports : position.feeXLamports);
     if (nonSolFee > 0n) {
-      const minOut = (nonSolFee * BigInt(10_000 - slippageBps)) / 10_000n;
       const swapForY = !xIsSol;
+      // Real on-chain quote — see privateExit.ts swap step for why a 1:1
+      // placeholder minOut is broken for meme tokens.
+      const quote = await apiGet<SwapQuoteResp>(
+        `/dlmm/pools/${input.poolAddress}/swap-quote` +
+          `?amountIn=${nonSolFee.toString()}` +
+          `&swapForY=${swapForY}` +
+          `&allowedSlippageBps=${slippageBps}`,
+      );
+      const minOut = BigInt(quote.minOut);
       const { transaction } = await apiPost<BuildSwapTxResp>("/executor/dlmm-swap-tx", {
         stealth: stealth.publicKey,
         lbPair: input.poolAddress,

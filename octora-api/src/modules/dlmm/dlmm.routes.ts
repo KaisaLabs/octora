@@ -10,6 +10,7 @@ import {
   getPoolBinsHandler,
   getProtocolMetricsHandler,
   getSwapSourceHandler,
+  getSwapQuoteHandler,
 } from './dlmm.controller'
 import {
   listPoolsSchema,
@@ -39,4 +40,8 @@ export async function registerDlmmRoutes(app: FastifyInstance) {
     { schema: { ...getSwapSourceSchema, tags } },
     getSwapSourceHandler,
   )
+  // No schema validation here yet — the route is shipped without a
+  // matching block in dlmm.schema.ts since the Meteora SDK quote payload
+  // is large and not yet stabilized for OpenAPI surface.
+  app.get('/dlmm/pools/:address/swap-quote', { schema: { tags } }, getSwapQuoteHandler)
 }

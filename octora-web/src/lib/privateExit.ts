@@ -188,6 +188,21 @@ interface BuildSwapTxResp {
   userTokenOut: string;
 }
 
+interface SwapQuoteResp {
+  amountIn: string;
+  expectedOut: string;
+  /** Lamports-out the swap is guaranteed to deliver post-slippage. Passed
+   *  as the on-chain `min_amount_out` arg so the swap reverts cleanly if
+   *  reality drifts further than `allowedSlippageBps` from the quote. */
+  minOut: string;
+  allowedSlippageBps: number;
+  consumedIn: string;
+  feeLamports: string;
+  priceImpact: string;
+  endPrice: string;
+  swapForY: boolean;
+}
+
 interface MixerStatus {
   poolAddress: string;
   denomination: string;
@@ -349,16 +364,23 @@ export async function runPrivateExit(
     const totalNonSol = nonSolBalanceLamports + nonSolFeeLamports;
 
     if (totalNonSol > 0n) {
-      // Quote: 1 unit non-SOL → priceY/priceX SOL (Meteora SDK). For MVP we
-      // accept zero (no slippage protection) when the API doesn't yet expose
-      // a quote endpoint. The on-chain min_amount_out is still set so the
-      // worst-case loss is bounded by the slippageBps applied below.
-      const expectedOutSol = totalNonSol; // 1:1 placeholder — real quote post-MVP
-      const minOut = (expectedOutSol * BigInt(10_000 - slippageBps)) / 10_000n;
-
       // swapForY = direction; on a SOL-paired pool with non-SOL on X,
       // swapForY=false (selling X for Y=SOL). On non-SOL on Y, swapForY=true.
       const swapForY = !xIsSol; // tokenIn = non-SOL side
+
+      // Real on-chain quote (Meteora SDK server-side). Crucial for meme
+      // tokens — the previous 1:1 placeholder set `minOut` to ~95% of the
+      // input meme-lamports, which is dramatically more than the swap can
+      // actually produce in SOL-lamports, so every swap reverted on the
+      // on-chain `min_amount_out` check.
+      const quote = await apiGet<SwapQuoteResp>(
+        `/dlmm/pools/${input.poolAddress}/swap-quote` +
+          `?amountIn=${totalNonSol.toString()}` +
+          `&swapForY=${swapForY}` +
+          `&allowedSlippageBps=${slippageBps}`,
+      );
+      const minOut = BigInt(quote.minOut);
+
       const { transaction } = await apiPost<BuildSwapTxResp>("/executor/dlmm-swap-tx", {
         stealth: stealth.publicKey,
         lbPair: input.poolAddress,
