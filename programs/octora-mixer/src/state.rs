@@ -60,11 +60,13 @@ pub struct MixerPool {
     pub bump: u8,
 
     /// Trailing padding for `#[repr(C)]` alignment to the struct's u64
-    /// alignment (8). Without this, the compiler adds an implicit pad
-    /// byte after `bump` to round the struct size up to a multiple of 8;
-    /// declaring it explicitly keeps the on-chain byte layout
-    /// deterministic and matches `SPACE` exactly.
-    pub _pad_end: [u8; 6],
+    /// alignment (8). The sum of preceding fields is 8879; we need to
+    /// reach a multiple of 8, so 9 bytes (→ 8888 total). Declaring this
+    /// explicitly keeps the on-chain byte layout deterministic and makes
+    /// `SPACE - 8 == size_of::<MixerPool>()` exactly — required by the
+    /// zero-copy `load_init`, which reads `size_of::<T>()` bytes after
+    /// the discriminator.
+    pub _pad_end: [u8; 9],
 }
 
 impl MixerPool {
@@ -72,9 +74,9 @@ impl MixerPool {
     /// offsets stay valid:
     ///   8 disc + 32 auth + 8 denom + 4 leaf_idx + 1 root_idx
     ///   + 8192 root_history + 640 filled_subtrees + 1 is_paused
-    ///   + 1 bump + 6 _pad_end = 8893
+    ///   + 1 bump + 9 _pad_end = 8896
     pub const SPACE: usize =
-        8 + 32 + 8 + 4 + 1 + (32 * ROOT_HISTORY_SIZE) + (32 * TREE_LEVELS) + 1 + 1 + 6;
+        8 + 32 + 8 + 4 + 1 + (32 * ROOT_HISTORY_SIZE) + (32 * TREE_LEVELS) + 1 + 1 + 9;
 
     /// Check if a root exists in the history ring buffer
     pub fn is_known_root(&self, root: &[u8; 32]) -> bool {
