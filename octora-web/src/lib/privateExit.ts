@@ -4,7 +4,9 @@ import {
   deriveStealthForPosition,
   type DerivedStealth,
 } from "./stealthVault";
+import { executeStealthSweep } from "./privateLifecycle";
 import { breadcrumb } from "./observability";
+import { NETWORK } from "./api";
 
 // Dynamic-import the mixer module the same way privateDeposit does so the
 // ~3MB snarkjs/circomlibjs bundle is paid only on the first private-exit
@@ -59,12 +61,22 @@ export type ExitStepKey =
   | "close"
   | "swap"
   | "pick-denomination"
+  | "dust-sweep"
   | "mixer-deposit"
   | "confirm-deposit"
   | "build-tree"
   | "prove"
   | "relayer-withdraw"
   | "done";
+
+/**
+ * "mixed" — full privacy round-trip through the mixer (default happy path).
+ * "swept" — post-close balance was below the smallest mixer denomination, so
+ *           the orchestrator skipped the mixer and signed a direct
+ *           SystemProgram.transfer stealth → main. The on-chain link is
+ *           visible; the user must have acknowledged this before close.
+ */
+export type ExitMode = "mixed" | "swept";
 
 export interface ExitStepEvent {
   step: ExitStepKey;
@@ -88,23 +100,72 @@ export interface PrivateExitInput {
   positionId?: string;
   /** Override slippage on the swap-to-SOL leg in BPS (0–2000). Defaults to 500. */
   slippageBps?: number;
+  /**
+   * Explicit user opt-in to the non-private dust sweep fallback. When `false`
+   * and the post-close balance is below the smallest mixer denomination the
+   * orchestrator throws with the original "below smallest" error so the user
+   * can decide. When `true` the orchestrator transparently sweeps stealth →
+   * main (revealing the link) and returns `mode: "swept"`. The UI surfaces
+   * this choice via the modal's pre-flight ack checkbox.
+   */
+  allowDustSweep?: boolean;
 }
 
 export interface PrivateExitResult {
-  /** Withdraw-close on-chain signature. */
-  closeSignature: string;
-  /** Swap leg signature (null when the position closed to pure SOL). */
+  /** "mixed" (full privacy round-trip) or "swept" (dust fallback, link revealed). */
+  mode: ExitMode;
+  /** Withdraw-close on-chain signature. Null when this run re-entered a
+   *  flow whose close already landed in a previous attempt (PoolAuthority
+   *  was missing at start). */
+  closeSignature: string | null;
+  /** Swap leg signature. Null when the position closed to pure SOL, or
+   *  when close was skipped as already-done. */
   swapSignature: string | null;
-  /** Mixer deposit signature. */
-  mixerDepositSignature: string;
-  /** Relayer-broadcast withdraw signature — funds land on main wallet here. */
-  relayerWithdrawSignature: string;
-  /** Final lamports credited to the main wallet (denom − relayer fee). */
+  /** Mixer deposit signature — present when mode === "mixed". */
+  mixerDepositSignature: string | null;
+  /** Relayer-broadcast withdraw signature — present when mode === "mixed". */
+  relayerWithdrawSignature: string | null;
+  /** Direct stealth → main transfer signature — present when mode === "swept". */
+  sweepSignature: string | null;
+  /** Final lamports credited to the main wallet. */
   fundedLamports: string;
   /** Lamports left at the stealth wallet (residue below smallest denom). */
   residueLamports: string;
-  /** Denomination (lamports) chosen to route through the mixer. */
-  selectedDenominationLamports: string;
+  /** Denomination chosen to route through the mixer — null in swept mode. */
+  selectedDenominationLamports: string | null;
+}
+
+/** Pre-flight estimate of recoverable SOL. Pure read — no signatures, no
+ *  transactions. Used by the UI to warn the user before close when the
+ *  result will fall below the smallest mixer denomination. */
+export interface ExitPreflightEstimate {
+  /** Conservative estimate of SOL that will land on the stealth after
+   *  close + swap. Lamports. */
+  estimatedRecoverableLamports: string;
+  /** Smallest mixer denomination advertised by /relayer/info. */
+  smallestDenominationLamports: string;
+  /** True when the estimate is below smallest denom — UI shows dust warning. */
+  willBeDust: boolean;
+  /** Stealth pubkey — handy for the UI to show. */
+  stealthPubkey: string;
+  /** True when the on-chain PoolAuthority has already been reaped (a prior
+   *  withdraw_close ran) and the SOL is simply sitting at the stealth
+   *  wallet. In this state the orchestrator skips close + swap; the only
+   *  remaining work is mixer round-trip or dust sweep. */
+  positionAlreadyClosed: boolean;
+}
+
+/** The /executor/pool-authority endpoint returns 404 when the on-chain
+ *  PoolAuthority account doesn't exist — either it was never opened, or it
+ *  was reaped by a prior withdraw_close. Both look the same to the client;
+ *  the orchestrator/UI treat them as "no live position" and offer the user
+ *  the sweep / mixer-only path against whatever's sitting at the stealth. */
+function isPoolAuthorityMissingError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return (
+    err.message.includes("API 404") ||
+    err.message.includes("PoolAuthority not initialised")
+  );
 }
 
 interface SignTransactionProvider {
@@ -317,60 +378,89 @@ export async function runPrivateExit(
   });
 
   // ── 3. position state — read mints + balances so we know whether to swap ─
+  // PoolAuthority can legitimately be missing (404) when a prior run already
+  // landed the close on-chain but failed at the mixer step. In that state the
+  // SOL is sitting at the stealth wallet and the only work left is mixer (or
+  // dust-sweep); steps 4 + 5 are no-ops.
   onStep({ step: "position-state", status: "active", message: "Reading position…" });
-  let position: PositionStateView;
-  let poolAuthority: PoolAuthorityInfo;
-  let usePoolConfig: TestPairConfig;
+  let position: PositionStateView | null = null;
+  let poolAuthority: PoolAuthorityInfo | null = null;
+  let usePoolConfig: TestPairConfig | null = null;
+  let positionAlreadyClosed = false;
   try {
-    // pool-authority gives us the on-chain positionPubkey and validates the
-    // exit_recipient invariant in one shot — no need for the caller to
-    // remember positionPubkey from the original deposit flow.
-    poolAuthority = await apiGet<PoolAuthorityInfo>(
-      `/executor/pool-authority?stealth=${stealth.publicKey}&lbPair=${input.poolAddress}`,
-    );
-    position = await apiGet<PositionStateView>(
-      `/executor/position-state?lbPair=${input.poolAddress}&positionPubkey=${poolAuthority.positionPubkey}`,
-    );
-    // Privacy hard-stop: if exit_recipient drifted off-stealth (shouldn't be
-    // possible since Day 1, but the on-chain PoolAuthority is the source
-    // of truth) we refuse — sending fees to main directly would link them.
-    if (poolAuthority.exitRecipient !== stealth.publicKey) {
-      throw new Error(
-        `exit_recipient is ${poolAuthority.exitRecipient}, expected ${stealth.publicKey}. ` +
-          "Refusing — private exit requires exit_recipient = stealth.",
+    try {
+      poolAuthority = await apiGet<PoolAuthorityInfo>(
+        `/executor/pool-authority?stealth=${stealth.publicKey}&lbPair=${input.poolAddress}`,
       );
+    } catch (err) {
+      if (!isPoolAuthorityMissingError(err)) throw err;
+      positionAlreadyClosed = true;
     }
-    usePoolConfig = await apiPost<TestPairConfig>("/executor/use-pool", {
-      lbPair: input.poolAddress,
-      width: position.upperBinId - position.lowerBinId + 1,
-      lowerBinId: position.lowerBinId,
-    });
+
+    if (poolAuthority) {
+      position = await apiGet<PositionStateView>(
+        `/executor/position-state?lbPair=${input.poolAddress}&positionPubkey=${poolAuthority.positionPubkey}`,
+      );
+      // Privacy hard-stop: if exit_recipient drifted off-stealth (shouldn't be
+      // possible since Day 1, but the on-chain PoolAuthority is the source
+      // of truth) we refuse — sending fees to main directly would link them.
+      if (poolAuthority.exitRecipient !== stealth.publicKey) {
+        throw new Error(
+          `exit_recipient is ${poolAuthority.exitRecipient}, expected ${stealth.publicKey}. ` +
+            "Refusing — private exit requires exit_recipient = stealth.",
+        );
+      }
+      usePoolConfig = await apiPost<TestPairConfig>("/executor/use-pool", {
+        lbPair: input.poolAddress,
+        width: position.upperBinId - position.lowerBinId + 1,
+        lowerBinId: position.lowerBinId,
+      });
+    }
   } catch (err) {
     onStep({ step: "position-state", status: "error", message: describe(err) });
     throw err;
   }
-  onStep({ step: "position-state", status: "ok", data: { lbPair: usePoolConfig.lbPair } });
+  onStep({
+    step: "position-state",
+    status: "ok",
+    data: positionAlreadyClosed
+      ? { alreadyClosed: true }
+      : { lbPair: usePoolConfig!.lbPair },
+  });
 
   // ── 4. dlmm_withdraw_close — proceeds land at stealth ATAs ────────
-  onStep({ step: "close", status: "active", message: "Closing position…" });
-  let closeSig: string;
-  try {
-    const { transaction } = await apiPost<{ transaction: string }>("/executor/withdraw-close-tx", {
-      stealth: stealth.publicKey,
-      config: usePoolConfig,
+  let closeSig: string | null = null;
+  if (positionAlreadyClosed) {
+    onStep({
+      step: "close",
+      status: "ok",
+      message: "Position was already closed by a prior run — skipping.",
     });
-    const tx = decodeBase64Tx(transaction);
-    tx.partialSign(stealth.keypair);
-    closeSig = await connection.sendRawTransaction(tx.serialize(), {
-      skipPreflight: false,
-      preflightCommitment: "confirmed",
+    onStep({
+      step: "swap",
+      status: "ok",
+      message: "Already consolidated by the prior run — skipping.",
     });
-    await waitForConfirmation(connection, closeSig, tx.recentBlockhash!);
-  } catch (err) {
-    onStep({ step: "close", status: "error", message: describe(err) });
-    throw err;
+  } else {
+    onStep({ step: "close", status: "active", message: "Closing position…" });
+    try {
+      const { transaction } = await apiPost<{ transaction: string }>("/executor/withdraw-close-tx", {
+        stealth: stealth.publicKey,
+        config: usePoolConfig!,
+      });
+      const tx = decodeBase64Tx(transaction);
+      tx.partialSign(stealth.keypair);
+      closeSig = await connection.sendRawTransaction(tx.serialize(), {
+        skipPreflight: false,
+        preflightCommitment: "confirmed",
+      });
+      await waitForConfirmation(connection, closeSig, tx.recentBlockhash!);
+    } catch (err) {
+      onStep({ step: "close", status: "error", message: describe(err) });
+      throw err;
+    }
+    onStep({ step: "close", status: "ok", data: { signature: closeSig } });
   }
-  onStep({ step: "close", status: "ok", data: { signature: closeSig } });
 
   // ── 5. swap any non-SOL output to SOL via the same LP pool ───────
   // Single-sided SOL positions almost always close to a mix of SOL +
@@ -378,11 +468,12 @@ export async function runPrivateExit(
   // through the bins. We swap that to SOL on the same lb_pair (per plan
   // §0, the same-pool fallback case). The slippage cap bounds the
   // self-front-run impact on this swap.
-  onStep({ step: "swap", status: "active", message: "Consolidating to SOL…" });
   let swapSig: string | null = null;
+  if (!positionAlreadyClosed) {
+    onStep({ step: "swap", status: "active", message: "Consolidating to SOL…" });
   try {
-    const xIsSol = position.tokenXMint === NATIVE_MINT;
-    const yIsSol = position.tokenYMint === NATIVE_MINT;
+    const xIsSol = position!.tokenXMint === NATIVE_MINT;
+    const yIsSol = position!.tokenYMint === NATIVE_MINT;
     if (!xIsSol && !yIsSol) {
       throw new Error(
         "Position is not SOL-paired. MVP only supports SOL-paired pools — " +
@@ -391,8 +482,8 @@ export async function runPrivateExit(
     }
     // The non-SOL side balance is whatever the close moved out of bins +
     // accrued fees on that side. We swap the full non-SOL balance.
-    const nonSolBalanceLamports = BigInt(xIsSol ? position.totalYLamports : position.totalXLamports);
-    const nonSolFeeLamports = BigInt(xIsSol ? position.feeYLamports : position.feeXLamports);
+    const nonSolBalanceLamports = BigInt(xIsSol ? position!.totalYLamports : position!.totalXLamports);
+    const nonSolFeeLamports = BigInt(xIsSol ? position!.feeYLamports : position!.feeXLamports);
     const totalNonSol = nonSolBalanceLamports + nonSolFeeLamports;
 
     if (totalNonSol > 0n) {
@@ -409,7 +500,8 @@ export async function runPrivateExit(
         `/dlmm/pools/${input.poolAddress}/swap-quote` +
           `?amountIn=${totalNonSol.toString()}` +
           `&swapForY=${swapForY}` +
-          `&allowedSlippageBps=${slippageBps}`,
+          `&allowedSlippageBps=${slippageBps}` +
+          `&network=${NETWORK}`,
       );
       const minOut = BigInt(quote.minOut);
 
@@ -432,13 +524,15 @@ export async function runPrivateExit(
     onStep({ step: "swap", status: "error", message: describe(err) });
     throw err;
   }
-  onStep({ step: "swap", status: "ok", data: { signature: swapSig } });
+    onStep({ step: "swap", status: "ok", data: { signature: swapSig } });
+  }
 
   // ── 6. pick the largest denomination that fits in stealth's balance ─
   onStep({ step: "pick-denomination", status: "active", message: "Selecting mixer pool…" });
-  let chosenDenom: bigint;
+  let chosenDenom: bigint | null = null;
   let stealthBalanceLamports: bigint;
   let residueLamports: bigint;
+  let needsDustSweep = false;
   try {
     stealthBalanceLamports = BigInt(
       await connection.getBalance(new PublicKey(stealth.publicKey)),
@@ -452,13 +546,21 @@ export async function runPrivateExit(
     }
     const fits = availableDenoms.find((d) => d <= available);
     if (!fits) {
-      throw new Error(
-        `Stealth has ${available} lamports available — below smallest mixer denomination ` +
-          `${availableDenoms[availableDenoms.length - 1]}. Try wait + claim, or sweep manually.`,
-      );
+      // Post-close dust. Either fall through to the non-private sweep (when
+      // the user pre-acknowledged it in the modal) or throw with the original
+      // message so the caller can prompt for consent.
+      if (!input.allowDustSweep) {
+        throw new Error(
+          `Stealth has ${available} lamports available — below smallest mixer denomination ` +
+            `${availableDenoms[availableDenoms.length - 1]}. Try wait + claim, or sweep manually.`,
+        );
+      }
+      needsDustSweep = true;
+      residueLamports = 0n; // full balance leaves the stealth in the sweep
+    } else {
+      chosenDenom = fits;
+      residueLamports = stealthBalanceLamports - chosenDenom;
     }
-    chosenDenom = fits;
-    residueLamports = stealthBalanceLamports - chosenDenom;
   } catch (err) {
     onStep({ step: "pick-denomination", status: "error", message: describe(err) });
     throw err;
@@ -466,11 +568,57 @@ export async function runPrivateExit(
   onStep({
     step: "pick-denomination",
     status: "ok",
-    data: {
-      denominationLamports: chosenDenom.toString(),
-      residueLamports: residueLamports.toString(),
-    },
+    data: needsDustSweep
+      ? { mode: "swept", reason: "post-close balance below smallest denomination" }
+      : {
+          denominationLamports: chosenDenom!.toString(),
+          residueLamports: residueLamports.toString(),
+        },
   });
+
+  // ── 6a. dust-sweep fallback — bypass the mixer entirely ─────────────
+  if (needsDustSweep) {
+    onStep({
+      step: "dust-sweep",
+      status: "active",
+      message: "Sweeping non-privately to main wallet…",
+    });
+    let sweepResult;
+    try {
+      sweepResult = await executeStealthSweep({
+        stealth,
+        mainWalletAddress: input.mainWalletAddress,
+      });
+    } catch (err) {
+      onStep({ step: "dust-sweep", status: "error", message: describe(err) });
+      throw err;
+    }
+    onStep({
+      step: "dust-sweep",
+      status: "ok",
+      data: {
+        signature: sweepResult.signature ?? "",
+        sweptLamports: sweepResult.sweptLamports,
+      },
+    });
+
+    const sweptResult: PrivateExitResult = {
+      mode: "swept",
+      closeSignature: closeSig,
+      swapSignature: swapSig,
+      mixerDepositSignature: null,
+      relayerWithdrawSignature: null,
+      sweepSignature: sweepResult.signature,
+      fundedLamports: sweepResult.sweptLamports,
+      residueLamports: sweepResult.remainingLamports,
+      selectedDenominationLamports: null,
+    };
+    onStep({ step: "done", status: "ok", data: sweptResult as unknown as Record<string, unknown> });
+    return sweptResult;
+  }
+
+  // Past this point chosenDenom is set — the mixed path runs.
+  const denomForMixer = chosenDenom!;
 
   // ── 7. mixer deposit ─────────────────────────────────────────────
   onStep({ step: "mixer-deposit", status: "active", message: "Depositing into mixer…" });
@@ -479,7 +627,7 @@ export async function runPrivateExit(
   let leafIndex: number;
   try {
     commitmentBundle = await generateCommitment();
-    const denomParam = chosenDenom.toString();
+    const denomParam = denomForMixer.toString();
 
     const preStatus = await apiGet<MixerStatus>(
       `/mixer/status?denomination=${denomParam}`,
@@ -515,7 +663,7 @@ export async function runPrivateExit(
       commitment: commitmentBundle.commitment.toString(),
       leafIndex,
       txSignature: mixerDepositSig,
-      denomination: chosenDenom.toString(),
+      denomination: denomForMixer.toString(),
     });
   } catch (err) {
     // Non-fatal: hydrateFromChain will pick this up on the next server scan.
@@ -528,7 +676,7 @@ export async function runPrivateExit(
   let tree;
   try {
     const list = await apiGet<MixerDepositList>(
-      `/mixer/deposits?denomination=${chosenDenom.toString()}`,
+      `/mixer/deposits?denomination=${denomForMixer.toString()}`,
     );
     const ordered = [...list.deposits].sort((a, b) => a.leafIndex - b.leafIndex);
     const leaves = ordered.map((d) => BigInt(d.commitment));
@@ -596,7 +744,7 @@ export async function runPrivateExit(
       nullifierHash: commitmentBundle.nullifierHash.toString(),
       recipient: input.mainWalletAddress,
       fee: fee.toString(),
-      denomination: chosenDenom.toString(),
+      denomination: denomForMixer.toString(),
     });
     if (!result.success || !result.txSignature) {
       throw new Error(result.error ?? "relayer.withdraw failed");
@@ -614,13 +762,15 @@ export async function runPrivateExit(
   });
 
   const result: PrivateExitResult = {
+    mode: "mixed",
     closeSignature: closeSig,
     swapSignature: swapSig,
     mixerDepositSignature: mixerDepositSig,
     relayerWithdrawSignature: relayerSig,
+    sweepSignature: null,
     fundedLamports,
     residueLamports: residueLamports.toString(),
-    selectedDenominationLamports: chosenDenom.toString(),
+    selectedDenominationLamports: denomForMixer.toString(),
   };
   onStep({ step: "done", status: "ok", data: result as unknown as Record<string, unknown> });
   return result;
@@ -636,6 +786,123 @@ async function waitForConfirmation(
     { signature, blockhash, lastValidBlockHeight },
     "confirmed",
   );
+}
+
+/**
+ * Read-only estimate of how much SOL a private exit will recover.
+ *
+ * No wallet popup — we already know the stealth pubkey from the stored
+ * position, so we can hit /executor/pool-authority + /executor/position-state
+ * + /dlmm/pools/{pool}/swap-quote without deriving. The estimate is
+ * conservative (uses the swap quote's `minOut`, which already factors in
+ * slippage) so a "willBeDust=true" prediction is sticky: if we say it'll be
+ * dust, the actual close will also be dust. The reverse is not guaranteed —
+ * a non-dust prediction can still hit dust if slippage worsens, which is
+ * exactly why the orchestrator also implements the post-close fallback.
+ */
+export async function preflightEstimateExit(args: {
+  stealthPubkey: string;
+  poolAddress: string;
+  slippageBps?: number;
+}): Promise<ExitPreflightEstimate> {
+  const slippageBps = args.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
+
+  const relayerInfo = await apiGet<RelayerInfo>("/relayer/info");
+  const availableDenoms = (relayerInfo.pools ?? [
+    { denomination: relayerInfo.denominationLamports, mixerPoolAddress: relayerInfo.mixerPoolAddress },
+  ])
+    .map((p) => BigInt(p.denomination))
+    .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  const smallestDenom = availableDenoms[availableDenoms.length - 1];
+
+  let poolAuthority: PoolAuthorityInfo | null = null;
+  try {
+    poolAuthority = await apiGet<PoolAuthorityInfo>(
+      `/executor/pool-authority?stealth=${args.stealthPubkey}&lbPair=${args.poolAddress}`,
+    );
+  } catch (err) {
+    if (!isPoolAuthorityMissingError(err)) throw err;
+  }
+
+  // Position already closed: PoolAuthority was reaped by a prior
+  // withdraw_close. The recoverable amount is whatever SOL is currently
+  // sitting at the stealth wallet (less the rent reserve the orchestrator
+  // also holds back at runtime).
+  if (!poolAuthority) {
+    const connection = new Connection(RPC_URL, "confirmed");
+    const balance = BigInt(
+      await connection.getBalance(new PublicKey(args.stealthPubkey)),
+    );
+    const estimated =
+      balance > STEALTH_RESERVE_LAMPORTS ? balance - STEALTH_RESERVE_LAMPORTS : 0n;
+    return {
+      estimatedRecoverableLamports: estimated.toString(),
+      smallestDenominationLamports: smallestDenom.toString(),
+      willBeDust: estimated < smallestDenom,
+      stealthPubkey: args.stealthPubkey,
+      positionAlreadyClosed: true,
+    };
+  }
+
+  const position = await apiGet<PositionStateView>(
+    `/executor/position-state?lbPair=${args.poolAddress}&positionPubkey=${poolAuthority.positionPubkey}`,
+  );
+
+  const xIsSol = position.tokenXMint === NATIVE_MINT;
+  const yIsSol = position.tokenYMint === NATIVE_MINT;
+  // Non-SOL-paired pools are out of MVP scope; defer the actual error to the
+  // run path and pretend the estimate isn't dust so the UI doesn't lie about
+  // the recovery amount being 0.
+  if (!xIsSol && !yIsSol) {
+    return {
+      estimatedRecoverableLamports: "0",
+      smallestDenominationLamports: smallestDenom.toString(),
+      willBeDust: false,
+      stealthPubkey: args.stealthPubkey,
+      positionAlreadyClosed: false,
+    };
+  }
+
+  const solOnHand =
+    BigInt(xIsSol ? position.totalXLamports : position.totalYLamports) +
+    BigInt(xIsSol ? position.feeXLamports : position.feeYLamports);
+  const nonSolOnHand =
+    BigInt(xIsSol ? position.totalYLamports : position.totalXLamports) +
+    BigInt(xIsSol ? position.feeYLamports : position.feeXLamports);
+
+  let swapOut = 0n;
+  if (nonSolOnHand > 0n) {
+    try {
+      const swapForY = !xIsSol;
+      const quote = await apiGet<SwapQuoteResp>(
+        `/dlmm/pools/${args.poolAddress}/swap-quote` +
+          `?amountIn=${nonSolOnHand.toString()}` +
+          `&swapForY=${swapForY}` +
+          `&allowedSlippageBps=${slippageBps}` +
+          `&network=${NETWORK}`,
+      );
+      swapOut = BigInt(quote.minOut);
+    } catch {
+      // Swap quote unavailable — conservatively assume zero SOL from the
+      // non-SOL side. That over-predicts dust, which is the safer bias.
+      swapOut = 0n;
+    }
+  }
+
+  // Subtract the rent-style reserve we leave on stealth so the comparison
+  // matches what the live orchestrator will actually have available at the
+  // pick-denomination step.
+  const estimated = solOnHand + swapOut > STEALTH_RESERVE_LAMPORTS
+    ? solOnHand + swapOut - STEALTH_RESERVE_LAMPORTS
+    : 0n;
+
+  return {
+    estimatedRecoverableLamports: estimated.toString(),
+    smallestDenominationLamports: smallestDenom.toString(),
+    willBeDust: estimated < smallestDenom,
+    stealthPubkey: args.stealthPubkey,
+    positionAlreadyClosed: false,
+  };
 }
 
 function describe(err: unknown): string {

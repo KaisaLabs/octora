@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Check, ExternalLink, Loader2, ShieldCheck, X } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, ExternalLink, Loader2, ShieldCheck, X } from "lucide-react";
 
 import {
   Dialog,
@@ -10,7 +10,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { useSolana } from "@/providers/SolanaProvider";
 import {
+  preflightEstimateExit,
   runPrivateExit,
+  type ExitPreflightEstimate,
   type ExitStepEvent,
   type ExitStepKey,
   type PrivateExitResult,
@@ -48,6 +50,7 @@ const STEP_LABELS: Record<ExitStepKey, string> = {
   close: "Close LP position",
   swap: "Swap non-SOL → SOL",
   "pick-denomination": "Select mixer pool",
+  "dust-sweep": "Sweep dust to main wallet",
   "mixer-deposit": "Deposit into mixer",
   "confirm-deposit": "Record deposit",
   "build-tree": "Reconstruct Merkle tree",
@@ -56,7 +59,7 @@ const STEP_LABELS: Record<ExitStepKey, string> = {
   done: "Done",
 };
 
-const STEP_ORDER: ExitStepKey[] = [
+const STEP_ORDER_MIXED: ExitStepKey[] = [
   "derive",
   "relayer-info",
   "position-state",
@@ -70,6 +73,16 @@ const STEP_ORDER: ExitStepKey[] = [
   "relayer-withdraw",
 ];
 
+const STEP_ORDER_SWEPT: ExitStepKey[] = [
+  "derive",
+  "relayer-info",
+  "position-state",
+  "close",
+  "swap",
+  "pick-denomination",
+  "dust-sweep",
+];
+
 export function PrivateExitModal({ open, onOpenChange, position }: Props) {
   const { wallet } = useSolana();
 
@@ -81,6 +94,7 @@ export function PrivateExitModal({ open, onOpenChange, position }: Props) {
     close: "pending",
     swap: "pending",
     "pick-denomination": "pending",
+    "dust-sweep": "pending",
     "mixer-deposit": "pending",
     "confirm-deposit": "pending",
     "build-tree": "pending",
@@ -92,6 +106,14 @@ export function PrivateExitModal({ open, onOpenChange, position }: Props) {
   const [activeMessage, setActiveMessage] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [result, setResult] = useState<PrivateExitResult | null>(null);
+  const [preflight, setPreflight] = useState<
+    | { status: "loading" }
+    | { status: "ok"; estimate: ExitPreflightEstimate }
+    | { status: "error"; message: string }
+  >({ status: "loading" });
+  /** Explicit user ack of the link-revealing dust sweep. Required before the
+   *  "Exit" button enables when the pre-flight predicts dust. */
+  const [dustAck, setDustAck] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -100,7 +122,29 @@ export function PrivateExitModal({ open, onOpenChange, position }: Props) {
     setActiveMessage("");
     setErrorMessage("");
     setResult(null);
-  }, [open]);
+    setPreflight({ status: "loading" });
+    setDustAck(false);
+
+    let cancelled = false;
+    preflightEstimateExit({
+      stealthPubkey: position.stealthPubkey,
+      poolAddress: position.poolAddress,
+    })
+      .then((estimate) => {
+        if (!cancelled) setPreflight({ status: "ok", estimate });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setPreflight({
+            status: "error",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, position.stealthPubkey, position.poolAddress]);
 
   const handleStep = (event: ExitStepEvent) => {
     setStepStatuses((prev) => ({
@@ -124,6 +168,10 @@ export function PrivateExitModal({ open, onOpenChange, position }: Props) {
           poolAddress: position.poolAddress,
           positionId:
             position.derivationVersion === "v1" ? undefined : position.positionId,
+          // The user pre-acknowledged the link-revealing sweep when the
+          // pre-flight predicted dust. Pass it through so the orchestrator's
+          // dust fallback engages instead of throwing.
+          allowDustSweep: dustAck,
         },
         handleStep,
       );
@@ -132,8 +180,12 @@ export function PrivateExitModal({ open, onOpenChange, position }: Props) {
       // Persist the closed-state locally so the portfolio drops the
       // position from "active" and surfaces the withdraw receipt.
       try {
+        // For mixed mode the relayer-withdraw tx is the "funds landed" sig;
+        // for the dust-sweep fallback the sweep tx is. Either way the funds
+        // are now at the main wallet, so the position record is closed.
         markLocalPositionClosed(wallet.address, position.positionId, {
-          signature: res.relayerWithdrawSignature,
+          signature:
+            res.relayerWithdrawSignature ?? res.sweepSignature ?? undefined,
           recipient: wallet.address,
         });
       } catch {
@@ -150,6 +202,28 @@ export function PrivateExitModal({ open, onOpenChange, position }: Props) {
     onOpenChange(false);
   };
 
+  const willBeDust =
+    preflight.status === "ok" ? preflight.estimate.willBeDust : false;
+  const alreadyClosed =
+    preflight.status === "ok" ? preflight.estimate.positionAlreadyClosed : false;
+  const previewReady =
+    wallet.connected &&
+    preflight.status === "ok" &&
+    (!willBeDust || dustAck);
+  const exitButtonLabel = alreadyClosed
+    ? willBeDust
+      ? "Sweep dust non-privately"
+      : "Resume private exit"
+    : willBeDust
+      ? "Close + sweep non-privately"
+      : "Exit privately";
+  // Once running, switch the step list to swept layout the moment we see
+  // either pick-denomination's ok event with mode=swept, or any non-pending
+  // dust-sweep status — both unambiguously mean the orchestrator chose the
+  // sweep path.
+  const runningMode: "mixed" | "swept" =
+    stepStatuses["dust-sweep"] !== "pending" ? "swept" : "mixed";
+
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="max-w-md border-border bg-surface-elevated p-0 sm:max-w-lg">
@@ -161,12 +235,20 @@ export function PrivateExitModal({ open, onOpenChange, position }: Props) {
         </DialogHeader>
 
         <div className="px-6 py-5">
-          {phase === "preview" && <PreviewBody position={position} />}
+          {phase === "preview" && (
+            <PreviewBody
+              position={position}
+              preflight={preflight}
+              dustAck={dustAck}
+              onDustAckChange={setDustAck}
+            />
+          )}
           {(phase === "running" || phase === "error") && (
             <RunningBody
               steps={stepStatuses}
               activeMessage={activeMessage}
               errorMessage={errorMessage}
+              mode={runningMode}
             />
           )}
           {phase === "success" && result && <SuccessBody result={result} />}
@@ -178,8 +260,8 @@ export function PrivateExitModal({ open, onOpenChange, position }: Props) {
               <Button variant="ghost" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              <Button variant="hero" onClick={start} disabled={!wallet.connected}>
-                Exit privately
+              <Button variant="hero" onClick={start} disabled={!previewReady}>
+                {exitButtonLabel}
                 <ArrowRight className="ml-1 h-4 w-4" />
               </Button>
             </>
@@ -210,18 +292,90 @@ export function PrivateExitModal({ open, onOpenChange, position }: Props) {
   );
 }
 
-function PreviewBody({ position }: { position: PrivateExitPosition }) {
+type PreflightState =
+  | { status: "loading" }
+  | { status: "ok"; estimate: ExitPreflightEstimate }
+  | { status: "error"; message: string };
+
+function PreviewBody({
+  position,
+  preflight,
+  dustAck,
+  onDustAckChange,
+}: {
+  position: PrivateExitPosition;
+  preflight: PreflightState;
+  dustAck: boolean;
+  onDustAckChange: (next: boolean) => void;
+}) {
+  const willBeDust =
+    preflight.status === "ok" && preflight.estimate.willBeDust;
+  const alreadyClosed =
+    preflight.status === "ok" && preflight.estimate.positionAlreadyClosed;
+
   return (
     <div className="space-y-5 text-sm">
-      <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-xs leading-5 text-foreground/80">
-        <div className="mb-1.5 flex items-center gap-1.5 font-medium text-primary">
-          <ShieldCheck className="h-3.5 w-3.5" />
-          Private exit (recommended)
+      <div
+        className={
+          willBeDust
+            ? "rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-xs leading-5 text-amber-100"
+            : "rounded-xl border border-primary/30 bg-primary/5 p-4 text-xs leading-5 text-foreground/80"
+        }
+      >
+        <div
+          className={
+            willBeDust
+              ? "mb-1.5 flex items-center gap-1.5 font-medium text-amber-300"
+              : "mb-1.5 flex items-center gap-1.5 font-medium text-primary"
+          }
+        >
+          {willBeDust ? (
+            <AlertTriangle className="h-3.5 w-3.5" />
+          ) : (
+            <ShieldCheck className="h-3.5 w-3.5" />
+          )}
+          {willBeDust
+            ? "Recoverable amount is below the mixer minimum"
+            : "Private exit (recommended)"}
         </div>
-        Close the LP position, swap residue back to SOL, and route the proceeds
-        through the mixer so the funds reach your main wallet without an on-chain
-        link back to the stealth wallet that held the position. Expect ~10 minutes
-        end-to-end — the proof step alone can take 30–60 seconds in-browser.
+        {willBeDust ? (
+          alreadyClosed ? (
+            <>
+              A previous exit attempt already closed the position on-chain, but
+              the resulting SOL is sitting at your stealth wallet and is below
+              the smallest mixer denomination. The flow will sweep it directly
+              from your stealth wallet to your main wallet — that transfer is
+              publicly visible on Solscan and links the two addresses on-chain.
+              This is a recovery, not a fresh exit.
+            </>
+          ) : (
+            <>
+              Closing this position now would recover an amount smaller than
+              the smallest mixer denomination, so the mixer round-trip can't
+              run. The flow will instead transfer the funds directly from your
+              stealth wallet to your main wallet — that transfer is publicly
+              visible on Solscan and links the two addresses on-chain. To
+              preserve privacy, keep the position open until it accumulates
+              more SOL.
+            </>
+          )
+        ) : alreadyClosed ? (
+          <>
+            A previous exit attempt already closed the position on-chain, but
+            failed to complete the mixer round-trip. This run will skip the
+            close + swap steps and route the SOL sitting at your stealth wallet
+            through the mixer to your main wallet. No on-chain link between
+            stealth and main.
+          </>
+        ) : (
+          <>
+            Close the LP position, swap residue back to SOL, and route the
+            proceeds through the mixer so the funds reach your main wallet
+            without an on-chain link back to the stealth wallet that held the
+            position. Expect ~10 minutes end-to-end — the proof step alone can
+            take 30–60 seconds in-browser.
+          </>
+        )}
       </div>
 
       <dl className="space-y-2.5 rounded-xl border border-border bg-card/60 p-4">
@@ -235,15 +389,60 @@ function PreviewBody({ position }: { position: PrivateExitPosition }) {
           label="Stealth wallet"
           value={`${position.stealthPubkey.slice(0, 6)}…${position.stealthPubkey.slice(-4)}`}
         />
+        {preflight.status === "loading" && (
+          <Row label="Estimated recovery" value="Estimating…" />
+        )}
+        {preflight.status === "ok" && (
+          <>
+            <Row
+              label="Estimated recovery"
+              value={`≈ ${formatSol(preflight.estimate.estimatedRecoverableLamports)}`}
+            />
+            <Row
+              label="Mixer minimum"
+              value={formatSol(preflight.estimate.smallestDenominationLamports)}
+            />
+          </>
+        )}
+        {preflight.status === "error" && (
+          <Row label="Estimated recovery" value="Estimate unavailable" />
+        )}
       </dl>
 
-      <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-xs leading-5 text-amber-200">
-        <span className="font-medium text-amber-300">Dust note: </span>
-        Mixer pools come in fixed sizes (0.1 / 1 / 10 SOL). The largest size that
-        fits your post-close balance is what routes through; any residue stays at
-        the stealth wallet and can be private-exited later when it accumulates
-        above the smallest pool size.
-      </div>
+      {willBeDust && (
+        <label className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-xs leading-5 text-amber-100">
+          <input
+            type="checkbox"
+            checked={dustAck}
+            onChange={(e) => onDustAckChange(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            I understand closing now will send the recovered SOL directly from
+            my stealth wallet to my main wallet. This link is publicly visible
+            on Solscan and cannot be undone.
+          </span>
+        </label>
+      )}
+
+      {!willBeDust && preflight.status === "ok" && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-xs leading-5 text-amber-200">
+          <span className="font-medium text-amber-300">Dust note: </span>
+          Mixer pools come in fixed sizes (0.1 / 1 / 10 SOL). The largest size
+          that fits your post-close balance routes through; any residue stays
+          at the stealth wallet and can be private-exited later when it
+          accumulates above the smallest pool size.
+        </div>
+      )}
+
+      {preflight.status === "error" && (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-4 text-xs leading-5 text-rose-200">
+          Couldn't estimate the recoverable amount: {preflight.message}. You can
+          still proceed, but the dust-sweep fallback won't engage automatically
+          — if the post-close balance is below the mixer minimum, the flow will
+          stop and you can sweep manually from the position page.
+        </div>
+      )}
     </div>
   );
 }
@@ -252,15 +451,18 @@ function RunningBody({
   steps,
   activeMessage,
   errorMessage,
+  mode,
 }: {
   steps: Record<ExitStepKey, "pending" | "active" | "ok" | "error">;
   activeMessage: string;
   errorMessage: string;
+  mode: "mixed" | "swept";
 }) {
+  const order = mode === "swept" ? STEP_ORDER_SWEPT : STEP_ORDER_MIXED;
   return (
     <div className="space-y-4 text-sm">
       <ul className="space-y-1.5">
-        {STEP_ORDER.map((key) => {
+        {order.map((key) => {
           const status = steps[key];
           return (
             <li key={key} className="flex items-center gap-2.5 text-xs">
@@ -304,6 +506,42 @@ function StepIcon({ status }: { status: "pending" | "active" | "ok" | "error" })
 }
 
 function SuccessBody({ result }: { result: PrivateExitResult }) {
+  if (result.mode === "swept") {
+    return (
+      <div className="space-y-4 text-sm">
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-xs leading-5 text-amber-100">
+          <div className="mb-1.5 flex items-center gap-1.5 font-medium text-amber-300">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Funds delivered — non-private sweep
+          </div>
+          {formatSol(result.fundedLamports)} transferred directly from your
+          stealth wallet to your main wallet. The transfer is publicly visible
+          on Solscan and links the two addresses on-chain.
+        </div>
+
+        <dl className="space-y-2.5 rounded-xl border border-border bg-card/60 p-4">
+          <Row label="Credited" value={formatSol(result.fundedLamports)} />
+          <Row
+            label="Residue at stealth"
+            value={formatSol(result.residueLamports)}
+          />
+        </dl>
+
+        <div className="space-y-1.5 text-xs">
+          {result.closeSignature && (
+            <ExplorerLink label="Close" sig={result.closeSignature} />
+          )}
+          {result.swapSignature && (
+            <ExplorerLink label="Swap" sig={result.swapSignature} />
+          )}
+          {result.sweepSignature && (
+            <ExplorerLink label="Sweep (stealth → main)" sig={result.sweepSignature} />
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4 text-sm">
       <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 text-xs leading-5 text-emerald-200">
@@ -317,22 +555,29 @@ function SuccessBody({ result }: { result: PrivateExitResult }) {
       </div>
 
       <dl className="space-y-2.5 rounded-xl border border-border bg-card/60 p-4">
-        <Row label="Credited" value={`${formatSol(result.fundedLamports)}`} />
+        <Row label="Credited" value={formatSol(result.fundedLamports)} />
         <Row
           label="Denomination"
-          value={`${formatSol(result.selectedDenominationLamports)}`}
+          value={formatSol(result.selectedDenominationLamports ?? "0")}
         />
         <Row
           label="Residue at stealth"
-          value={`${formatSol(result.residueLamports)}`}
+          value={formatSol(result.residueLamports)}
         />
       </dl>
 
       <div className="space-y-1.5 text-xs">
         <ExplorerLink label="Close" sig={result.closeSignature} />
         {result.swapSignature && <ExplorerLink label="Swap" sig={result.swapSignature} />}
-        <ExplorerLink label="Mixer deposit" sig={result.mixerDepositSignature} />
-        <ExplorerLink label="Relayer withdraw" sig={result.relayerWithdrawSignature} />
+        {result.mixerDepositSignature && (
+          <ExplorerLink label="Mixer deposit" sig={result.mixerDepositSignature} />
+        )}
+        {result.relayerWithdrawSignature && (
+          <ExplorerLink
+            label="Relayer withdraw"
+            sig={result.relayerWithdrawSignature}
+          />
+        )}
       </div>
     </div>
   );

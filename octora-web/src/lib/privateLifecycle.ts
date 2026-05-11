@@ -230,41 +230,32 @@ export interface SweepStealthResult {
 const STEALTH_SWEEP_FEE_LAMPORTS = 5_000n;
 
 /**
- * Option 1: link-revealing direct sweep stealth → main wallet.
+ * Internal: SOL drain stealth → main given an already-derived stealth keypair.
  *
- * Re-derives the stealth keypair locally (one wallet sig), reads the SOL
- * balance, and signs a SystemProgram.transfer of (balance − fee reserve) to
- * the connected main wallet. After this lands an on-chain observer can link
- * `mainWallet ↔ stealth ↔ position`, so it should only be offered as the
- * "quick recovery" option — `runPrivateExitToMain` is the privacy-preserving
- * counterpart that mirrors the deposit's mixer round-trip.
+ * The exit orchestrator already holds a `DerivedStealth` from its own derive
+ * step, and we must not trigger a second wallet popup just to sweep dust.
+ * `runSweepStealthToMain` (public entry) re-derives + calls this; the exit
+ * dust-fallback path skips the re-derive.
  */
-export async function runSweepStealthToMain(
-  input: SweepStealthInput,
-): Promise<SweepStealthResult> {
+export async function executeStealthSweep(args: {
+  stealth: DerivedStealth;
+  mainWalletAddress: string;
+}): Promise<SweepStealthResult> {
   const connection = new Connection(RPC_URL, "confirmed");
-  const stealth = await deriveForLifecycle(input);
-  const stealthPubkey = new PublicKey(stealth.publicKey);
-  const recipient = new PublicKey(input.mainWalletAddress);
+  const stealthPubkey = new PublicKey(args.stealth.publicKey);
+  const recipient = new PublicKey(args.mainWalletAddress);
 
   const balance = BigInt(await connection.getBalance(stealthPubkey, "confirmed"));
   if (balance <= STEALTH_SWEEP_FEE_LAMPORTS) {
-    // Nothing transferable: the only lamports here can't even cover a single
-    // signature. Surface a successful no-op so the caller can show "already
-    // swept" rather than throwing — this is the natural state after a sweep
-    // (account reaped at 0) or before any close has landed.
     return {
       signature: null,
       recipient: recipient.toBase58(),
       sweptLamports: "0",
       remainingLamports: balance.toString(),
-      stealthPubkey: stealth.publicKey,
+      stealthPubkey: args.stealth.publicKey,
     };
   }
 
-  // Drain to zero. transfer = balance − fee leaves balance − transfer = fee,
-  // which the runtime then deducts as the sig fee, ending at 0. Anything
-  // between 0 and rent_exempt (~890_880) would fail simulation.
   const transferLamports = balance - STEALTH_SWEEP_FEE_LAMPORTS;
 
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
@@ -273,11 +264,10 @@ export async function runSweepStealthToMain(
     SystemProgram.transfer({
       fromPubkey: stealthPubkey,
       toPubkey: recipient,
-      // Number coerce is safe up to ~9_007_000 SOL — well past any real balance.
       lamports: Number(transferLamports),
     }),
   );
-  tx.partialSign(stealth.keypair);
+  tx.partialSign(args.stealth.keypair);
 
   const signature = await connection.sendRawTransaction(tx.serialize(), {
     skipPreflight: false,
@@ -293,8 +283,25 @@ export async function runSweepStealthToMain(
     recipient: recipient.toBase58(),
     sweptLamports: transferLamports.toString(),
     remainingLamports: STEALTH_SWEEP_FEE_LAMPORTS.toString(),
-    stealthPubkey: stealth.publicKey,
+    stealthPubkey: args.stealth.publicKey,
   };
+}
+
+/**
+ * Option 1: link-revealing direct sweep stealth → main wallet.
+ *
+ * Re-derives the stealth keypair locally (one wallet sig), reads the SOL
+ * balance, and signs a SystemProgram.transfer of (balance − fee reserve) to
+ * the connected main wallet. After this lands an on-chain observer can link
+ * `mainWallet ↔ stealth ↔ position`, so it should only be offered as the
+ * "quick recovery" option — `runPrivateExitToMain` is the privacy-preserving
+ * counterpart that mirrors the deposit's mixer round-trip.
+ */
+export async function runSweepStealthToMain(
+  input: SweepStealthInput,
+): Promise<SweepStealthResult> {
+  const stealth = await deriveForLifecycle(input);
+  return executeStealthSweep({ stealth, mainWalletAddress: input.mainWalletAddress });
 }
 
 /**
