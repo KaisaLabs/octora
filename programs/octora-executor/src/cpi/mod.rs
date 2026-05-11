@@ -37,6 +37,12 @@ pub fn require_system_program(ai: &AccountInfo) -> Result<()> {
 
 pub fn require_rent_sysvar(ai: &AccountInfo) -> Result<()> {
     require_keys_eq!(ai.key(), sysvar::rent::ID, ExecutorError::InvalidSysAccount);
+    // Defense-in-depth (audit P3-NEW-B): a real sysvar account is never a
+    // signer and never executable. Asserting both flags blocks the
+    // "spoofed-account-claiming-to-be-rent" substitution pattern even if
+    // the key check is somehow weakened in the future.
+    require!(!ai.is_signer, ExecutorError::InvalidSysAccount);
+    require!(!ai.executable, ExecutorError::InvalidSysAccount);
     Ok(())
 }
 

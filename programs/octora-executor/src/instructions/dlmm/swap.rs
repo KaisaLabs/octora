@@ -110,6 +110,17 @@ pub fn handler<'info>(
     require_token_account_owner(&remaining[IDX_USER_TOKEN_IN], &stealth_key)?;
     require_token_account_owner(&remaining[IDX_USER_TOKEN_OUT], &stealth_key)?;
 
+    // Reject a circular swap where in and out point at the same account.
+    // DLMM's own validation may catch this, but verifying here keeps the
+    // contract self-defending: passing the same account twice could cause
+    // confusing balance-delta accounting on the post-swap slippage check
+    // (pre and post would both observe the input-side mutation).
+    require_keys_neq!(
+        remaining[IDX_USER_TOKEN_IN].key(),
+        remaining[IDX_USER_TOKEN_OUT].key(),
+        ExecutorError::TokenMintMismatch
+    );
+
     // The DLMM `user` account in the inner ix MUST be the same stealth pubkey
     // that signed our outer ix. Without this, an attacker could pass a
     // different signer in the remaining_accounts list and let DLMM treat
@@ -153,12 +164,36 @@ pub fn handler<'info>(
     args.extend_from_slice(&amount_in.to_le_bytes());
     args.extend_from_slice(&min_amount_out.to_le_bytes());
 
+    // is_signer / is_writable are hardcoded per slot rather than copied
+    // from `ai`. Trusting the caller's flags would let a client flip a
+    // read-only sysvar to writable (or vice versa) and downstream rely
+    // on whatever DLMM does with that — we don't grant that latitude.
+    //
+    // Layout matches MIN_REMAINING + variable bin-array tail. Bin arrays
+    // (indices >= MIN_REMAINING - 1) are always mutable.
     let metas: Vec<AccountMeta> = remaining
         .iter()
-        .map(|ai| AccountMeta {
-            pubkey: ai.key(),
-            is_signer: ai.is_signer,
-            is_writable: ai.is_writable,
+        .enumerate()
+        .map(|(i, ai)| {
+            let (is_signer, is_writable) = match i {
+                IDX_USER => (true, true),
+                IDX_LB_PAIR => (false, true),
+                1 => (false, true),                // bin_array_bitmap_extension
+                2 | 3 => (false, true),            // reserve_x, reserve_y
+                IDX_USER_TOKEN_IN | IDX_USER_TOKEN_OUT => (false, true),
+                IDX_TOKEN_X_MINT | IDX_TOKEN_Y_MINT => (false, false),
+                8 => (false, true),                // oracle
+                9 => (false, true),                // host_fee_in
+                IDX_TOKEN_X_PROGRAM | IDX_TOKEN_Y_PROGRAM => (false, false),
+                IDX_EVENT_AUTHORITY => (false, false),
+                IDX_DLMM_PROGRAM => (false, false),
+                _ => (false, true),                // bin_arrays — always mut
+            };
+            AccountMeta {
+                pubkey: ai.key(),
+                is_signer,
+                is_writable,
+            }
         })
         .collect();
 

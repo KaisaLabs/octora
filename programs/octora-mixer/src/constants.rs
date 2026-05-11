@@ -16,6 +16,13 @@ pub const MAX_LEAVES: u32 = 1 << TREE_LEVELS; // 1,048,576
 /// still costing only ~7KB extra per pool account.
 pub const ROOT_HISTORY_SIZE: usize = 256;
 
+// `MixerPool.current_root_index` is stored as `u8` to keep the account
+// layout compact. push_root() does `(idx + 1) % ROOT_HISTORY_SIZE`, which
+// fits in u8 only while ROOT_HISTORY_SIZE <= 256 (since the modulus
+// produces 0..=255). Future bumps past 256 must widen the field first;
+// catch the regression at compile time.
+const _: () = assert!(ROOT_HISTORY_SIZE <= 256, "current_root_index is u8 — widen the field before raising ROOT_HISTORY_SIZE");
+
 /// Zero value for empty Merkle leaves (big-endian representation of 0)
 pub const ZERO_VALUE: [u8; 32] = [0u8; 32];
 

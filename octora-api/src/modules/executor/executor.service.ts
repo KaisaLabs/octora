@@ -405,6 +405,23 @@ export class ExecutorService {
     const existing = await this.connection.getAccountInfo(positionAuthority);
     if (existing) {
       const positionPubkey = await this.fetchPositionFromAuthority(positionAuthority);
+      // PoolAuthority can outlive its DLMM Position: if a prior session
+      // closed the position via dlmm_withdraw_close but didn't tear down
+      // the PA (which is the documented case — close=stealth refunds rent
+      // on PA, but the close-PA ix is a separate operation), the next
+      // init-position would see PA alive yet point at a now-dead position.
+      // The browser would proceed to add_liquidity against a stale pubkey
+      // and the on-chain ix would fail with a confusing AccountNotFound.
+      // Fail loudly here so the caller knows to wipe stealth state instead.
+      const positionAcct = await this.connection.getAccountInfo(positionPubkey);
+      if (!positionAcct) {
+        throw new Error(
+          `PoolAuthority ${positionAuthority.toBase58()} references a stale DLMM ` +
+            `position (${positionPubkey.toBase58()}) that no longer exists on-chain. ` +
+            "The position was likely closed in a prior session. Derive a fresh " +
+            "stealth wallet or close the PoolAuthority before re-opening.",
+        );
+      }
       return {
         transaction: null,
         positionPubkey: positionPubkey.toBase58(),

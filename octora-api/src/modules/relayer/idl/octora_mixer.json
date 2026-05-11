@@ -127,7 +127,8 @@
         {
           "name": "authority",
           "writable": true,
-          "signer": true
+          "signer": true,
+          "address": "6LQkmEbJwJfYU4KjcpHySfXQugm67NivpLjxVNt6MUpY"
         },
         {
           "name": "mixer_pool",
@@ -386,6 +387,19 @@
       ]
     },
     {
+      "name": "PausedEvent",
+      "discriminator": [
+        43,
+        14,
+        250,
+        236,
+        116,
+        42,
+        177,
+        89
+      ]
+    },
+    {
       "name": "WithdrawEvent",
       "discriminator": [
         22,
@@ -568,7 +582,7 @@
                     32
                   ]
                 },
-                30
+                256
               ]
             }
           },
@@ -628,6 +642,34 @@
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PausedEvent",
+      "docs": [
+        "Emitted whenever the pool's pause flag is toggled. Off-chain monitors",
+        "(status pages, alerting) subscribe to this to surface admin actions."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "denomination",
+            "type": "u64"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
