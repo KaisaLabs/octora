@@ -12,6 +12,10 @@ import {
   getPoolBins,
   MeteoraApiError,
 } from './dlmm.service'
+import {
+  listSwapSourceCandidates,
+  NoSwapSourceAvailableError,
+} from '#modules/executor/swap-pool-resolver'
 
 interface NetworkQuery {
   network?: Network
@@ -130,4 +134,78 @@ export async function getProtocolMetricsHandler(
 ) {
   const metrics = await getProtocolMetrics(request.query.network ?? 'devnet')
   return reply.send(metrics)
+}
+
+interface SwapSourceQuery extends NetworkQuery {
+  /** Direction flag — when true, the user is selling tokenY for tokenX. */
+  swapForY?: boolean
+}
+
+/**
+ * GET /dlmm/pools/:address/swap-source — recommend a SOL-paired source
+ * pool for swapping into the target pool's non-SOL token (Plan 2/3).
+ *
+ * Returns:
+ *   - 200 + `{ recommended, candidates }` when a viable source exists.
+ *   - 404 when the target pool is SOL-paired (no swap path needed).
+ *   - 422 when the target pool needs a swap but no SOL-paired source
+ *     pool exists for the target's non-SOL token.
+ */
+export async function getSwapSourceHandler(
+  request: FastifyRequest<{
+    Params: AddressParams
+    Querystring: SwapSourceQuery
+  }>,
+  reply: FastifyReply,
+) {
+  const network = request.query.network ?? 'devnet'
+  const swapForY = request.query.swapForY ?? false
+
+  const target = await getPool(request.params.address, network)
+  if (!target) return reply.code(404).send({ message: 'Pool not found' })
+
+  const NATIVE_SOL_MINT = 'So11111111111111111111111111111111111111112'
+  const targetIsSolQuoted =
+    target.tokenX.mint === NATIVE_SOL_MINT || target.tokenY.mint === NATIVE_SOL_MINT
+  if (targetIsSolQuoted) {
+    return reply.code(404).send({
+      code: 'no_swap_needed',
+      message: 'Target pool already pairs with SOL — no swap source required.',
+    })
+  }
+
+  const nonSolMint = swapForY ? target.tokenY.mint : target.tokenX.mint
+
+  try {
+    const candidates = await listSwapSourceCandidates({
+      network,
+      targetPoolAddress: target.address,
+      nonSolMint,
+    })
+    const usable = candidates.filter((c) => !c.isTarget)
+    if (usable.length === 0) {
+      return reply.code(422).send({
+        code: 'no_swap_source_available',
+        message:
+          `No SOL-paired Meteora DLMM pool found for ${nonSolMint} other than the LP target. ` +
+          `Privacy-preserving swap path unavailable.`,
+        targetPoolAddress: target.address,
+        nonSolMint,
+      })
+    }
+
+    return reply.send({
+      recommended: usable[0]!.pool,
+      candidates: usable.map((c) => c.pool),
+      target: { address: target.address, tokenX: target.tokenX, tokenY: target.tokenY },
+    })
+  } catch (err) {
+    if (err instanceof NoSwapSourceAvailableError) {
+      return reply.code(422).send({
+        code: 'no_swap_source_available',
+        message: err.message,
+      })
+    }
+    return handleError(err, reply)
+  }
 }

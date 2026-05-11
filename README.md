@@ -250,6 +250,11 @@ curl -X POST http://localhost:8787/positions/intents \
 | **Standard**         | Full privacy — origin wallet never touches Meteora                       | 10m   | Manual      |
 | **Fast Private**     | Accelerated execution with fallback to standard on timeout               | 15m   | Auto-retry  |
 
+### Pool support
+
+- **SOL-quoted pools** (e.g. SOL/USDC, SOL/JUP) — supported end-to-end. The stealth wallet receives SOL from the mixer and LPs directly.
+- **Non-SOL-quoted pools** (e.g. JUP/USDC, BONK/USDC) — supported via the Meteora swap layer (`docs/plans/meteora-swap-layer/`). The stealth wallet swaps SOL → target token through a different SOL-paired pool, then LPs into the target. Same-pool swap-then-LP is rejected on both client and server (front-runs your own entry). Gated by `EXECUTOR_SWAP_ENABLED=true` + `BetaAccess.swapEnabled` (per-wallet allowlist).
+
 ## Design decisions
 
 - **Privacy-first**: Main wallet stays shielded. Self-hosted ZK mixer + relayer → stealth wallet → Meteora. No third-party relay services.

@@ -18,13 +18,20 @@
  * has to ack again, which is the right safety posture anyway.
  */
 
-export const CURRENT_TOS_VERSION = "v1-2026-05-10" as const;
+export const CURRENT_TOS_VERSION = "v2-2026-05-10" as const;
 
 /**
  * The literal string presented to the user inside the modal AND signed
  * via `signMessage`. The signature ties the user's acknowledgement to
  * the exact disclosure they read — bumping this string must come with a
  * `CURRENT_TOS_VERSION` bump so every wallet re-acks.
+ *
+ * v2 (2026-05-10) adds the swap-step disclosure (Plan 3 of
+ * `docs/plans/meteora-swap-layer/`). The stealth wallet now performs an
+ * on-chain Meteora DLMM swap *before* the LP step when the target pool
+ * does not pair against SOL. Slippage and execution risk on that leg are
+ * the user's responsibility — the bullet below lands inside the same
+ * signed payload so users can't claim they didn't see it.
  */
 export const TOS_ACK_MESSAGE = [
   "Octora — beta acknowledgement",
@@ -41,6 +48,9 @@ export const TOS_ACK_MESSAGE = [
   "  • Stealth wallets are derived from a wallet signature — losing access",
   "    to the original main wallet means losing access to any unwithdrawn",
   "    stealth balances.",
+  "  • For non-SOL-paired pools, my stealth wallet may execute an on-chain",
+  "    Meteora DLMM swap as part of LP funding. Swap pricing, slippage,",
+  "    pool liquidity, and execution risk on that leg are my responsibility.",
   "  • The Octora team can pause the protocol but cannot recover lost funds.",
   "",
   "I will not deposit more than I can afford to lose, and I will not hold",

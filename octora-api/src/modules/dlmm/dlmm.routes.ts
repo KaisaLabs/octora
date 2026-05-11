@@ -9,6 +9,7 @@ import {
   getVolumeHistoryHandler,
   getPoolBinsHandler,
   getProtocolMetricsHandler,
+  getSwapSourceHandler,
 } from './dlmm.controller'
 import {
   listPoolsSchema,
@@ -19,6 +20,7 @@ import {
   getVolumeHistorySchema,
   getPoolBinsSchema,
   getProtocolMetricsSchema,
+  getSwapSourceSchema,
 } from './dlmm.schema'
 
 export async function registerDlmmRoutes(app: FastifyInstance) {
@@ -32,4 +34,9 @@ export async function registerDlmmRoutes(app: FastifyInstance) {
   app.get('/dlmm/pools/:address/ohlcv', { schema: { ...getOhlcvSchema, tags } }, getOhlcvHandler)
   app.get('/dlmm/pools/:address/volume/history', { schema: { ...getVolumeHistorySchema, tags } }, getVolumeHistoryHandler)
   app.get('/dlmm/stats', { schema: { ...getProtocolMetricsSchema, tags } }, getProtocolMetricsHandler)
+  app.get(
+    '/dlmm/pools/:address/swap-source',
+    { schema: { ...getSwapSourceSchema, tags } },
+    getSwapSourceHandler,
+  )
 }

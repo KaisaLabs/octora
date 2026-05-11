@@ -112,3 +112,20 @@ export const getPoolBinsSchema = {
 export const getProtocolMetricsSchema = {
   querystring: networkQuery,
 } as const
+
+export const getSwapSourceSchema = {
+  params: {
+    type: 'object',
+    required: ['address'] as const,
+    properties: {
+      address: { type: 'string', minLength: 32 },
+    },
+  },
+  querystring: {
+    type: 'object',
+    properties: {
+      network: { type: 'string', enum: ['mainnet', 'devnet', 'localnet'], default: 'devnet' },
+      swapForY: { type: 'boolean', default: false },
+    },
+  },
+} as const

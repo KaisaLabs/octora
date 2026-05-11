@@ -128,6 +128,31 @@ In the worst case — both API host and relayer host root-compromised by the sam
 
 This is the worst case the audit (`runbooks/PRODUCTION_READINESS.md` P0-21) treats as a threat. The mitigations are operational (KMS-backed signing, mTLS between API and signer, log retention) and architectural (move toward user-submitted withdrawals so the relayer falls out of the trust path for users with gas).
 
+## 8b. Swap-layer privacy (Plan 2/3/4)
+
+The Meteora swap layer added under `docs/plans/meteora-swap-layer/` extends the privacy model along one new edge: when a user LPs into a pool whose quote asset is not SOL (e.g. JUP/USDC), the stealth wallet first executes an on-chain Meteora DLMM swap on a different SOL-paired pool to acquire the target token, then proceeds to `add_liquidity`.
+
+What changes for an on-chain observer:
+
+- **The stealth wallet performs *two* CPI calls instead of one** (`dlmm_swap` then `dlmm_add_liquidity`). The two calls happen in separate transactions with the relayer as fee-payer; their relative timing is observable.
+- **The swap source pool is observable.** Anyone watching DLMM swap events on the source pool sees a fresh stealth wallet swapping SOL for token X, immediately followed by an LP position opening on a different X/Y pool. The link `stealth ↔ LP target` was already public before the swap layer; the new fact is `stealth ↔ swap source`.
+- **The amounts on the swap leg are observable.** The user's input lamports + slippage min-out + realised output are all in tx logs. This **does not** weaken the `main ↔ stealth` privacy boundary — the swap leg happens after the mixer-fed funding, so the source amount is uncorrelated with any main-wallet activity. It does mean a determined observer can reconstruct the user's *intent* (the target token they wanted) from the swap leg, which they could already do from the LP target pool.
+
+What does NOT change:
+
+- The mixer's role is unchanged. It still breaks `main ↔ stealth` for the SOL leg.
+- The relayer's view of the user is unchanged. It pays gas for both swap and LP txs but does not learn anything new — it already knew the stealth pubkey and the target pool.
+- The exit wallet's privacy is unchanged. The withdrawal flow is independent of which non-SOL token the LP held.
+
+**Hard rule, enforced at multiple layers:** the swap source pool MUST differ from the LP target pool. Same-pool swap-then-LP front-runs the user's own entry. Reject is in: client-side `SwapPreview`, backend `swap.service.validateSwapIntent`, and the same-pool check in the `position.service` intent path. Phase 2 atomic `swap_then_lp` adds an on-chain enforcement.
+
+**Operator commitments tied to this layer:**
+- `EXECUTOR_SWAP_ENABLED` must be off in any deployment whose audit pack (`docs/plans/meteora-swap-layer/audit-pack.md`) has unresolved §10 sign-offs.
+- The slippage hard cap (20% / 2000 bps) is mirrored on the API and the UI; bumping it requires a documented cause and a fresh ToS version.
+- Per-wallet `BetaAccess.swapEnabled` is the only mechanism for granting individual wallets access during Phase E. No bypass exists at the controller layer; the Plan 4 acceptance criteria block on it.
+
+For the failure modes specific to this layer, see `runbooks/incident/swap-failure.md`.
+
 ## 9. Cryptographic foundations
 
 | Primitive | Where used | Source |
