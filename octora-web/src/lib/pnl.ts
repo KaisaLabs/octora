@@ -70,42 +70,6 @@ export function generateDailyPnL(opts: {
   return out;
 }
 
-/**
- * Build a synthetic per-hour fees / IL / price-drift breakdown for one position.
- * Used to feed PnLBreakdownChart until the indexer exposes a real series.
- */
-export function generatePositionPnLSeries(opts: {
-  hours?: number;
-  seed?: number;
-  notionalUsd: number;
-  apr: number;
-  volatility?: number;
-}): { t: number; fees: number; il: number; price: number }[] {
-  const hours = opts.hours ?? 24 * 30;
-  const rng = mulberry32(opts.seed ?? 0xfeed);
-  const ratePerHour = (opts.notionalUsd * opts.apr) / 100 / (24 * 365);
-  const sigma = opts.volatility ?? 0.04;
-
-  let logPrice = 0;
-  let fees = 0;
-  let priceContribution = 0;
-  const out: { t: number; fees: number; il: number; price: number }[] = [];
-
-  for (let h = 0; h <= hours; h++) {
-    fees += ratePerHour * (0.7 + rng() * 0.6);
-    // GBM-ish per-hour log return.
-    const dW = (rng() * 2 - 1) * sigma * Math.sqrt(1 / 24);
-    logPrice += dW - 0.5 * sigma * sigma * (1 / 24);
-    const ratio = Math.exp(logPrice);
-    // Price contribution: signed, scales with notional.
-    priceContribution = opts.notionalUsd * (ratio - 1);
-    // IL ≈ -0.5 * notional * (1 - sqrt(ratio))^2 / sqrt(ratio). Always non-positive.
-    const il = priceContribution !== 0 ? -opts.notionalUsd * 0.5 * Math.pow(1 - Math.sqrt(ratio), 2) / Math.sqrt(ratio) : 0;
-    out.push({ t: h, fees, il: Number.isFinite(il) ? il : 0, price: priceContribution });
-  }
-  return out;
-}
-
 export function summarizePnL(daily: DailyPnL[], opts: { totalDeposited: number; totalPositionValue: number; feesClaimed: number; claimableFees: number }): PnLSummary {
   const totalPnL = daily.reduce((s, d) => s + d.pnlUsd, 0);
   const totalPnLPct = opts.totalDeposited > 0 ? (totalPnL / opts.totalDeposited) * 100 : 0;

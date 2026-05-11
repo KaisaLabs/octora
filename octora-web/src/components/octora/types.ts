@@ -58,6 +58,12 @@ export type PortfolioPosition = {
   deposited: string;
   value: string;
   feesEarned: string;
+  /** Raw USD amounts — display strings above are locale-formatted and not
+   *  safe to re-parse for arithmetic (comma-decimal locales break parseFloat).
+   *  Use these for any math; use the strings only for rendering. */
+  depositedUsd?: number;
+  valueUsd?: number;
+  feesUsd?: number;
   apr: string;
   status: string;
   /** Bin id boundaries of the LP range. */

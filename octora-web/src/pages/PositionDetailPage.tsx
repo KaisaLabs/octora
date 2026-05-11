@@ -11,10 +11,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BinLiquidityChart } from "@/components/octora/lp/BinLiquidityChart";
 import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
 import { PositionStatusPill } from "@/components/octora/lp/PositionStatusPill";
-import { PnLBreakdownChart } from "@/components/octora/lp/PnLBreakdownChart";
+import { PnLBreakdownPanel } from "@/components/octora/lp/PnLBreakdownPanel";
 import { Reveal } from "@/components/octora/lp/Reveal";
 import { projectUserShape } from "@/lib/bins";
-import { generatePositionPnLSeries } from "@/lib/pnl";
 import {
   runPrivateExitToMain,
   runSweepStealthToMain,
@@ -66,15 +65,6 @@ export function PositionDetailPage({ positions }: Props) {
         : [],
     [bins, lower, upper, position],
   );
-
-  const series = useMemo(() => {
-    if (!position) return [];
-    return generatePositionPnLSeries({
-      notionalUsd: parseUsd(position.deposited),
-      apr: parseFloat(position.apr.replace("%", "")) || 20,
-      seed: hashSeed(position.id),
-    });
-  }, [position]);
 
   if (!position) {
     return (
@@ -176,7 +166,7 @@ export function PositionDetailPage({ positions }: Props) {
 
       {/* P&L breakdown */}
       <Reveal delay={160}>
-        <PnLBreakdownChart series={series} totalHours={series.length - 1} />
+        <PnLBreakdownPanel position={position} />
       </Reveal>
 
       {/* Action drawer */}
@@ -731,11 +721,3 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function hashSeed(s: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0) || 1;
-}
