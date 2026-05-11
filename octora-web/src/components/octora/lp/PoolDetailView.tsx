@@ -642,7 +642,12 @@ function formatPrice(p: number): string {
   if (p >= 1000) return p.toFixed(2);
   if (p >= 1) return p.toFixed(4);
   if (p >= 0.01) return p.toFixed(5);
-  return p.toExponential(3);
+  // Sub-0.01 prices (typical for meme/SOL pairs) — show enough decimal
+  // places to surface ~4 significant figures. Strip trailing zeros so a
+  // round number like 0.001500 reads as "0.0015" instead of "0.001500".
+  const magnitude = Math.floor(Math.log10(p));
+  const decimals = Math.max(4, 3 - magnitude);
+  return p.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function RangeReadout({

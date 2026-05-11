@@ -329,5 +329,10 @@ function formatPrice(p: number): string {
   if (p >= 1000) return p.toFixed(0);
   if (p >= 1) return p.toFixed(2);
   if (p >= 0.01) return p.toFixed(4);
-  return p.toExponential(2);
+  if (p <= 0) return "0";
+  // Sub-0.01 prices: plain decimal with ~3 significant figures for the
+  // compact chart-axis label, trailing zeros trimmed.
+  const magnitude = Math.floor(Math.log10(p));
+  const decimals = Math.max(4, 2 - magnitude);
+  return p.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "");
 }
