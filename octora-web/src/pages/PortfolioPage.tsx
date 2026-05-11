@@ -3,10 +3,10 @@ import { toast } from "sonner";
 import type { PortfolioPosition } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
 import { PositionCard } from "@/components/octora/lp/PositionCard";
-import { PnLCalendar } from "@/components/octora/lp/PnLCalendar";
 import { PortfolioKpiStrip } from "@/components/octora/lp/PortfolioKpiStrip";
 import { PortfolioStatsPanel } from "@/components/octora/lp/PortfolioStatsPanel";
-import { generateDailyPnL, summarizePnL } from "@/lib/pnl";
+import { ActivityCalendar } from "@/components/octora/lp/ActivityCalendar";
+import { computeOverviewMetrics } from "@/lib/pnl";
 import { useSolana } from "@/providers/SolanaProvider";
 import { runClaimFees } from "@/lib/privateLifecycle";
 
@@ -16,12 +16,6 @@ interface PortfolioPageProps {
 
 type Tab = "overview" | "active" | "closed";
 type Filter = "all" | "in-range" | "out-of-range" | "claimable";
-
-const parseUsd = (v: string | undefined): number => {
-  if (!v) return 0;
-  const n = parseFloat(v.replace(/[^0-9.-]/g, ""));
-  return Number.isFinite(n) ? n : 0;
-};
 
 export function PortfolioPage({ positions }: PortfolioPageProps) {
   const [tab, setTab] = useState<Tab>("overview");
@@ -55,41 +49,15 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
     }
   };
 
-  const totals = useMemo(() => {
-    // Closed positions contribute nothing to the totals (value/fees zeroed,
-    // no claimable). Skip them up front so the math reflects what the user
-    // actually sees on the page.
-    const live = positions.filter((p) => !p.closed);
-    const value = live.reduce((s, p) => s + parseUsd(p.value), 0);
-    const fees = live.reduce((s, p) => s + parseUsd(p.feesEarned), 0);
-    const deposited = live.reduce((s, p) => s + parseUsd(p.deposited), 0);
-    const claimable = live.reduce((s, p) => s + parseUsd(p.claimable), 0);
-    const inRange = live.filter((p) => p.inRange).length;
-    const open = live.length;
-    const pools = new Set(live.map((p) => p.poolAddress)).size;
-    return { value, fees, deposited, claimable, inRange, open, pools };
-  }, [positions]);
-
-  const today = useMemo(() => new Date(), []);
-  const daily = useMemo(() => {
-    const since = new Date(today);
-    since.setDate(today.getDate() - 60);
-    return generateDailyPnL({ since, until: today, dailyMeanUsd: Math.max(8, totals.deposited * 0.0008) });
-  }, [today, totals.deposited]);
-
-  const summary = useMemo(
-    () =>
-      summarizePnL(daily, {
-        totalDeposited: totals.deposited,
-        totalPositionValue: totals.value,
-        feesClaimed: totals.fees,
-        claimableFees: totals.claimable,
-      }),
-    [daily, totals],
-  );
+  const metrics = useMemo(() => computeOverviewMetrics(positions), [positions]);
 
   const livePositions = useMemo(() => positions.filter((p) => !p.closed), [positions]);
   const closedPositions = useMemo(() => positions.filter((p) => p.closed), [positions]);
+
+  const inRangeCount = useMemo(
+    () => livePositions.filter((p) => p.inRange).length,
+    [livePositions],
+  );
 
   const filtered = useMemo(() => {
     return livePositions.filter((p) => {
@@ -113,23 +81,23 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
             {livePositions.length} position{livePositions.length === 1 ? "" : "s"} ·{" "}
             <span
               className={
-                totals.open === 0
+                metrics.livePositionCount === 0
                   ? "text-muted-foreground"
-                  : totals.inRange === totals.open
+                  : inRangeCount === metrics.livePositionCount
                     ? "text-primary"
                     : "text-amber-400"
               }
             >
-              {totals.inRange}/{totals.open} in range
+              {inRangeCount}/{metrics.livePositionCount} in range
             </span>
           </p>
         </div>
 
-        {totals.claimable > 0 && (
+        {metrics.pendingFeesUsd > 0 && (
           <div className="flex items-center gap-3 rounded-full border border-primary/30 bg-primary/5 px-4 py-2">
             <span className="text-xs text-muted-foreground">Claimable</span>
             <span className="font-mono text-sm font-semibold tabular-nums text-primary">
-              ${totals.claimable.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              ${metrics.pendingFeesUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
             </span>
             <Button variant="hero" size="sm" className="rounded-full">
               Claim all
@@ -159,17 +127,13 @@ export function PortfolioPage({ positions }: PortfolioPageProps) {
 
       {tab === "overview" && (
         <>
-          <PortfolioKpiStrip summary={summary} />
+          <PortfolioKpiStrip metrics={metrics} />
           <section className="grid gap-4 lg:grid-cols-[minmax(280px,360px)_1fr]">
             <div className="panel-shell rounded-2xl p-5">
-              <PortfolioStatsPanel
-                summary={summary}
-                positionCount={totals.open}
-                poolCount={totals.pools}
-              />
+              <PortfolioStatsPanel metrics={metrics} />
             </div>
             <div className="panel-shell min-h-[460px] rounded-2xl p-5">
-              <PnLCalendar daily={daily} today={today} />
+              <ActivityCalendar walletAddress={wallet.address} today={new Date()} />
             </div>
           </section>
         </>

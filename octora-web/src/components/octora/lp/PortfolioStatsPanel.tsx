@@ -1,10 +1,7 @@
-import type { PnLSummary } from "@/lib/pnl";
+import type { OverviewMetrics } from "@/lib/pnl";
 
 interface Props {
-  summary: PnLSummary;
-  positionCount: number;
-  poolCount: number;
-  unit?: "USD" | "SOL";
+  metrics: OverviewMetrics;
 }
 
 function fmtUsd(n: number): string {
@@ -25,9 +22,9 @@ function signedPct(n: number): string {
   return `${s}${Math.abs(n).toFixed(2)}%`;
 }
 
-export function PortfolioStatsPanel({ summary, positionCount, poolCount }: Props) {
-  const positive = summary.totalPnL >= 0;
-  const currentPlusPending = summary.totalPositionValue + summary.claimableFees;
+export function PortfolioStatsPanel({ metrics }: Props) {
+  const hasDeposits = metrics.totalDeposited > 0;
+  const positive = metrics.totalPnL >= 0;
 
   return (
     <div className="flex h-full flex-col gap-4">
@@ -36,49 +33,71 @@ export function PortfolioStatsPanel({ summary, positionCount, poolCount }: Props
           Active Positions Summary
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {positionCount} position{positionCount === 1 ? "" : "s"} · {poolCount} pool
-          {poolCount === 1 ? "" : "s"}
+          {metrics.livePositionCount} active position
+          {metrics.livePositionCount === 1 ? "" : "s"} · {metrics.poolCount} pool
+          {metrics.poolCount === 1 ? "" : "s"}
+          {metrics.closedPositionCount > 0
+            ? ` · ${metrics.closedPositionCount} closed`
+            : ""}
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-x-6 gap-y-3 border-y border-border/60 py-4 text-sm">
-        <Row label="Total Deposited" value={fmtUsd(summary.totalDeposited)} />
-        <Row label="Current Position" value={fmtUsd(summary.totalPositionValue)} />
-        <Row label="Fees Claimed" value={fmtUsd(summary.feesClaimed)} />
+        <Row label="Total Deposited" value={fmtUsd(metrics.totalDeposited)} />
+        <Row label="Current Value" value={fmtUsd(metrics.totalPositionValue)} />
         <Row
           label="Pending Fees"
-          value={fmtUsd(summary.claimableFees)}
-          accent={summary.claimableFees > 0}
+          value={fmtUsd(metrics.pendingFeesUsd)}
+          accent={metrics.pendingFeesUsd > 0}
         />
-        <Row label="Avg Invested" value={fmtUsd(summary.avgInvested)} />
-        <Row label="Current + Pending" value={fmtUsd(currentPlusPending)} />
+        <Row
+          label="Positions with fees"
+          value={
+            metrics.positionsWithClaimableFees > 0
+              ? `${metrics.positionsWithClaimableFees} / ${metrics.livePositionCount}`
+              : "—"
+          }
+        />
       </div>
 
       <div
         className={`rounded-xl border px-4 py-3 ${
-          positive
-            ? "border-primary/30 bg-primary/[0.06]"
-            : "border-destructive/30 bg-destructive/[0.06]"
+          !hasDeposits
+            ? "border-border/60 bg-card/40"
+            : positive
+              ? "border-primary/30 bg-primary/[0.06]"
+              : "border-destructive/30 bg-destructive/[0.06]"
         }`}
       >
         <div className="flex items-center justify-between">
-          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">P&L</p>
-          <span
-            className={`rounded-full border px-2 py-0.5 font-mono text-[11px] tabular-nums ${
-              positive
-                ? "border-primary/30 bg-primary/10 text-primary"
-                : "border-destructive/30 bg-destructive/10 text-destructive"
-            }`}
-          >
-            {signedPct(summary.totalPnLPct)}
-          </span>
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Net P&L</p>
+          {hasDeposits && (
+            <span
+              className={`rounded-full border px-2 py-0.5 font-mono text-[11px] tabular-nums ${
+                positive
+                  ? "border-primary/30 bg-primary/10 text-primary"
+                  : "border-destructive/30 bg-destructive/10 text-destructive"
+              }`}
+            >
+              {signedPct(metrics.totalPnLPct)}
+            </span>
+          )}
         </div>
         <p
           className={`mt-1 font-display text-2xl font-semibold tracking-tight tabular-nums sm:text-3xl ${
-            positive ? "text-primary" : "text-destructive"
+            !hasDeposits
+              ? "text-muted-foreground"
+              : positive
+                ? "text-primary"
+                : "text-destructive"
           }`}
         >
-          {signedUsd(summary.totalPnL)}
+          {hasDeposits ? signedUsd(metrics.totalPnL) : "—"}
+        </p>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          {hasDeposits
+            ? "Current Value + Pending Fees − Total Deposited. Realised fees from prior claims aren't tracked yet."
+            : "Open a position to start tracking P&L."}
         </p>
       </div>
     </div>

@@ -76,6 +76,21 @@ export function usePortfolioPositions(
     return map;
   }, [uniquePoolAddresses, binQueries]);
 
+  // The pools list endpoint hard-codes `activePrice: 0`, so we derive it the
+  // same way PoolDetailView does — by looking up the active bin's price in
+  // the bins response. Without this the position detail chart falls back to
+  // its `activePrice=1` placeholder and the bin axis is wrong.
+  const activePriceByAddress = useMemo(() => {
+    const map = new Map<string, number>();
+    uniquePoolAddresses.forEach((addr, i) => {
+      const data = binQueries[i]?.data;
+      if (!data) return;
+      const price = data.bins.find((b) => b.binId === data.activeBinId)?.price;
+      if (price && price > 0) map.set(addr, price);
+    });
+    return map;
+  }, [uniquePoolAddresses, binQueries]);
+
   // Fan out one on-chain position-state query per stored position. This is
   // what gives us real `value`, `feesEarned`, and `claimable` numbers
   // instead of the deposit-time snapshot. 15s stale time so the portfolio
@@ -101,10 +116,11 @@ export function usePortfolioPositions(
           s,
           poolByAddress.get(s.poolAddress),
           activeBinByAddress.get(s.poolAddress),
+          activePriceByAddress.get(s.poolAddress),
           stateQueries[i]?.data ?? null,
         ),
       ),
-    [stored, poolByAddress, activeBinByAddress, stateQueries],
+    [stored, poolByAddress, activeBinByAddress, activePriceByAddress, stateQueries],
   );
 }
 
@@ -112,6 +128,7 @@ function mapStoredToPortfolio(
   s: StoredPosition,
   pool: Pool | undefined,
   binsActiveBinId: number | undefined,
+  activePrice: number | undefined,
   state: PositionStateView | null,
 ): PortfolioPosition {
   const poolName = pool?.name ?? `${s.poolAddress.slice(0, 6)}…${s.poolAddress.slice(-4)}`;
@@ -174,6 +191,7 @@ function mapStoredToPortfolio(
     rangeUpperBin: upperBinId,
     activeBinId,
     binStep,
+    activePrice,
     shape: s.shape as DistributionShape,
     inRange: closed ? undefined : inRange,
     claimable: feesFmt,

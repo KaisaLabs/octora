@@ -135,6 +135,49 @@ export function markLocalPositionClosed(
   notifyChanged();
 }
 
+export interface RebalanceMetadata {
+  lowerBinId: number;
+  upperBinId: number;
+  shape: DistributionShape;
+  positionPubkey: string;
+  /** add-liquidity tx signature on the new range — replaces the prior `fund`
+   *  signature so the Activity feed and explorer link reflect the latest deploy. */
+  fundSignature?: string;
+}
+
+/**
+ * Patch an existing position with the post-rebalance on-chain state. Keeps the
+ * positionId stable (the v2 stealth keypair is bound to it) so the portfolio
+ * URL and stealth derivation continue to resolve to the same wallet.
+ */
+export function markLocalPositionRebalanced(
+  walletAddress: string,
+  positionId: string,
+  patch: RebalanceMetadata,
+): void {
+  if (!walletAddress || typeof window === "undefined") return;
+  const current = listLocalPositions(walletAddress);
+  let changed = false;
+  const next = current.map((p) => {
+    if (p.positionId !== positionId) return p;
+    changed = true;
+    return {
+      ...p,
+      lowerBinId: patch.lowerBinId,
+      upperBinId: patch.upperBinId,
+      shape: patch.shape,
+      positionPubkey: patch.positionPubkey,
+      signatures: {
+        ...(p.signatures ?? {}),
+        ...(patch.fundSignature ? { fund: patch.fundSignature } : {}),
+      },
+    };
+  });
+  if (!changed) return;
+  window.localStorage.setItem(storageKey(walletAddress), JSON.stringify(next));
+  notifyChanged();
+}
+
 export function removeLocalPosition(walletAddress: string, positionId: string): void {
   if (!walletAddress || typeof window === "undefined") return;
   const current = listLocalPositions(walletAddress);

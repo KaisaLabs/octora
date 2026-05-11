@@ -1,95 +1,67 @@
-export interface DailyPnL {
-  /** ISO date (YYYY-MM-DD), local time. */
-  date: string;
-  pnlUsd: number;
-  positions: number;
-}
-
-export interface PnLSummary {
-  totalDeposited: number;
-  feesClaimed: number;
-  claimableFees: number;
-  totalPositionValue: number;
-  totalPnL: number;
-  totalPnLPct: number;
-  avgInvested: number;
-  winRate: number;
-  biggestWinUsd: number;
-  biggestWinPct: number;
-}
-
-function mulberry32(seed: number) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function isoLocal(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
+import type { PortfolioPosition } from "@/components/octora/types";
 
 /**
- * Build a deterministic per-day PnL series ending at `until` (inclusive).
- * Days before `since` (e.g. position open date) yield no data.
+ * Overview metrics computed directly from live + closed PortfolioPosition
+ * records. No synthetic series, no historical snapshotting — every field here
+ * either comes from a localPositions entry (deposit-time depositedUsd, the
+ * derivationVersion, timestamps) or from the on-chain state-query join
+ * (valueUsd, feeUsd, hasClaimableFees) wired by usePortfolioPositions.
+ *
+ * Fields we used to fake (win rate, biggest win, avg invested, daily P&L
+ * series) were removed in 2026-05 because we don't snapshot position value
+ * over time and the rendered numbers had no relationship to anything the
+ * user actually did. The Recent Activity panel now uses the real
+ * StoredPosition timestamps for the historical view.
  */
-export function generateDailyPnL(opts: {
-  since: Date;
-  until: Date;
-  seed?: number;
-  dailyMeanUsd?: number;
-}): DailyPnL[] {
-  const { since, until } = opts;
-  const seed = opts.seed ?? 0xb1a5;
-  const mean = opts.dailyMeanUsd ?? 12;
-  const rng = mulberry32(seed);
-  const out: DailyPnL[] = [];
-
-  const cur = new Date(since.getFullYear(), since.getMonth(), since.getDate());
-  const last = new Date(until.getFullYear(), until.getMonth(), until.getDate());
-  while (cur <= last) {
-    // Mostly small wins, occasional big day, rare losing day.
-    const r = rng();
-    let pnl: number;
-    if (r < 0.08) pnl = -mean * (0.4 + rng() * 0.8);
-    else if (r > 0.92) pnl = mean * (2 + rng() * 4);
-    else pnl = mean * (0.3 + rng() * 1.4);
-    pnl = Math.round(pnl * 100) / 100;
-
-    const positions = 1 + Math.floor(rng() * 3);
-    out.push({ date: isoLocal(cur), pnlUsd: pnl, positions });
-    cur.setDate(cur.getDate() + 1);
-  }
-  return out;
+export interface OverviewMetrics {
+  /** Sum of depositedUsd across live (non-closed) positions. */
+  totalDeposited: number;
+  /** Sum of valueUsd across live positions, from on-chain state queries. */
+  totalPositionValue: number;
+  /** Sum of feesUsd across live positions (= "Pending Fees"). */
+  pendingFeesUsd: number;
+  /** Net P&L = value + fees − deposited, live only. */
+  totalPnL: number;
+  /** P&L as a percent of deposited; 0 when nothing deposited. */
+  totalPnLPct: number;
+  /** Count of live positions whose on-chain state reports raw fee lamports
+   *  > 0 even though feesUsd may round to $0 on devnet (no Jupiter price). */
+  positionsWithClaimableFees: number;
+  livePositionCount: number;
+  closedPositionCount: number;
+  poolCount: number;
 }
 
-export function summarizePnL(daily: DailyPnL[], opts: { totalDeposited: number; totalPositionValue: number; feesClaimed: number; claimableFees: number }): PnLSummary {
-  const totalPnL = daily.reduce((s, d) => s + d.pnlUsd, 0);
-  const totalPnLPct = opts.totalDeposited > 0 ? (totalPnL / opts.totalDeposited) * 100 : 0;
-  const avgInvested = opts.totalDeposited / Math.max(1, daily.length / 30);
-  const wins = daily.filter((d) => d.pnlUsd > 0).length;
-  const winRate = daily.length > 0 ? (wins / daily.length) * 100 : 0;
-  const biggest = daily.reduce<DailyPnL | null>((best, d) => (!best || d.pnlUsd > best.pnlUsd ? d : best), null);
-  const biggestWinUsd = biggest?.pnlUsd ?? 0;
-  const biggestWinPct = opts.totalDeposited > 0 ? (biggestWinUsd / opts.totalDeposited) * 100 : 0;
+export function computeOverviewMetrics(positions: PortfolioPosition[]): OverviewMetrics {
+  const live = positions.filter((p) => !p.closed);
+  const closed = positions.filter((p) => p.closed);
+
+  let totalDeposited = 0;
+  let totalPositionValue = 0;
+  let pendingFeesUsd = 0;
+  let positionsWithClaimableFees = 0;
+  const pools = new Set<string>();
+
+  for (const p of live) {
+    totalDeposited += p.depositedUsd ?? 0;
+    totalPositionValue += p.valueUsd ?? 0;
+    pendingFeesUsd += p.feesUsd ?? 0;
+    if (p.hasClaimableFees) positionsWithClaimableFees += 1;
+    pools.add(p.poolAddress);
+  }
+
+  const totalPnL = totalPositionValue + pendingFeesUsd - totalDeposited;
+  const totalPnLPct = totalDeposited > 0 ? (totalPnL / totalDeposited) * 100 : 0;
 
   return {
-    totalDeposited: opts.totalDeposited,
-    feesClaimed: opts.feesClaimed,
-    claimableFees: opts.claimableFees,
-    totalPositionValue: opts.totalPositionValue,
+    totalDeposited,
+    totalPositionValue,
+    pendingFeesUsd,
     totalPnL,
     totalPnLPct,
-    avgInvested,
-    winRate,
-    biggestWinUsd,
-    biggestWinPct,
+    positionsWithClaimableFees,
+    livePositionCount: live.length,
+    closedPositionCount: closed.length,
+    poolCount: pools.size,
   };
 }

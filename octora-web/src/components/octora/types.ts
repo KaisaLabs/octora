@@ -71,6 +71,11 @@ export type PortfolioPosition = {
   rangeUpperBin?: number;
   activeBinId?: number;
   binStep?: number;
+  /** Current on-chain price at the active bin (quote per base). Joined in
+   *  from the Pool record at portfolio-hook time so the position detail
+   *  chart can label bin prices with the same DLMM formula the pool detail
+   *  page uses, instead of a synthetic placeholder. */
+  activePrice?: number;
   shape?: DistributionShape;
   inRange?: boolean;
   claimable?: string;

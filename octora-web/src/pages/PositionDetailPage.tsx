@@ -13,7 +13,7 @@ import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
 import { PositionStatusPill } from "@/components/octora/lp/PositionStatusPill";
 import { PnLBreakdownPanel } from "@/components/octora/lp/PnLBreakdownPanel";
 import { Reveal } from "@/components/octora/lp/Reveal";
-import { projectUserShape } from "@/lib/bins";
+import { binPrice, projectUserShape } from "@/lib/bins";
 import {
   runPrivateExitToMain,
   runSweepStealthToMain,
@@ -22,6 +22,7 @@ import { markLocalPositionClosed, removeLocalPosition } from "@/lib/localPositio
 import { useSolana } from "@/providers/SolanaProvider";
 import { PrivateClaimModal } from "@/components/octora/lp/PrivateClaimModal";
 import { PrivateExitModal } from "@/components/octora/lp/PrivateExitModal";
+import { PrivateRebalanceModal } from "@/components/octora/lp/PrivateRebalanceModal";
 import { StealthAddressDisplay } from "@/components/octora/lp/StealthAddressDisplay";
 
 interface Props {
@@ -40,12 +41,18 @@ function buildPositionBins(p: PortfolioPosition): LiquidityBin[] {
   const upper = p.rangeUpperBin ?? center + 8;
   const halfSpan = Math.max(28, Math.max(Math.abs(lower - center), Math.abs(upper - center)) + 12);
   const count = halfSpan * 2 + 1;
+  // Use the real DLMM bin-price formula keyed to the pool's active price so
+  // the axis matches what the pool detail page shows. Falls back to a unit
+  // anchor when activePrice is missing (e.g. devnet pool with no oracle) —
+  // the chart shape is still correct, only the absolute labels shift.
+  const activePrice = p.activePrice && p.activePrice > 0 ? p.activePrice : 1;
+  const binStep = p.binStep ?? 25;
   return Array.from({ length: count }, (_, i) => {
     const binId = center - halfSpan + i;
     const d = binId - center;
     const sigma = halfSpan / 2.8;
     const liquidity = Math.exp(-(d * d) / (2 * sigma * sigma)) * 1_000_000;
-    return { binId, price: 1 + binId * 0.005, liquidity };
+    return { binId, price: binPrice(activePrice, center, binId, binStep), liquidity };
   });
 }
 
@@ -558,8 +565,10 @@ function RebalancePanel({
   initialUpper: number;
   center: number;
 }) {
+  const { wallet } = useSolana();
   const [range, setRange] = useState({ lower: initialLower, upper: initialUpper });
   const [shape, setShape] = useState<DistributionShape>(position.shape ?? "spot");
+  const [modalOpen, setModalOpen] = useState(false);
 
   // If position drifted out of range, propose recentering on active bin by default.
   useEffect(() => {
@@ -657,7 +666,18 @@ function RebalancePanel({
           <Button
             variant="hero"
             size="lg"
-            disabled={!dirty}
+            disabled={!dirty || !wallet.address || !position.stealthPubkey}
+            onClick={() => {
+              if (!wallet.address) {
+                toast.error("Connect your wallet to rebalance.");
+                return;
+              }
+              if (!position.stealthPubkey) {
+                toast.error("Stealth wallet missing — re-open the deposit modal once.");
+                return;
+              }
+              setModalOpen(true);
+            }}
             className="mt-3 w-full justify-center rounded-xl"
           >
             Rebalance privately
@@ -668,6 +688,25 @@ function RebalancePanel({
           )}
         </div>
       </div>
+      {position.stealthPubkey && (
+        <PrivateRebalanceModal
+          open={modalOpen}
+          onOpenChange={setModalOpen}
+          position={{
+            positionId: position.id,
+            poolAddress: position.poolAddress,
+            stealthPubkey: position.stealthPubkey,
+            lowerBinId: initialLower,
+            upperBinId: initialUpper,
+            shape: position.shape ?? "spot",
+            depositedUsd: position.depositedUsd ?? parseUsd(position.deposited),
+            derivationVersion: position.derivationVersion,
+          }}
+          newLowerBinId={range.lower}
+          newUpperBinId={range.upper}
+          newShape={shape}
+        />
+      )}
     </div>
   );
 }

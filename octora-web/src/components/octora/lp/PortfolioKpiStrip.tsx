@@ -1,9 +1,9 @@
-import { Coins, Target, TrendingUp, Trophy } from "lucide-react";
+import { Coins, PiggyBank, TrendingUp, Wallet } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { PnLSummary } from "@/lib/pnl";
+import type { OverviewMetrics } from "@/lib/pnl";
 
 interface Props {
-  summary: PnLSummary;
+  metrics: OverviewMetrics;
 }
 
 function fmtUsd(n: number): string {
@@ -24,39 +24,49 @@ function signedPct(n: number): string {
   return `${s}${Math.abs(n).toFixed(2)}%`;
 }
 
-export function PortfolioKpiStrip({ summary }: Props) {
-  const pnlPositive = summary.totalPnL >= 0;
-  const winPositive = summary.winRate >= 50;
+export function PortfolioKpiStrip({ metrics }: Props) {
+  const pnlPositive = metrics.totalPnL >= 0;
+  const hasDeposits = metrics.totalDeposited > 0;
+  const pendingFeesSub =
+    metrics.pendingFeesUsd > 0
+      ? "ready to claim"
+      : metrics.positionsWithClaimableFees > 0
+        ? `${metrics.positionsWithClaimableFees} position${metrics.positionsWithClaimableFees === 1 ? "" : "s"} accruing · USD price unavailable`
+        : "no pending fees";
 
   return (
     <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <KpiCard
-        icon={TrendingUp}
-        label="Net P&L"
-        value={signedUsd(summary.totalPnL)}
-        sub={signedPct(summary.totalPnLPct)}
-        tone={pnlPositive ? "up" : "down"}
+        icon={PiggyBank}
+        label="Total Deposited"
+        value={fmtUsd(metrics.totalDeposited)}
+        sub={`${metrics.livePositionCount} active · ${metrics.poolCount} pool${metrics.poolCount === 1 ? "" : "s"}`}
+        tone="neutral"
       />
       <KpiCard
-        icon={Target}
-        label="Win Rate"
-        value={`${summary.winRate.toFixed(1)}%`}
-        sub="of trading days"
-        tone={winPositive ? "up" : "neutral"}
-      />
-      <KpiCard
-        icon={Trophy}
-        label="Biggest Win"
-        value={signedUsd(summary.biggestWinUsd)}
-        sub={signedPct(summary.biggestWinPct)}
-        tone="up"
+        icon={Wallet}
+        label="Current Value"
+        value={fmtUsd(metrics.totalPositionValue)}
+        sub={hasDeposits ? "live on-chain" : "no active positions"}
+        tone="neutral"
       />
       <KpiCard
         icon={Coins}
-        label="Claimable"
-        value={fmtUsd(summary.claimableFees)}
-        sub={summary.claimableFees > 0 ? "ready to claim" : "no pending fees"}
-        tone={summary.claimableFees > 0 ? "up" : "neutral"}
+        label="Pending Fees"
+        value={fmtUsd(metrics.pendingFeesUsd)}
+        sub={pendingFeesSub}
+        tone={
+          metrics.pendingFeesUsd > 0 || metrics.positionsWithClaimableFees > 0
+            ? "up"
+            : "neutral"
+        }
+      />
+      <KpiCard
+        icon={TrendingUp}
+        label="Net P&L"
+        value={hasDeposits ? signedUsd(metrics.totalPnL) : "—"}
+        sub={hasDeposits ? signedPct(metrics.totalPnLPct) : "open a position to track"}
+        tone={hasDeposits ? (pnlPositive ? "up" : "down") : "neutral"}
       />
     </section>
   );
