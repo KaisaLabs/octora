@@ -14,6 +14,7 @@ import { createPrismaReconciliationRepository, type ReconciliationRepository } f
 import { registerPositionRoutes } from '#modules/positions/position.routes'
 import { registerDlmmRoutes } from '#modules/dlmm/dlmm.routes'
 import { registerPricesRoutes } from '#modules/prices/prices.routes'
+import { registerTokensRoutes } from '#modules/tokens/tokens.routes'
 import { createPrismaWaitlistRepository, type WaitlistRepository } from '#modules/waitlist/waitlist.repository'
 import { registerWaitlistRoutes } from '#modules/waitlist/waitlist.routes'
 import { registerMixerRoutes } from '#modules/mixer/mixer.routes'
@@ -190,6 +191,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   })
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)
+  app.register(registerTokensRoutes)
   app.register(registerWaitlistRoutes, { waitlistRepo: repos.waitlistRepo })
   // Build the MixerRegistry once and share it across routes so the
   // anonymity-set tracker (spent-nullifier set + deposit count) stays

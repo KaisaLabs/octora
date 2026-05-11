@@ -19,6 +19,12 @@ export type Pool = {
   apr: string;
   volume24h: string;
   fees24h: string;
+  /** Raw USD volume/fees by timeframe label ("5m"/"30m"/"1h"/"2h"/"4h"/"12h"/"24h").
+   *  Backend forwards Meteora's full bucket map on mainnet; devnet only has
+   *  `{ "24h": n }`. Used by the pool-list timeframe selector to swap which
+   *  bucket drives display, sort, and Fee/TVL. */
+  volumeByTf: Record<string, number>;
+  feesByTf: Record<string, number>;
   strategy: string;
   depth: string;
   risk: string;

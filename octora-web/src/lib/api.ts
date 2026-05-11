@@ -19,6 +19,9 @@ export interface PoolSummary {
   tvl: number
   volume24h: number
   fees24h: number
+  /** Multi-timeframe USD buckets keyed by Meteora's timeframe labels. */
+  volumeByTf: Record<string, number>
+  feesByTf: Record<string, number>
   apr: number
   feeBps: number
   binStep: number
@@ -73,6 +76,8 @@ export function mapPoolSummary(summary: PoolSummary): Pool {
     apr: fmtPct(summary.apr),
     volume24h: fmtUsd(summary.volume24h),
     fees24h: fmtUsd(summary.fees24h),
+    volumeByTf: summary.volumeByTf ?? { "24h": summary.volume24h },
+    feesByTf: summary.feesByTf ?? { "24h": summary.fees24h },
     strategy: "Auto range · Balanced",
     depth: summary.binStep <= 10 ? "Tight" : summary.binStep <= 50 ? "Medium" : "Wide",
     risk: summary.apr > 30 ? "Active" : "Balanced",
@@ -160,6 +165,26 @@ export async function getPrices(mints: string[]): Promise<PriceMap> {
   }
   const body = await res.json()
   return (body?.data ?? {}) as PriceMap
+}
+
+export interface TokenIcon {
+  mint: string
+  /** HTTPS URL, or null when Jupiter has no logo for this mint. */
+  icon: string | null
+  symbol: string | null
+}
+
+export type TokenIconMap = Record<string, TokenIcon>
+
+export async function getTokenIcons(mints: string[]): Promise<TokenIconMap> {
+  const ids = mints.filter(Boolean)
+  if (ids.length === 0) return {}
+  const res = await fetch(`${API_BASE}/tokens/icons?ids=${encodeURIComponent(ids.join(','))}`)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch token icons: ${res.status}`)
+  }
+  const body = await res.json()
+  return (body?.data ?? {}) as TokenIconMap
 }
 
 export interface PositionStateView {

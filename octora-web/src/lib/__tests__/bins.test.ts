@@ -26,6 +26,8 @@ const BASE_POOL: Pool = {
   apr: "12.0%",
   volume24h: "$100K",
   fees24h: "$1K",
+  volumeByTf: { "24h": 100_000 },
+  feesByTf: { "24h": 1_000 },
   strategy: "auto",
   depth: "Tight",
   risk: "Balanced",

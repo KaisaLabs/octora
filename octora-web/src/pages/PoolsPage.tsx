@@ -12,10 +12,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { PoolPairPrice } from "@/components/octora/PoolPairPrice";
+import { PairAvatar } from "@/components/octora/PairAvatar";
 import { usePrices } from "@/hooks/usePrices";
+import { useTokenIcons } from "@/hooks/useTokenIcons";
 
 type ContentTab = "top" | "trending" | "stable";
-type TimeFrame = "5m" | "30m" | "1h" | "2h" | "4h" | "12h" | "24h";
+// Meteora's `/pools` indexer only exposes 30m+; no 5m bucket exists upstream,
+// so we don't list it here.
+type TimeFrame = "30m" | "1h" | "2h" | "4h" | "12h" | "24h";
 type SortKey = "tvl" | "volume" | "fees" | "feeTvl" | "apr" | "age";
 type SortDir = "asc" | "desc";
 interface SortState {
@@ -29,7 +33,7 @@ const CONTENT_TABS: Array<{ id: ContentTab; label: string; sub: string; icon: Lu
   { id: "stable", label: "Stable", sub: "USDC / USDT pairs", icon: Anchor },
 ];
 
-const TIMEFRAMES: TimeFrame[] = ["5m", "30m", "1h", "2h", "4h", "12h", "24h"];
+const TIMEFRAMES: TimeFrame[] = ["30m", "1h", "2h", "4h", "12h", "24h"];
 
 interface NumRange {
   min: string;
@@ -96,12 +100,46 @@ const parsePct = (v: string | number) => {
   return parseFloat(v.replace("%", ""));
 };
 
-/** Annualized fee yield against TVL: 24h fees * 365 / TVL, expressed as percent. */
-function feeTvlPct(p: Pool): number {
+/** Hours represented by each timeframe label. Used to annualize fee/TVL from
+ *  whichever bucket the user selected. */
+const TF_HOURS: Record<TimeFrame, number> = {
+  "30m": 0.5,
+  "1h": 1,
+  "2h": 2,
+  "4h": 4,
+  "12h": 12,
+  "24h": 24,
+};
+
+function tfLabel(tf: TimeFrame): string {
+  return tf.replace("h", "H");
+}
+
+function volumeAtTf(p: Pool, tf: TimeFrame): number {
+  return p.volumeByTf?.[tf] ?? 0;
+}
+
+function feesAtTf(p: Pool, tf: TimeFrame): number {
+  return p.feesByTf?.[tf] ?? 0;
+}
+
+/** Annualized fee yield against TVL, scaled from the selected timeframe.
+ *  (fees in window) * (periods per year) / TVL → percent. */
+function feeTvlPct(p: Pool, tf: TimeFrame): number {
   const tvl = parseUsd(p.tvl);
   if (tvl <= 0) return 0;
-  const fees = parseUsd(p.fees24h);
-  return ((fees * 365) / tvl) * 100;
+  const fees = feesAtTf(p, tf);
+  const periodsPerYear = (365 * 24) / TF_HOURS[tf];
+  return ((fees * periodsPerYear) / tvl) * 100;
+}
+
+function fmtUsd(n: number): string {
+  if (!Number.isFinite(n) || n === 0) return "$0";
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
+  if (abs >= 1) return `$${n.toFixed(0)}`;
+  return `$${n.toFixed(2)}`;
 }
 
 function truncateMiddle(s: string, head = 6, tail = 6): string {
@@ -109,8 +147,8 @@ function truncateMiddle(s: string, head = 6, tail = 6): string {
   return `${s.slice(0, head)}…${s.slice(-tail)}`;
 }
 
-function fmtFeeTvl(p: Pool): string {
-  const v = feeTvlPct(p);
+function fmtFeeTvl(p: Pool, tf: TimeFrame): string {
+  const v = feeTvlPct(p, tf);
   if (!Number.isFinite(v) || v === 0) return "—";
   if (v >= 1000) return `${(v / 1000).toFixed(1)}Kx`;
   return `${v.toFixed(1)}%`;
@@ -168,6 +206,27 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
 
   const nowSec = useMemo(() => Math.floor(Date.now() / 1000), []);
 
+  // A timeframe is "available" if at least one pool in the unfiltered source
+  // exposes that bucket. On devnet only "24h" is populated; on mainnet
+  // Meteora's indexer covers the full set. Buttons with no backing data are
+  // disabled so the selector never silently picks an empty column.
+  const availableTfs = useMemo(() => {
+    const set = new Set<TimeFrame>(["24h"]);
+    for (const p of pools) {
+      const keys = Object.keys(p.volumeByTf ?? {}).concat(Object.keys(p.feesByTf ?? {}));
+      for (const k of keys) {
+        if ((TIMEFRAMES as readonly string[]).includes(k)) set.add(k as TimeFrame);
+      }
+    }
+    return set;
+  }, [pools]);
+
+  // If the active timeframe has no data on this network (e.g. user lands on
+  // devnet with default "4h"), snap back to 24h so the table isn't empty.
+  useEffect(() => {
+    if (!availableTfs.has(timeframe)) setTimeframe("24h");
+  }, [availableTfs, timeframe]);
+
   const filteredPools = useMemo(() => {
     const q = debouncedQuery.toLowerCase();
     // While a query is active, prefer the backend search results (covers pools
@@ -179,9 +238,9 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
       if (filters.hideLowTvl && parseUsd(p.tvl) < 1_000) return false;
       if (!inRange(p.binStep, filters.binStep)) return false;
       if (!inRange(parseUsd(p.tvl), filters.tvl)) return false;
-      if (!inRange(parseUsd(p.volume24h), filters.volume)) return false;
-      if (!inRange(parseUsd(p.fees24h), filters.fees)) return false;
-      if (!inRange(feeTvlPct(p), filters.feeTvlPct)) return false;
+      if (!inRange(volumeAtTf(p, timeframe), filters.volume)) return false;
+      if (!inRange(feesAtTf(p, timeframe), filters.fees)) return false;
+      if (!inRange(feeTvlPct(p, timeframe), filters.feeTvlPct)) return false;
       if (filters.poolAgeHours.min || filters.poolAgeHours.max) {
         if (!p.createdAt) return false;
         const ageHours = (nowSec - p.createdAt) / 3600;
@@ -221,16 +280,16 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
             bv = parseUsd(b.tvl);
             break;
           case "volume":
-            av = parseUsd(a.volume24h);
-            bv = parseUsd(b.volume24h);
+            av = volumeAtTf(a, timeframe);
+            bv = volumeAtTf(b, timeframe);
             break;
           case "fees":
-            av = parseUsd(a.fees24h);
-            bv = parseUsd(b.fees24h);
+            av = feesAtTf(a, timeframe);
+            bv = feesAtTf(b, timeframe);
             break;
           case "feeTvl":
-            av = feeTvlPct(a);
-            bv = feeTvlPct(b);
+            av = feeTvlPct(a, timeframe);
+            bv = feeTvlPct(b, timeframe);
             break;
           case "apr":
             av = parsePct(a.apr);
@@ -243,16 +302,16 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
         }
         return sign * (av - bv);
       }
-      if (contentTab === "trending") return parseUsd(b.volume24h) - parseUsd(a.volume24h);
+      if (contentTab === "trending") return volumeAtTf(b, timeframe) - volumeAtTf(a, timeframe);
       if (contentTab === "stable") return parseUsd(b.tvl) - parseUsd(a.tvl);
       // top: best fee yield per dollar at risk.
-      const af = feeTvlPct(a);
-      const bf = feeTvlPct(b);
+      const af = feeTvlPct(a, timeframe);
+      const bf = feeTvlPct(b, timeframe);
       if (bf !== af) return bf - af;
       return parseUsd(b.tvl) - parseUsd(a.tvl);
     });
     return list;
-  }, [pools, debouncedQuery, searchQuery.data, contentTab, filters, nowSec, sort]);
+  }, [pools, debouncedQuery, searchQuery.data, contentTab, filters, nowSec, sort, timeframe]);
 
   const resetFilters = () => {
     setFilters(DEFAULT_FILTERS);
@@ -270,6 +329,8 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
   }, [filteredPools]);
   const pricesQuery = usePrices(visibleMints);
   const prices = pricesQuery.data;
+  const iconsQuery = useTokenIcons(visibleMints);
+  const icons = iconsQuery.data;
 
   if (loading) {
     return <PoolsSkeleton />;
@@ -291,7 +352,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
           <ContentTabBar value={contentTab} onChange={setContentTab} />
 
           <div className="flex flex-wrap items-center gap-2">
-            <TimeframeSelect value={timeframe} onChange={setTimeframe} />
+            <TimeframeSelect value={timeframe} onChange={setTimeframe} available={availableTfs} />
             <label className="relative block flex-1 lg:w-72 lg:flex-none">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -358,10 +419,10 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
                   <SortHeader label="TVL" sortKey="tvl" current={sort} onToggle={toggleSort} />
                 </th>
                 <th className="px-4 py-3 text-right font-normal">
-                  <SortHeader label="24h Volume" sortKey="volume" current={sort} onToggle={toggleSort} />
+                  <SortHeader label={`${tfLabel(timeframe)} Volume`} sortKey="volume" current={sort} onToggle={toggleSort} />
                 </th>
                 <th className="px-4 py-3 text-right font-normal">
-                  <SortHeader label="24h Fees" sortKey="fees" current={sort} onToggle={toggleSort} />
+                  <SortHeader label={`${tfLabel(timeframe)} Fees`} sortKey="fees" current={sort} onToggle={toggleSort} />
                 </th>
                 <th className="px-4 py-3 text-right font-normal">
                   <SortHeader label="Fee/TVL" sortKey="feeTvl" current={sort} onToggle={toggleSort} />
@@ -373,7 +434,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
             </thead>
             <tbody>
               {filteredPools.map((p, i) => {
-                const feeTvl = feeTvlPct(p);
+                const feeTvl = feeTvlPct(p, timeframe);
                 const aprNum = parsePct(p.apr);
                 return (
                   <tr
@@ -395,7 +456,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
                       </span>
                     </td>
                     <td className="px-4 py-4 align-middle">
-                      <PoolPairCell pool={p} />
+                      <PoolPairCell pool={p} iconA={icons?.[p.tokenAMint]?.icon} iconB={icons?.[p.tokenBMint]?.icon} />
                     </td>
                     <td className="px-4 py-4 text-right align-middle font-mono text-xs tabular-nums text-muted-foreground">
                       {formatAge(p.createdAt, nowSec)}
@@ -413,13 +474,13 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
                       {p.tvl}
                     </td>
                     <td className="px-4 py-4 text-right align-middle font-mono tabular-nums text-foreground">
-                      {p.volume24h}
+                      {fmtUsd(volumeAtTf(p, timeframe))}
                     </td>
                     <td className="px-4 py-4 text-right align-middle font-mono tabular-nums text-foreground">
-                      {p.fees24h}
+                      {fmtUsd(feesAtTf(p, timeframe))}
                     </td>
                     <td className={`px-4 py-4 text-right align-middle font-mono tabular-nums ${feeTvlColorClass(feeTvl)}`}>
-                      {fmtFeeTvl(p)}
+                      {fmtFeeTvl(p, timeframe)}
                     </td>
                     <td className={`px-4 py-4 text-right align-middle font-mono tabular-nums ${aprColorClass(aprNum)}`}>
                       {p.apr}
@@ -441,7 +502,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
               className="rounded-xl border border-border bg-card p-4 text-left transition-colors hover:border-primary/30"
             >
               <div className="flex items-start justify-between gap-3">
-                <PoolPairCell pool={p} />
+                <PoolPairCell pool={p} iconA={icons?.[p.tokenAMint]?.icon} iconB={icons?.[p.tokenBMint]?.icon} />
                 <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
                   {formatAge(p.createdAt, nowSec)}
                 </span>
@@ -465,12 +526,12 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
                   <p className="mt-0.5 font-mono tabular-nums text-foreground">{p.tvl}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">24h Vol</p>
-                  <p className="mt-0.5 font-mono tabular-nums text-foreground">{p.volume24h}</p>
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{tfLabel(timeframe)} Vol</p>
+                  <p className="mt-0.5 font-mono tabular-nums text-foreground">{fmtUsd(volumeAtTf(p, timeframe))}</p>
                 </div>
                 <div>
                   <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Fee/TVL</p>
-                  <p className="mt-0.5 font-mono tabular-nums text-foreground">{fmtFeeTvl(p)}</p>
+                  <p className="mt-0.5 font-mono tabular-nums text-foreground">{fmtFeeTvl(p, timeframe)}</p>
                 </div>
                 <div>
                   <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">APR</p>
@@ -591,26 +652,33 @@ function ContentTabBar({
 function TimeframeSelect({
   value,
   onChange,
+  available,
 }: {
   value: TimeFrame;
   onChange: (v: TimeFrame) => void;
+  available: Set<TimeFrame>;
 }) {
   return (
     <div className="hidden items-center rounded-md border border-border bg-secondary/60 p-0.5 sm:inline-flex">
       {TIMEFRAMES.map((tf) => {
         const active = value === tf;
+        const enabled = available.has(tf);
         return (
           <button
             key={tf}
             type="button"
+            disabled={!enabled}
+            title={enabled ? undefined : "Not available on this network"}
             onClick={() => onChange(tf)}
             className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
               active
                 ? "bg-primary/15 text-primary shadow-[inset_0_0_0_1px_hsl(160_84%_45%_/_0.4)]"
-                : "text-muted-foreground hover:text-foreground"
+                : enabled
+                  ? "text-muted-foreground hover:text-foreground"
+                  : "cursor-not-allowed text-muted-foreground/30"
             }`}
           >
-            {tf.replace("h", "H").replace("m", "m")}
+            {tfLabel(tf)}
           </button>
         );
       })}
@@ -807,10 +875,10 @@ function RangeField({
   );
 }
 
-function PoolPairCell({ pool }: { pool: Pool }) {
+function PoolPairCell({ pool, iconA, iconB }: { pool: Pool; iconA?: string | null; iconB?: string | null }) {
   return (
     <div className="flex min-w-0 items-center gap-3">
-      <PairAvatar a={pool.tokenA} b={pool.tokenB} />
+      <PairAvatar a={pool.tokenA} b={pool.tokenB} iconA={iconA} iconB={iconB} />
       <div className="min-w-0">
         <p className="truncate font-medium text-foreground">{pool.name}</p>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
@@ -825,24 +893,6 @@ function PoolPairCell({ pool }: { pool: Pool }) {
       </div>
     </div>
   );
-}
-
-function PairAvatar({ a, b }: { a: string; b: string }) {
-  return (
-    <div className="relative h-8 w-12 shrink-0">
-      <span className="absolute left-0 top-0 flex h-8 w-8 items-center justify-center rounded-full border border-border bg-secondary/60 text-[10px] font-semibold uppercase text-foreground/80">
-        {initials(a)}
-      </span>
-      <span className="absolute left-4 top-0 flex h-8 w-8 items-center justify-center rounded-full border border-border bg-secondary text-[10px] font-semibold uppercase text-foreground/80">
-        {initials(b)}
-      </span>
-    </div>
-  );
-}
-
-function initials(token: string): string {
-  if (!token) return "?";
-  return token.slice(0, 2).toUpperCase();
 }
 
 function SortHeader({

@@ -32,6 +32,8 @@ function pool(opts: {
     tvl: opts.tvl ?? 100_000,
     volume24h: 0,
     fees24h: 0,
+    volumeByTf: {},
+    feesByTf: {},
     apr: 0,
     feeBps: 25,
     binStep: 10,

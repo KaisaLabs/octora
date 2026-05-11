@@ -13,6 +13,13 @@ export interface PoolSummary {
   tvl: number
   volume24h: number
   fees24h: number
+  /**
+   * Volume/fees buckets keyed by timeframe label ("5m", "30m", "1h", "2h",
+   * "4h", "12h", "24h") in raw USD. Mainnet exposes the full set; devnet only
+   * provides 24h so the map degrades to `{ "24h": <n> }`.
+   */
+  volumeByTf: Record<string, number>
+  feesByTf: Record<string, number>
   apr: number
   feeBps: number
   binStep: number
