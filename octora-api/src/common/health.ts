@@ -4,6 +4,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import type { PrismaClient } from "@prisma/client";
 
 import type { AppConfig } from "./config";
+import { MIXER_POOL_IS_PAUSED_OFFSET } from "../modules/mixer/layout.js";
 
 export interface HealthCheck {
   ok: boolean;
@@ -149,11 +150,8 @@ async function checkMixer(config: AppConfig): Promise<HealthCheck> {
       };
     }
 
-    // Layout: discriminator(8) + authority(32) + denomination(8) +
-    //         next_leaf_index(4) + current_root_index(1) + root_history(32*30)
-    //         + filled_subtrees(32*20) + is_paused(1) + bump(1)
-    const isPausedOffset = 8 + 32 + 8 + 4 + 1 + 32 * 30 + 32 * 20;
-    const isPaused = accountInfo.data[isPausedOffset] === 1;
+    // Layout offsets live in octora-api/src/modules/mixer/layout.ts.
+    const isPaused = accountInfo.data[MIXER_POOL_IS_PAUSED_OFFSET] === 1;
     if (isPaused) {
       return {
         ok: false,

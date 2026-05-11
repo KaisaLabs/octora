@@ -2,6 +2,10 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import type { PrismaClient } from "@prisma/client";
 
 import type { AppConfig } from "./config";
+import {
+  MIXER_POOL_IS_PAUSED_OFFSET,
+  MIXER_POOL_NEXT_LEAF_INDEX_OFFSET,
+} from "../modules/mixer/layout.js";
 
 /**
  * Operational metrics endpoint (P1-44).
@@ -75,14 +79,10 @@ async function collectMixer(config: AppConfig): Promise<MixerMetrics | null> {
 
   const balance = await connection.getBalance(poolPda);
 
-  // Layout (matches programs/octora-mixer/src/state.rs::MixerPool):
-  //   discriminator(8) + authority(32) + denomination(8)
-  //   + next_leaf_index(4) + current_root_index(1)
-  //   + root_history(32 * 30) + filled_subtrees(32 * 20)
-  //   + is_paused(1) + bump(1)
+  // Layout offsets live in octora-api/src/modules/mixer/layout.ts.
   const data = accountInfo.data;
-  const nextLeafIndex = data.readUInt32LE(8 + 32 + 8);
-  const isPaused = data[8 + 32 + 8 + 4 + 1 + 32 * 30 + 32 * 20] === 1;
+  const nextLeafIndex = data.readUInt32LE(MIXER_POOL_NEXT_LEAF_INDEX_OFFSET);
+  const isPaused = data[MIXER_POOL_IS_PAUSED_OFFSET] === 1;
 
   return {
     poolAddress: poolPda.toBase58(),
