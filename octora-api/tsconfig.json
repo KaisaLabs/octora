@@ -17,7 +17,9 @@
       "#modules/*": ["src/modules/*"],
       "#infra/*": ["src/infra/*"],
       "#test-kit": ["src/test-kit/index.ts"],
-      "#test-kit/*": ["src/test-kit/*"]
+      "#test-kit/*": ["src/test-kit/*"],
+      "#workers": ["src/workers/index.ts"],
+      "#workers/*": ["src/workers/*"]
     }
   },
   "include": ["src/**/*.ts", "api/**/*.ts"]

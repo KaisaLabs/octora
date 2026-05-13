@@ -35,17 +35,12 @@ import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { getDlmmProgram } from "#common/solana/dlmm-program";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // IDL is shared with the existing on-chain executor client. Copying the
 // path keeps a single source of truth for the executor IDL.
 const IDL_PATH = join(__dirname, "..", "..", "execution", "clients", "idl", "octora_executor.json");
-
-const DLMM_PROGRAM_ID = new PublicKey(
-  "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
-);
-const DLMM_EVENT_AUTHORITY = new PublicKey(
-  "D1ZN9Wj1fRSUQfCjhvnu1hqDMT7hzjzBBpi12nVniYD6",
-);
 
 export interface DlmmSwapClientOptions {
   rpcUrl: string;
@@ -105,23 +100,24 @@ export class DlmmSwapClient {
    * Account layout matches programs/octora-executor/src/instructions/dlmm/swap.rs.
    */
   async buildSwapTx(args: BuildSwapTxArgs): Promise<BuildSwapTxResult> {
+    const dlmmCfg = getDlmmProgram();
     const dlmm = await DLMM.create(this.connection, args.lbPair);
     const tokenX = dlmm.lbPair.tokenXMint;
     const tokenY = dlmm.lbPair.tokenYMint;
 
-    const [reserveX] = deriveReserve(tokenX, args.lbPair, DLMM_PROGRAM_ID);
-    const [reserveY] = deriveReserve(tokenY, args.lbPair, DLMM_PROGRAM_ID);
-    const [oracle] = deriveOracle(args.lbPair, DLMM_PROGRAM_ID);
+    const [reserveX] = deriveReserve(tokenX, args.lbPair, dlmmCfg.programId);
+    const [reserveY] = deriveReserve(tokenY, args.lbPair, dlmmCfg.programId);
+    const [oracle] = deriveOracle(args.lbPair, dlmmCfg.programId);
 
     // Bin arrays straddling the active bin. DLMM swap consumes whichever
     // bins the price moves through; we pass two arrays around the active
     // bin so a typical swap stays inside this window.
     const activeIdx = binIdToBinArrayIndex(new BN(dlmm.lbPair.activeId));
-    const [binArray0] = deriveBinArray(args.lbPair, activeIdx, DLMM_PROGRAM_ID);
+    const [binArray0] = deriveBinArray(args.lbPair, activeIdx, dlmmCfg.programId);
     const [binArray1] = deriveBinArray(
       args.lbPair,
       activeIdx.add(new BN(args.swapForY ? -1 : 1)),
-      DLMM_PROGRAM_ID,
+      dlmmCfg.programId,
     );
 
     // User token ATAs — owned by the stealth, mints derived from swap
@@ -134,7 +130,7 @@ export class DlmmSwapClient {
     // Match programs/octora-executor/src/instructions/dlmm/swap.rs layout.
     const remainingMetas: AccountMeta[] = [
       { pubkey: args.lbPair, isSigner: false, isWritable: true },                // 0 lb_pair
-      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: true },            // 1 bitmap_ext sentinel
+      { pubkey: dlmmCfg.programId, isSigner: false, isWritable: true },            // 1 bitmap_ext sentinel
       { pubkey: reserveX, isSigner: false, isWritable: true },                   // 2 reserve_x
       { pubkey: reserveY, isSigner: false, isWritable: true },                   // 3 reserve_y
       { pubkey: userTokenIn, isSigner: false, isWritable: true },                // 4 user_token_in
@@ -142,13 +138,13 @@ export class DlmmSwapClient {
       { pubkey: tokenX, isSigner: false, isWritable: false },                    // 6 token_x_mint
       { pubkey: tokenY, isSigner: false, isWritable: false },                    // 7 token_y_mint
       { pubkey: oracle, isSigner: false, isWritable: true },                     // 8 oracle
-      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: true },            // 9 host_fee_in sentinel
+      { pubkey: dlmmCfg.programId, isSigner: false, isWritable: true },            // 9 host_fee_in sentinel
       { pubkey: args.stealth, isSigner: true, isWritable: true },                // 10 user
       // MAINNET_BLOCKER: Token-2022 — branch off mint owner.
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },          // 11 token_x_program
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },          // 12 token_y_program
-      { pubkey: DLMM_EVENT_AUTHORITY, isSigner: false, isWritable: false },      // 13 event_authority
-      { pubkey: DLMM_PROGRAM_ID, isSigner: false, isWritable: false },           // 14 dlmm_program
+      { pubkey: dlmmCfg.eventAuthority, isSigner: false, isWritable: false },      // 13 event_authority
+      { pubkey: dlmmCfg.programId, isSigner: false, isWritable: false },           // 14 dlmm_program
       { pubkey: binArray0, isSigner: false, isWritable: true },                  // 15 bin_array_0
       { pubkey: binArray1, isSigner: false, isWritable: true },                  // 16 bin_array_1
     ];
@@ -162,7 +158,7 @@ export class DlmmSwapClient {
       .dlmmSwap(new BN(args.amountIn.toString()), new BN(args.minAmountOut.toString()))
       .accounts({
         stealth: args.stealth,
-        dlmmProgram: DLMM_PROGRAM_ID,
+        dlmmProgram: dlmmCfg.programId,
         lbPair: args.lbPair,
         config: configPDA,
       })

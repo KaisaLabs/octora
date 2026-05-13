@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createMemoryRepositories } from "#test-kit/memory-db";
 import { createActivityService } from "../activity.service";
-import { createRecoveryWorker } from "../recovery-worker";
+import { createRecoveryWorker } from "#workers/recovery.worker";
 
 import type { Connection } from "@solana/web3.js";
 import type { PositionIndexer } from "#modules/indexer";

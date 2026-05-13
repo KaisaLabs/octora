@@ -33,7 +33,7 @@ import { registerAdminRoutes } from '#modules/admin/admin.routes'
 import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
 import { createActivityService } from '#modules/positions/activity.service'
 import { createIndexerService } from '#modules/indexer'
-import { createRecoveryWorker } from '#modules/positions/recovery-worker'
+import { createRecoveryWorker } from '#workers/recovery.worker'
 import { Connection, PublicKey } from '@solana/web3.js'
 
 export interface AppRepositories {

@@ -27,6 +27,11 @@
     "#test-kit/*": [
       "./src/test-kit/*.js",
       "./src/test-kit/*/index.js"
+    ],
+    "#workers": "./src/workers/index.js",
+    "#workers/*": [
+      "./src/workers/*.js",
+      "./src/workers/*/index.js"
     ]
   },
   "scripts": {

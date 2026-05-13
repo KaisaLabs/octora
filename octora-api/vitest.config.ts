@@ -12,6 +12,8 @@ export default defineConfig({
       { find: /^#infra\/(.*)/, replacement: path.resolve(__dirname, './src/infra/$1') },
       { find: /^#test-kit\/(.*)/, replacement: path.resolve(__dirname, './src/test-kit/$1') },
       { find: '#test-kit', replacement: path.resolve(__dirname, './src/test-kit/index.ts') },
+      { find: /^#workers\/(.*)/, replacement: path.resolve(__dirname, './src/workers/$1') },
+      { find: '#workers', replacement: path.resolve(__dirname, './src/workers/index.ts') },
     ],
   },
   test: {

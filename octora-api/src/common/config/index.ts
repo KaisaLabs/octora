@@ -22,6 +22,7 @@ export type {
   BetaCapsConfig,
   MixerRelayerConfig,
   DlmmRpcUrls,
+  DlmmProgramConfig,
   ResendConfig,
   MixerConfig,
   RateLimiterRuntimeConfig,
@@ -92,6 +93,19 @@ export function loadConfig(): AppConfig {
         process.env.OCTORA_DLMM_RPC_URL_LOCALNET?.trim() ||
         solanaRpcUrl ||
         'http://127.0.0.1:8899',
+    },
+    dlmm: {
+      programId:
+        process.env.OCTORA_DLMM_PROGRAM_ID?.trim() ||
+        'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo',
+      eventAuthority:
+        process.env.OCTORA_DLMM_EVENT_AUTHORITY?.trim() ||
+        'D1ZN9Wj1fRSUQfCjhvnu1hqDMT7hzjzBBpi12nVniYD6',
+      presetParameter:
+        process.env.OCTORA_DLMM_PRESET_PARAMETER?.trim() ||
+        'BYQtcDyv2BoFuf5ghsYDGPA8iX5F4WquK7zCzUsDwJ63',
+      binStep: parseInteger(process.env.OCTORA_DLMM_BIN_STEP) ?? 10,
+      baseFactor: parseInteger(process.env.OCTORA_DLMM_BASE_FACTOR) ?? 10_000,
     },
     resend: {
       apiKey: process.env.RESEND_API_KEY?.trim() || null,

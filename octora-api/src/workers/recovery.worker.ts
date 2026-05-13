@@ -1,7 +1,7 @@
 import { Connection, type Commitment } from "@solana/web3.js";
 
-import type { PositionRow, PositionRepository } from "./position.repository";
-import type { ActivityService } from "./activity.service";
+import type { PositionRow, PositionRepository } from "#modules/positions/position.repository";
+import type { ActivityService } from "#modules/positions/activity.service";
 import type { PositionIndexer } from "#modules/indexer";
 import type { ReconciliationRepository } from "#modules/indexer/indexer.repository";
 import type { ExecutionState, FailureStage, PositionAction } from "#domain";

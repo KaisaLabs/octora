@@ -35,6 +35,14 @@ export const dlmmRpcUrlsSchema = z.object({
   localnet: z.string().url(),
 })
 
+export const dlmmProgramConfigSchema = z.object({
+  programId: z.string().min(1),
+  eventAuthority: z.string().min(1),
+  presetParameter: z.string().min(1),
+  binStep: z.number().int().positive(),
+  baseFactor: z.number().int().positive(),
+})
+
 export const resendConfigSchema = z.object({
   apiKey: z.string().min(1).nullable(),
   fromAddress: z.string().min(1),
@@ -83,6 +91,7 @@ export const appConfigSchema = z.object({
   sentryDsn: z.string().min(1).nullable(),
   recoveryWorkerEnabled: z.boolean(),
   dlmmRpcUrls: dlmmRpcUrlsSchema,
+  dlmm: dlmmProgramConfigSchema,
   resend: resendConfigSchema,
   /**
    * Allowed directory prefix for the relayer hot-wallet keypair file.
@@ -98,3 +107,4 @@ export type DlmmRpcUrls = z.infer<typeof dlmmRpcUrlsSchema>
 export type ResendConfig = z.infer<typeof resendConfigSchema>
 export type MixerConfig = z.infer<typeof mixerConfigSchema>
 export type RateLimiterRuntimeConfig = z.infer<typeof rateLimiterConfigSchema>
+export type DlmmProgramConfig = z.infer<typeof dlmmProgramConfigSchema>

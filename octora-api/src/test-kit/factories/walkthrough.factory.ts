@@ -1,19 +1,7 @@
-import type { ActivityRecord, ExecutionMode, ExecutionState, PositionAction, PositionIntent } from "#domain";
+import type { ExecutionMode } from "#domain";
 
-export interface ActivePositionViewShape {
-  id: string;
-  poolLabel: string;
-  amountLabel: string;
-  modeLabel: string;
-  state: ExecutionState;
-  statusLabel: string;
-}
-
-export interface SubmitLiquidityResultShape {
-  intent: PositionIntent;
-  position: ActivePositionViewShape;
-  activity: ActivityRecord[];
-}
+import { createActivityRecord } from "./activity.factory.js";
+import { createSubmitLiquidityResult, type SubmitLiquidityResultShape } from "./position.factory.js";
 
 export interface AddLiquidityWalkthrough {
   input: {
@@ -29,36 +17,6 @@ export interface ClaimWithdrawWalkthrough {
   active: SubmitLiquidityResultShape;
   claimed: SubmitLiquidityResultShape;
   completed: SubmitLiquidityResultShape;
-}
-
-interface BaseIntentOverrides {
-  id?: string;
-  positionId?: string;
-  action?: PositionAction;
-  mode?: ExecutionMode;
-  state?: ExecutionState;
-  createdAtIso?: string;
-}
-
-interface BasePositionOverrides {
-  id?: string;
-  poolLabel?: string;
-  amountLabel?: string;
-  modeLabel?: string;
-  state?: ExecutionState;
-  statusLabel?: string;
-}
-
-interface BaseActivityOverrides {
-  id?: string;
-  positionId?: string;
-  action?: PositionAction;
-  state?: ExecutionState;
-  headline?: string;
-  detail?: string;
-  safeNextStep?: ActivityRecord["safeNextStep"];
-  createdAtIso?: string;
-  recovery?: ActivityRecord["recovery"];
 }
 
 interface AddLiquidityOverrides {
@@ -77,61 +35,6 @@ interface ClaimWithdrawOverrides {
   poolLabel?: string;
   modeLabel?: string;
   createdAtIso?: string;
-}
-
-export function createPositionIntent(overrides: BaseIntentOverrides = {}): PositionIntent {
-  const positionId = overrides.positionId ?? "position-1";
-  const action = overrides.action ?? "add-liquidity";
-  const mode = overrides.mode ?? "fast-private";
-  const state = overrides.state ?? "indexing";
-
-  return {
-    id: overrides.id ?? `intent-${positionId}`,
-    positionId,
-    action,
-    mode,
-    state,
-    createdAtIso: overrides.createdAtIso ?? "2026-04-29T09:00:00.000Z",
-  };
-}
-
-export function createActivePositionView(overrides: BasePositionOverrides = {}): ActivePositionViewShape {
-  return {
-    id: overrides.id ?? "position-1",
-    poolLabel: overrides.poolLabel ?? "SOL / USDC",
-    amountLabel: overrides.amountLabel ?? "1.25 SOL",
-    modeLabel: overrides.modeLabel ?? "Fast Private",
-    state: overrides.state ?? "active",
-    statusLabel: overrides.statusLabel ?? "Position active",
-  };
-}
-
-export function createActivityRecord(overrides: BaseActivityOverrides = {}): ActivityRecord {
-  const positionId = overrides.positionId ?? "position-1";
-
-  return {
-    id: overrides.id ?? `${positionId}-${overrides.action ?? "add-liquidity"}-${overrides.state ?? "indexing"}`,
-    positionId,
-    action: overrides.action ?? "add-liquidity",
-    state: overrides.state ?? "indexing",
-    headline: overrides.headline ?? "Verifying final position state",
-    detail: overrides.detail ?? "Octora is holding the position in indexing until the final snapshot lands.",
-    safeNextStep: overrides.safeNextStep ?? "refresh",
-    recovery: overrides.recovery,
-    createdAtIso: overrides.createdAtIso ?? "2026-04-29T09:00:00.000Z",
-  };
-}
-
-export function createSubmitLiquidityResult(overrides: {
-  intent?: BaseIntentOverrides;
-  position?: BasePositionOverrides;
-  activity?: ActivityRecord[];
-} = {}): SubmitLiquidityResultShape {
-  return {
-    intent: createPositionIntent(overrides.intent),
-    position: createActivePositionView(overrides.position),
-    activity: overrides.activity ?? [],
-  };
 }
 
 export function createAddLiquidityWalkthrough(overrides: AddLiquidityOverrides = {}): AddLiquidityWalkthrough {

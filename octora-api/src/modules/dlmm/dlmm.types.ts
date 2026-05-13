@@ -1,3 +1,5 @@
+export type Network = 'mainnet' | 'devnet' | 'localnet'
+
 export interface TokenInfo {
   symbol: string
   mint: string

@@ -3,7 +3,7 @@ export type {
   ClaimWithdrawWalkthrough,
   SubmitLiquidityResultShape,
   ActivePositionViewShape,
-} from "./factories";
+} from "./factories/index.js";
 export {
   createActivityRecord,
   createActivePositionView,
@@ -11,7 +11,7 @@ export {
   createClaimWithdrawWalkthrough,
   createPositionIntent,
   createSubmitLiquidityResult,
-} from "./factories";
+} from "./factories/index.js";
 
 export {
   createMemoryPositionRepository,
