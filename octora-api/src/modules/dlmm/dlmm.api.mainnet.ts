@@ -6,7 +6,7 @@
  * Devnet lives in `./dlmm.api.devnet.ts` — the two shapes drift
  * independently so they're kept side-by-side, not unified.
  */
-import { fetchMeteora, MeteoraApiError } from './dlmm.api.shared.js'
+import { fetchMeteoraJson, MeteoraApiError } from './dlmm.api.shared.js'
 import type {
   PoolSummary,
   PoolDetail,
@@ -99,8 +99,7 @@ export async function listPoolsMainnet(
   if (opts.sortBy) params.set('sort_by', opts.sortBy)
   if (opts.filterBy) params.set('filter_by', opts.filterBy)
 
-  const res = await fetchMeteora('mainnet', '/pools', params)
-  const body: MeteoraPagedResponseMainnet = await res.json()
+  const body = await fetchMeteoraJson<MeteoraPagedResponseMainnet>('mainnet', '/pools', params)
 
   return {
     data: body.data.map(mapPool),
@@ -113,8 +112,7 @@ export async function listPoolsMainnet(
 
 export async function getPoolMainnet(address: string): Promise<PoolDetail | null> {
   try {
-    const res = await fetchMeteora('mainnet', `/pools/${address}`)
-    const pool: MeteoraPoolMainnet = await res.json()
+    const pool = await fetchMeteoraJson<MeteoraPoolMainnet>('mainnet', `/pools/${address}`)
     return mapPoolDetail(pool)
   } catch (err) {
     if (err instanceof MeteoraApiError && err.status === 404) return null
@@ -129,8 +127,7 @@ export async function listGroupsMainnet(
   if (opts.page) params.set('page', String(opts.page))
   if (opts.pageSize) params.set('page_size', String(opts.pageSize))
 
-  const res = await fetchMeteora('mainnet', '/pools/groups', params)
-  const body = await res.json()
+  const body = await fetchMeteoraJson<any>('mainnet', '/pools/groups', params)
 
   return {
     data: (body.data ?? []).map((g: any) => ({
@@ -158,8 +155,7 @@ export async function getGroupMainnet(
   if (opts.page) params.set('page', String(opts.page))
   if (opts.pageSize) params.set('page_size', String(opts.pageSize))
 
-  const res = await fetchMeteora('mainnet', `/pools/groups/${mintPair}`, params)
-  const body = await res.json()
+  const body = await fetchMeteoraJson<any>('mainnet', `/pools/groups/${mintPair}`, params)
 
   return {
     name: body.name ?? mintPair,
@@ -182,8 +178,7 @@ export async function getOhlcvMainnet(
   if (opts.endTime) params.set('end_time', String(opts.endTime))
   if (opts.resolution) params.set('resolution', opts.resolution)
 
-  const res = await fetchMeteora('mainnet', `/pools/${address}/ohlcv`, params)
-  const body = await res.json()
+  const body = await fetchMeteoraJson<any>('mainnet', `/pools/${address}/ohlcv`, params)
 
   return (body.data ?? body ?? []).map((c: any) => ({
     open: c.open,
@@ -204,8 +199,7 @@ export async function getVolumeHistoryMainnet(
   if (opts.endTime) params.set('end_time', String(opts.endTime))
   if (opts.resolution) params.set('resolution', opts.resolution)
 
-  const res = await fetchMeteora('mainnet', `/pools/${address}/volume/history`, params)
-  const body = await res.json()
+  const body = await fetchMeteoraJson<any>('mainnet', `/pools/${address}/volume/history`, params)
 
   return (body.data ?? body ?? []).map((b: any) => ({
     timestamp: b.timestamp,
@@ -214,8 +208,7 @@ export async function getVolumeHistoryMainnet(
 }
 
 export async function getProtocolMetricsMainnet(): Promise<ProtocolMetrics> {
-  const res = await fetchMeteora('mainnet', '/stats/protocol_metrics')
-  const body = await res.json()
+  const body = await fetchMeteoraJson<any>('mainnet', '/stats/protocol_metrics')
   return {
     totalTvl: body.total_tvl,
     volume24h: body.volume_24h,

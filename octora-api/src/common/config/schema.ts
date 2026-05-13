@@ -59,6 +59,46 @@ export const rateLimiterConfigSchema = z.object({
   redisUrl: z.string().min(1).nullable(),
 })
 
+/**
+ * Per-upstream circuit-breaker / TTL-cache settings shared by every
+ * outbound HTTP client (Meteora, Jupiter). Defaults err on the side of
+ * tripping fast — better to fail-closed than pile requests onto a
+ * struggling upstream. Tune via env once we have real upstream SLO data.
+ */
+export const outboundHttpConfigSchema = z.object({
+  /** Consecutive failures inside `windowMs` that open the breaker. */
+  breakerFailureThreshold: z.number().int().positive(),
+  /** Sliding window over which failures are counted. */
+  breakerWindowMs: z.number().int().positive(),
+  /** How long the breaker stays open before allowing a half-open probe. */
+  breakerCooldownMs: z.number().int().positive(),
+  /** TTL applied to per-pool Meteora response cache. */
+  meteoraPoolCacheTtlMs: z.number().int().nonnegative(),
+  /** Max entries kept in the per-pool Meteora cache (FIFO eviction). */
+  meteoraPoolCacheMax: z.number().int().positive(),
+})
+
+/**
+ * Postgres connection-pool tuning. The defaults match the pre-tuning
+ * behavior (10 connections, no statement timeout) — explicit fields
+ * make it possible to right-size per deployment without code changes.
+ *
+ * `statementTimeoutMs = 0` disables the guard (Postgres default); any
+ * positive value is applied as `SET statement_timeout` on every new
+ * pool connection. `pgbouncerMode` is informational only — it documents
+ * how the upstream pooler is configured so we don't accidentally use
+ * named prepared statements in `transaction` mode.
+ */
+export const dbPoolConfigSchema = z.object({
+  max: z.number().int().positive(),
+  min: z.number().int().nonnegative(),
+  idleTimeoutMs: z.number().int().nonnegative(),
+  /** Per-statement `statement_timeout` applied at connection time. 0 disables. */
+  statementTimeoutMs: z.number().int().nonnegative(),
+  /** Documents the upstream PgBouncer pool mode. Not enforced in code. */
+  pgbouncerMode: z.enum(['transaction', 'session', 'none']),
+})
+
 export const mixerConfigSchema = z.object({
   /**
    * Minimum unspent-deposit count required to permit a withdrawal build.
@@ -84,6 +124,8 @@ export const appConfigSchema = z.object({
   mixerDenomination: z.bigint().positive(),
   mixerDenominations: z.array(z.bigint().positive()).nonempty(),
   mixer: mixerConfigSchema,
+  outboundHttp: outboundHttpConfigSchema,
+  dbPool: dbPoolConfigSchema,
   rateLimiter: rateLimiterConfigSchema,
   mixerRelayer: mixerRelayerConfigSchema.nullable(),
   betaCaps: betaCapsConfigSchema,
@@ -106,5 +148,7 @@ export type MixerRelayerConfig = z.infer<typeof mixerRelayerConfigSchema>
 export type DlmmRpcUrls = z.infer<typeof dlmmRpcUrlsSchema>
 export type ResendConfig = z.infer<typeof resendConfigSchema>
 export type MixerConfig = z.infer<typeof mixerConfigSchema>
+export type OutboundHttpConfig = z.infer<typeof outboundHttpConfigSchema>
+export type DbPoolConfig = z.infer<typeof dbPoolConfigSchema>
 export type RateLimiterRuntimeConfig = z.infer<typeof rateLimiterConfigSchema>
 export type DlmmProgramConfig = z.infer<typeof dlmmProgramConfigSchema>

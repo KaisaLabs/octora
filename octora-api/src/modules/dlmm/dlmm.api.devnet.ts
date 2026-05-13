@@ -7,7 +7,7 @@
  * Kept side-by-side with `./dlmm.api.mainnet.ts` so the two shapes can
  * drift independently.
  */
-import { fetchMeteora, MeteoraApiError } from './dlmm.api.shared.js'
+import { fetchMeteora, fetchMeteoraJson, MeteoraApiError } from './dlmm.api.shared.js'
 import type {
   PoolSummary,
   PoolDetail,
@@ -217,8 +217,7 @@ export async function listPoolsDevnet(
 
 export async function getPoolDevnet(address: string): Promise<PoolDetail | null> {
   try {
-    const res = await fetchMeteora('devnet', `/pair/${address}`)
-    const pair: MeteoraPairDevnet = await res.json()
+    const pair = await fetchMeteoraJson<MeteoraPairDevnet>('devnet', `/pair/${address}`)
     return mapPoolDetail(pair)
   } catch (err) {
     if (err instanceof MeteoraApiError && err.status === 404) return null
@@ -236,8 +235,11 @@ export async function listGroupsDevnet(
   params.set('limit', String(pageSize))
   params.set('include_unknown', 'true')
 
-  const res = await fetchMeteora('devnet', '/pair/all_by_groups', params)
-  const body: MeteoraGroupedPairsDevnet = await res.json()
+  const body = await fetchMeteoraJson<MeteoraGroupedPairsDevnet>(
+    'devnet',
+    '/pair/all_by_groups',
+    params,
+  )
 
   const total = body.total ?? 0
   const pages = pageSize > 0 ? Math.max(1, Math.ceil(total / pageSize)) : 1
@@ -273,8 +275,11 @@ export async function getGroupDevnet(
   params.set('page', String(page))
   params.set('per_page', String(pageSize))
 
-  const res = await fetchMeteora('devnet', `/pair/groups/${mintPair}`, params)
-  const body: MeteoraPagedPairsByGroupDevnet = await res.json()
+  const body = await fetchMeteoraJson<MeteoraPagedPairsByGroupDevnet>(
+    'devnet',
+    `/pair/groups/${mintPair}`,
+    params,
+  )
   const rawPairs = body.data ?? []
   const first = rawPairs[0]
 
@@ -305,8 +310,11 @@ export async function getVolumeHistoryDevnet(
   const params = new URLSearchParams()
   params.set('num_of_days', String(numDays))
 
-  const res = await fetchMeteora('devnet', `/pair/${address}/analytic/pair_trade_volume`, params)
-  const body = await res.json()
+  const body = await fetchMeteoraJson<any>(
+    'devnet',
+    `/pair/${address}/analytic/pair_trade_volume`,
+    params,
+  )
   const rows: any[] = Array.isArray(body) ? body : (body.data ?? [])
 
   return rows.map((r) => ({
@@ -316,8 +324,7 @@ export async function getVolumeHistoryDevnet(
 }
 
 export async function getProtocolMetricsDevnet(): Promise<ProtocolMetrics> {
-  const res = await fetchMeteora('devnet', '/info/protocol_metrics')
-  const raw = await res.json()
+  const raw = await fetchMeteoraJson<any>('devnet', '/info/protocol_metrics')
   // The endpoint occasionally returns `[obj]` or a bare object — handle both.
   const body = Array.isArray(raw) ? raw[0] ?? {} : raw
   return {

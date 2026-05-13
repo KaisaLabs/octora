@@ -70,6 +70,16 @@ export function loadConfig(): AppConfig {
     mixer: {
       minAnonymitySet: parseInteger(process.env.MIXER_MIN_ANONYMITY_SET) ?? 20,
     },
+    outboundHttp: {
+      breakerFailureThreshold:
+        parseInteger(process.env.OCTORA_HTTP_BREAKER_FAILURE_THRESHOLD) ?? 5,
+      breakerWindowMs: parseInteger(process.env.OCTORA_HTTP_BREAKER_WINDOW_MS) ?? 30_000,
+      breakerCooldownMs: parseInteger(process.env.OCTORA_HTTP_BREAKER_COOLDOWN_MS) ?? 30_000,
+      meteoraPoolCacheTtlMs:
+        parseInteger(process.env.OCTORA_METEORA_POOL_CACHE_TTL_MS) ?? 5_000,
+      meteoraPoolCacheMax: parseInteger(process.env.OCTORA_METEORA_POOL_CACHE_MAX) ?? 512,
+    },
+    dbPool: loadDbPoolConfig(),
     rateLimiter: loadRateLimiterConfig(),
     mixerRelayer: loadMixerRelayerConfig(),
     betaCaps: {
@@ -158,6 +168,41 @@ function loadRateLimiterConfig(): { backend: 'memory' | 'redis'; redisUrl: strin
     throw new Error("RATE_LIMITER=redis requires REDIS_URL to be set.")
   }
   return { backend: raw, redisUrl }
+}
+
+/**
+ * Resolve Postgres pool tuning. Defaults mirror pre-tuning behavior so a
+ * deployment without these envs is byte-equivalent. `OCTORA_DB_POOL_*`
+ * sizes the `pg.Pool`; `OCTORA_DB_STATEMENT_TIMEOUT_MS` is applied as a
+ * session-level `SET statement_timeout` on every new connection.
+ *
+ * `OCTORA_DB_PGBOUNCER_MODE` is informational — it documents the upstream
+ * pooler's mode so deployments can audit it against the Prisma adapter
+ * settings (transaction-mode forbids named prepared statements).
+ */
+function loadDbPoolConfig(): {
+  max: number
+  min: number
+  idleTimeoutMs: number
+  statementTimeoutMs: number
+  pgbouncerMode: 'transaction' | 'session' | 'none'
+} {
+  const mode = (process.env.OCTORA_DB_PGBOUNCER_MODE?.trim().toLowerCase() ?? 'none') as
+    | 'transaction'
+    | 'session'
+    | 'none'
+  if (mode !== 'transaction' && mode !== 'session' && mode !== 'none') {
+    throw new Error(
+      `OCTORA_DB_PGBOUNCER_MODE must be 'transaction', 'session' or 'none' (got '${mode}').`,
+    )
+  }
+  return {
+    max: parseInteger(process.env.OCTORA_DB_POOL_MAX) ?? 10,
+    min: parseInteger(process.env.OCTORA_DB_POOL_MIN) ?? 0,
+    idleTimeoutMs: parseInteger(process.env.OCTORA_DB_POOL_IDLE_MS) ?? 10_000,
+    statementTimeoutMs: parseInteger(process.env.OCTORA_DB_STATEMENT_TIMEOUT_MS) ?? 0,
+    pgbouncerMode: mode,
+  }
 }
 
 function loadMixerRelayerConfig(): MixerRelayerConfig | null {

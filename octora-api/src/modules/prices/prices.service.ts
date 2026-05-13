@@ -1,4 +1,6 @@
+import { loadConfig } from '#common/config'
 import { UpstreamError } from '#common/errors'
+import { CircuitBreaker } from '#common/http/circuit-breaker'
 
 import type { PriceInfo, PriceMap } from './prices.types'
 
@@ -17,6 +19,26 @@ interface CachedEntry {
 }
 
 const cache = new Map<string, CachedEntry>()
+
+let breaker: CircuitBreaker | null = null
+
+function getBreaker(): CircuitBreaker {
+  if (breaker) return breaker
+  const { outboundHttp } = loadConfig()
+  breaker = new CircuitBreaker({
+    name: 'jupiter',
+    failureThreshold: outboundHttp.breakerFailureThreshold,
+    windowMs: outboundHttp.breakerWindowMs,
+    cooldownMs: outboundHttp.breakerCooldownMs,
+  })
+  return breaker
+}
+
+/** Test-only hook — wipes cache + breaker so suites don't leak state. */
+export function __resetJupiterStateForTests(): void {
+  breaker = null
+  cache.clear()
+}
 
 export class JupiterPriceError extends UpstreamError {
   constructor(public status: number, message: string) {
@@ -56,14 +78,17 @@ export async function getPrices(mints: string[]): Promise<PriceMap> {
 
 async function fetchFromJupiter(mints: string[]): Promise<PriceMap> {
   const out: PriceMap = {}
+  const b = getBreaker()
   for (let i = 0; i < mints.length; i += JUPITER_MAX_IDS) {
     const chunk = mints.slice(i, i + JUPITER_MAX_IDS)
     const url = `${JUPITER_PRICE_V3}?ids=${chunk.join(',')}`
-    const res = await fetch(url)
-    if (!res.ok) {
-      throw new JupiterPriceError(res.status, `Jupiter price API ${res.status}`)
-    }
-    const body = (await res.json()) as Record<string, Partial<PriceInfo> | null>
+    const body = await b.exec(async () => {
+      const res = await fetch(url)
+      if (!res.ok) {
+        throw new JupiterPriceError(res.status, `Jupiter price API ${res.status}`)
+      }
+      return (await res.json()) as Record<string, Partial<PriceInfo> | null>
+    })
     for (const [mint, raw] of Object.entries(body)) {
       if (!raw || typeof raw.usdPrice !== 'number') continue
       out[mint] = {

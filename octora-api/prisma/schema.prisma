@@ -24,6 +24,7 @@ model Position {
 
   @@index([walletAddress])
   @@index([walletAddress, state])
+  @@index([state, updatedAt])
 }
 
 model ExecutionSession {
@@ -36,6 +37,7 @@ model ExecutionSession {
   position     Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
 
   @@index([positionId, createdAt])
+  @@index([state, failureStage])
 }
 
 model Activity {
