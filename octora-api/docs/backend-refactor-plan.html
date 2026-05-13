@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Octora API — Backend Standardization & Scalability Plan</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #11151a;
+    --panel-2: #161b22;
+    --border: #232a33;
+    --text: #e6edf3;
+    --muted: #8b95a1;
+    --accent: #7cc4ff;
+    --accent-2: #a78bfa;
+    --good: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --code-bg: #0f1318;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--text); }
+  body {
+    font-family: ui-sans-serif, -apple-system, "SF Pro Text", Inter, Segoe UI, Roboto, sans-serif;
+    line-height: 1.55;
+    margin: 0;
+    padding: 48px 24px 96px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header.hero {
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+    background: radial-gradient(1200px 400px at 0% 0%, rgba(124,196,255,0.08), transparent 60%),
+                radial-gradient(800px 300px at 100% 100%, rgba(167,139,250,0.08), transparent 60%),
+                var(--panel);
+    margin-bottom: 32px;
+  }
+  .eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  h1 {
+    font-size: 32px;
+    margin: 0 0 12px;
+    letter-spacing: -0.01em;
+    background: linear-gradient(90deg, #fff 0%, #cbd5e1 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  h2 {
+    font-size: 22px;
+    margin: 48px 0 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    letter-spacing: -0.01em;
+  }
+  h3 { font-size: 16px; margin: 24px 0 8px; color: var(--accent); }
+  h4 { font-size: 14px; margin: 16px 0 6px; color: var(--accent-2); text-transform: uppercase; letter-spacing: 0.08em; }
+  p { color: var(--text); }
+  .muted { color: var(--muted); }
+  .lede { font-size: 15px; color: var(--muted); max-width: 80ch; }
+
+  .grid { display: grid; gap: 16px; }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 800px) { .grid-3, .grid-2 { grid-template-columns: 1fr; } }
+
+  .card {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .card .kpi { font-size: 24px; font-weight: 600; }
+  .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+  tr:last-child td { border-bottom: none; }
+  td code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
+
+  code, pre { font-family: ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, monospace; }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+  code { color: #c9d6e3; }
+
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    border: 1px solid var(--border);
+  }
+  .pill.p0 { color: var(--bad); border-color: rgba(248,113,113,0.4); background: rgba(248,113,113,0.08); }
+  .pill.p1 { color: var(--warn); border-color: rgba(251,191,36,0.4); background: rgba(251,191,36,0.08); }
+  .pill.p2 { color: var(--accent); border-color: rgba(124,196,255,0.4); background: rgba(124,196,255,0.08); }
+  .pill.p3 { color: var(--muted); }
+  .pill.good { color: var(--good); border-color: rgba(74,222,128,0.4); background: rgba(74,222,128,0.08); }
+
+  .phase {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    border-radius: 14px;
+    padding: 24px;
+    margin: 16px 0;
+  }
+  .phase-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+  .phase-head .num { font-size: 14px; color: var(--accent-2); font-weight: 600; }
+  .phase-head .title { font-size: 18px; font-weight: 600; }
+  .phase-head .dur { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .phase .goal { color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+
+  ul.tasks { padding-left: 0; list-style: none; }
+  ul.tasks li {
+    padding: 10px 0;
+    border-bottom: 1px dashed var(--border);
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 12px;
+  }
+  ul.tasks li:last-child { border-bottom: none; }
+  ul.tasks .tag { font-size: 11px; }
+  ul.tasks .body { font-size: 14px; }
+  ul.tasks .body .why { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
+  ul.tasks .body code { font-size: 12px; }
+
+  .principles { display: grid; gap: 10px; }
+  .principles div {
+    padding: 12px 14px;
+    border-left: 3px solid var(--accent);
+    background: var(--panel-2);
+    border-radius: 0 8px 8px 0;
+    font-size: 14px;
+  }
+  .principles div b { color: var(--accent); }
+
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0 0; font-size: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+  .callout {
+    border-left: 3px solid var(--warn);
+    background: rgba(251,191,36,0.05);
+    padding: 12px 14px;
+    border-radius: 0 8px 8px 0;
+    font-size: 14px;
+    color: #f3e8c2;
+    margin: 12px 0;
+  }
+  .callout.good { border-color: var(--good); background: rgba(74,222,128,0.05); color: #c8f1d6; }
+
+  .filetree {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    font-family: ui-monospace, monospace;
+    font-size: 12.5px;
+    color: #c9d6e3;
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  footer { margin-top: 56px; color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Octora API · Backend Refactor Plan</div>
+  <h1>Standardize, clean up, and scale the Octora backend</h1>
+  <p class="lede">
+    The codebase is production-ready for beta — Fastify + Prisma + repository pattern, strict TS,
+    wallet auth, recovery worker, real health/metrics. The goal of this plan is to consolidate
+    inconsistencies that have crept in (error handling, validation, config), decompose the
+    1k-LOC services that hide complexity, and remove the in-memory shortcuts that won't survive
+    a horizontal scale-out (rate limiter, beta-cap aggregation).
+  </p>
+  <div class="legend">
+    <span><span class="pill p0">P0</span> blocks scale / correctness</span>
+    <span><span class="pill p1">P1</span> high payoff, low risk</span>
+    <span><span class="pill p2">P2</span> structural cleanup</span>
+    <span><span class="pill p3">P3</span> nice-to-have</span>
+  </div>
+</header>
+
+<section>
+  <h2>1. Snapshot of where we stand</h2>
+  <div class="grid grid-3">
+    <div class="card"><div class="label">Source</div><div class="kpi">~13k LOC</div><div class="muted">131 files (105 src, 26 test)</div></div>
+    <div class="card"><div class="label">Modules</div><div class="kpi">15</div><div class="muted">domain · infra · modules · common</div></div>
+    <div class="card"><div class="label">Test coverage</div><div class="kpi">~25%</div><div class="muted">by file count, happy-path heavy</div></div>
+    <div class="card"><div class="label">Largest file</div><div class="kpi">1,009 LOC</div><div class="muted"><code>executor.service.ts</code></div></div>
+    <div class="card"><div class="label">Routes</div><div class="kpi">11 modules</div><div class="muted">positions · mixer · relayer · dlmm · …</div></div>
+    <div class="card"><div class="label">Background jobs</div><div class="kpi">1</div><div class="muted">in-process recovery worker (30s tick)</div></div>
+  </div>
+
+  <h3>What's already good (don't touch)</h3>
+  <ul>
+    <li>Module layout (<code>domain / infra / modules / common</code>) — clear boundaries, repository pattern keeps Prisma out of services.</li>
+    <li>Strict TS, no <code>any</code> in service layer (5 unavoidable instances in dynamic Sentry import).</li>
+    <li>Pino JSON logging with redaction, request-ID propagation, real <code>/health</code> + <code>/metrics</code>.</li>
+    <li>Wallet-signature auth: nonce-based, single-use, 5-min TTL, ed25519 via Node crypto.</li>
+    <li>In-memory test repos + factories for fast vitest runs without DB.</li>
+  </ul>
+
+  <h3>What hurts now or will hurt soon</h3>
+  <table>
+    <thead><tr><th>Area</th><th>Symptom</th><th>Where</th><th>Severity</th></tr></thead>
+    <tbody>
+      <tr><td>Error handling</td><td>Mix of custom error classes and generic <code>Error</code>; controllers string-match messages to set status codes.</td><td><code>relayer/*</code>, <code>deposit.service.ts</code></td><td><span class="pill p0">P0</span></td></tr>
+      <tr><td>Beta-cap aggregation</td><td><code>sumActiveAmountSol()</code> does <code>findMany</code> + JS reduce — O(n) memory per call.</td><td><code>position.repository.ts:64</code></td><td><span class="pill p0">P0</span></td></tr>
+      <tr><td>Rate limiter</td><td>In-memory, IP-keyed only. Doesn't survive multi-instance or coordinated abuse.</td><td><code>mixer/rate-limit.ts</code></td><td><span class="pill p0">P0</span></td></tr>
+      <tr><td>Validation</td><td>Fastify JSON schemas only. BigInt/PublicKey parsing manual in handlers, throws uncaught.</td><td>all controllers</td><td><span class="pill p1">P1</span></td></tr>
+      <tr><td>Config drift</td><td><code>process.env.MIXER_MIN_ANONYMITY_SET</code> read directly in <code>mixer.service.ts:41</code>, bypassing central config.</td><td><code>mixer.service.ts</code></td><td><span class="pill p1">P1</span></td></tr>
+      <tr><td>Mega-services</td><td><code>executor.service.ts</code> (1,009), <code>dlmm.service.ts</code> (896), <code>position.service.ts</code> (728) mix concerns.</td><td><code>modules/{executor,dlmm,positions}/</code></td><td><span class="pill p1">P1</span></td></tr>
+      <tr><td>Test code in prod</td><td><code>testWalletStamper()</code> + <code>options.prisma === undefined</code> branch in production routes.</td><td><code>position.routes.ts:31–53</code></td><td><span class="pill p1">P1</span></td></tr>
+      <tr><td>External API resilience</td><td>No circuit breaker / backoff for Meteora &amp; Jupiter. Failures cascade.</td><td><code>dlmm.service.ts</code>, <code>prices</code></td><td><span class="pill p2">P2</span></td></tr>
+      <tr><td>Hardcoded program IDs</td><td>DLMM <code>PROGRAM_ID</code>, <code>PRESET_PARAMETER</code> baked in; not configurable per env.</td><td><code>executor.service.ts:55–62</code></td><td><span class="pill p2">P2</span></td></tr>
+      <tr><td>Missing indexes</td><td><code>PositionReconciliation</code> PK-only; <code>ExecutionSession.failureStage</code> filtered but unindexed.</td><td><code>prisma/schema.prisma</code></td><td><span class="pill p2">P2</span></td></tr>
+      <tr><td>Type sharing</td><td>Response shapes live only in Fastify schemas. Frontend re-declares — drift risk.</td><td>all routes</td><td><span class="pill p2">P2</span></td></tr>
+      <tr><td>Audit-ticket comments</td><td><code>P0-20</code>, <code>P1-30</code> references throughout; external doc will rot.</td><td>cross-cutting</td><td><span class="pill p3">P3</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>2. Refactor principles</h2>
+  <div class="principles">
+    <div><b>One way to do each thing.</b> One error base class. One validation library. One config module. One response envelope. Inconsistency is the bug, not the second pattern.</div>
+    <div><b>Boundaries enforce themselves.</b> If <code>process.env</code> is only read in <code>config.ts</code>, drift can't happen. If Prisma is only imported in <code>*.repository.ts</code>, services stay pure.</div>
+    <div><b>Decompose by axis of change.</b> Split <code>executor.service.ts</code> not by line count but by what changes together: pool setup, token minting, tx building, liquidity math.</div>
+    <div><b>SQL beats JS.</b> Aggregations, counts, sums go to Postgres. The Node process should not loop over rows it could have <code>SUM()</code>'d.</div>
+    <div><b>Stateless processes.</b> Anything that lives in a <code>Map</code> in memory (rate limits, caches, anonymity-set state) needs a story for >1 instance — even if today the answer is "single instance, will move to Redis at X RPS".</div>
+    <div><b>No new feature work in this refactor.</b> If a task changes behavior, it's out of scope. Diffs should be reviewable as pure structure changes.</div>
+  </div>
+</section>
+
+<section>
+  <h2>3. Target shape</h2>
+  <p class="muted">After the refactor, the <code>src/</code> tree looks like this. New folders marked <span class="pill good">new</span>; everything else is renamed or in place.</p>
+  <div class="filetree">src/
+├── app.ts                          # composition root only — no logic
+├── index.ts                        # boot
+├── common/
+│   ├── config/
+│   │   ├── index.ts                # loadConfig() — only file that reads process.env
+│   │   ├── schema.ts               # zod schema for AppConfig          <span class="pill good">new</span>
+│   │   └── parsers.ts              # parseCsv, parseBigIntList, …     <span class="pill good">new</span>
+│   ├── errors/                                                        <span class="pill good">new</span>
+│   │   ├── ApiError.ts             # base + statusCode + code
+│   │   ├── domain-errors.ts        # NotFound, Conflict, Validation, …
+│   │   └── error-handler.ts        # Fastify setErrorHandler
+│   ├── http/
+│   │   ├── envelope.ts             # { data } / { error } shape       <span class="pill good">new</span>
+│   │   ├── validation.ts           # zod → Fastify schema bridge      <span class="pill good">new</span>
+│   │   └── plugin.ts               # cors, swagger, request-id
+│   ├── observability/
+│   │   ├── logger.ts               # pino + redaction
+│   │   ├── sentry.ts
+│   │   └── metrics.ts
+│   ├── auth/                       # wallet-signature, beta access, admin token
+│   ├── db/
+│   │   ├── client.ts               # PrismaClient singleton
+│   │   └── tx.ts                   # withTransaction helper           <span class="pill good">new</span>
+│   ├── ratelimit/                  # interface + memory + redis impls <span class="pill good">new</span>
+│   └── solana/                     # connection, keypair loaders
+├── domain/                         # pure business logic, no IO
+├── modules/
+│   ├── &lt;name&gt;/
+│   │   ├── &lt;name&gt;.routes.ts        # Fastify wiring, schema → service
+│   │   ├── &lt;name&gt;.controller.ts    # thin: parse → service → envelope
+│   │   ├── &lt;name&gt;.service.ts       # business logic
+│   │   ├── &lt;name&gt;.repository.ts    # Prisma only
+│   │   ├── &lt;name&gt;.schemas.ts       # zod input/output schemas
+│   │   ├── &lt;name&gt;.types.ts         # exported domain types
+│   │   └── __tests__/
+│   └── executor/
+│       ├── builders/               # split from 1k-LOC service        <span class="pill good">new</span>
+│       │   ├── dlmm-pool.builder.ts
+│       │   ├── token.factory.ts
+│       │   └── liquidity.planner.ts
+│       └── …
+├── workers/                        # extracted from modules/positions <span class="pill good">new</span>
+│   └── recovery.worker.ts
+└── test-kit/
+    ├── factories/                  # split from 354-LOC monolith
+    └── memory-repos/
+</div>
+</section>
+
+<section>
+  <h2>4. Phased plan</h2>
+
+  <div class="phase">
+    <div class="phase-head"><span class="num">Phase 0</span><span class="title">Foundation: errors, validation, config</span><span class="dur">~3 days</span></div>
+    <p class="goal">Land the primitives the rest of the refactor depends on. Every later phase assumes these exist.</p>
+    <ul class="tasks">
+      <li><span class="tag"><span class="pill p0">P0</span></span><span class="body">
+        Introduce <code>ApiError</code> base class with <code>statusCode</code>, <code>code</code> (string enum), <code>details</code>. Subclasses: <code>NotFoundError</code>, <code>ConflictError</code>, <code>ValidationError</code>, <code>UnauthorizedError</code>, <code>RateLimitedError</code>, <code>UpstreamError</code>.
+        <span class="why">Replaces ad-hoc <code>Error</code> + string matching in controllers. Global <code>setErrorHandler</code> formats response from <code>err instanceof ApiError</code>.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p0">P0</span></span><span class="body">
+        Migrate existing custom errors (<code>PositionNotFoundError</code>, <code>AnonymitySetTooThinError</code>, <code>JupiterPriceError</code>, <code>MeteoraApiError</code>) to extend <code>ApiError</code>.
+        <span class="why">Backwards-compatible — same names, just a parent. Controller branches collapse to one handler.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Add <code>zod</code> for request validation. Bridge to Fastify schema via <code>zodToJsonSchema</code> so OpenAPI/Scalar still works.
+        <span class="why">BigInt strings, base58 pubkeys, denomination enums all get one place to live. Failed parses become <code>ValidationError</code> automatically.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Re-implement <code>config.ts</code> as a zod schema + <code>parsers.ts</code> helpers (<code>parseCsv</code>, <code>parseBigIntList</code>, <code>parseBoolean</code>, <code>parseUrlList</code>).
+        <span class="why">Replaces the 83-LOC ad-hoc parsing block. <code>loadMixerDenominations / loadFrontendUrl / loadMixerRelayerConfig</code> become declarative.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Lint rule (eslint <code>no-restricted-syntax</code>) banning <code>process.env</code> outside <code>common/config/</code>.
+        <span class="why">Makes the boundary self-enforcing. Catches the <code>mixer.service.ts:41</code> drift mechanically.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p2">P2</span></span><span class="body">
+        Standard response envelope: <code>{ data: T }</code> on success, <code>{ error: { code, message, details? } }</code> on failure. Codify in <code>http/envelope.ts</code>.
+        <span class="why">Frontend can pattern-match one shape. Today every endpoint returns its own structure.</span>
+      </span></li>
+    </ul>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head"><span class="num">Phase 1</span><span class="title">Module standardization</span><span class="dur">~4 days</span></div>
+    <p class="goal">Every <code>modules/&lt;name&gt;/</code> follows the same template. Touching a new module should require zero file-system orientation.</p>
+    <ul class="tasks">
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Adopt the canonical 6-file module template (routes, controller, service, repository, schemas, types). Refactor each module to fit; collapse stragglers into <code>__internal/</code>.
+        <span class="why">Today some modules have <code>controller.ts</code>, others stuff handlers in <code>routes.ts</code>. One template makes search-by-convention work.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Move every Prisma call into <code>*.repository.ts</code>. Lint-ban <code>@prisma/client</code> imports outside repositories &amp; <code>common/db/</code>.
+        <span class="why">Already 90% there — this finishes the boundary.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Extract <code>testWalletStamper()</code> and the <code>options.prisma === undefined</code> branch out of <code>position.routes.ts</code>. Move to <code>test-kit/route-harness.ts</code>; tests build their own app.
+        <span class="why">Production code shouldn't conditionally run on missing dependencies. Test paths in prod files are landmines.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p2">P2</span></span><span class="body">
+        Generate shared types package (<code>octora-api-types</code>) from zod schemas. Frontend imports it instead of redeclaring.
+        <span class="why">Today drift between FE/BE response shapes is silent. With zod → <code>z.infer</code>, the type is the schema is the validator.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p3">P3</span></span><span class="body">
+        Replace <code>console.*</code> with <code>app.log.*</code> across 19 sites. Remove <code>P0-20 / P1-30</code> audit-ticket comments — link to internal tracker once.
+        <span class="why">Audit doc lives outside the repo and will rot. One <code>SECURITY.md</code> link in <code>app.ts</code> beats 50 inline references.</span>
+      </span></li>
+    </ul>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head"><span class="num">Phase 2</span><span class="title">Decompose the mega-services</span><span class="dur">~5 days</span></div>
+    <p class="goal">Split the three 600+ LOC services along their natural seams. Files become greppable; concerns become testable in isolation.</p>
+    <ul class="tasks">
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Split <code>executor.service.ts</code> (1,009 LOC) into <code>builders/dlmm-pool.builder.ts</code>, <code>builders/token.factory.ts</code>, <code>builders/liquidity.planner.ts</code>. <code>executor.service.ts</code> becomes the orchestrator (~150 LOC).
+        <span class="why">Each builder testable with mocked Anchor program; today everything imports the world.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Split <code>dlmm.service.ts</code> (896 LOC): <code>dlmm.api.ts</code> (Meteora HTTP client + circuit breaker), <code>dlmm.chain.ts</code> (chain-direct fallback), <code>dlmm.service.ts</code> (resolution policy: which source to use).
+        <span class="why">The two source paths today share zero structure; consolidating the policy into one place makes adding a third source trivial.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Split <code>position.service.ts</code> (728 LOC) by lifecycle stage: <code>position.intent.service.ts</code>, <code>position.execution.service.ts</code>, <code>position.claim.service.ts</code>. State-machine guard stays in <code>domain/</code>.
+        <span class="why">Aligns to the state graph that already exists in <code>domain/</code> — the service should mirror the model.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p2">P2</span></span><span class="body">
+        Move <code>recovery-worker.ts</code> from <code>modules/positions/</code> to top-level <code>workers/</code>. Workers depend on services, not the other way around.
+        <span class="why">Today the worker is buried in the module that defines its target — circular when worker grows to handle other modules.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p2">P2</span></span><span class="body">
+        Split <code>test-kit/factories.ts</code> (354 LOC) per domain: <code>position.factory.ts</code>, <code>activity.factory.ts</code>, <code>walkthrough.factory.ts</code>.
+      </span></li>
+      <li><span class="tag"><span class="pill p2">P2</span></span><span class="body">
+        Pull DLMM <code>PROGRAM_ID</code> and <code>PRESET_PARAMETER</code> into config (<code>OCTORA_DLMM_PROGRAM_ID</code>, <code>OCTORA_DLMM_PRESET_PARAMETER</code>) with mainnet defaults.
+        <span class="why">Localnet/devnet/mainnet need different IDs. Hardcoding makes env switching a code change.</span>
+      </span></li>
+    </ul>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head"><span class="num">Phase 3</span><span class="title">Scalability: drop the in-memory shortcuts</span><span class="dur">~5 days</span></div>
+    <p class="goal">Anything that prevents running &gt;1 instance comes out. Postgres or Redis takes over.</p>
+    <ul class="tasks">
+      <li><span class="tag"><span class="pill p0">P0</span></span><span class="body">
+        Replace <code>sumActiveAmountSol()</code> JS reduce with a Prisma <code>aggregate({ _sum: { amount: true } })</code>. Add a <code>(state, walletAddress)</code> partial index for <code>state IN ('intent','executing','active')</code>.
+        <span class="why">O(1) round-trip vs O(n) memory. Becomes a non-issue at any scale.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p0">P0</span></span><span class="body">
+        Define <code>RateLimiter</code> interface; ship two implementations: <code>MemoryRateLimiter</code> (current behavior) and <code>RedisRateLimiter</code> (token-bucket via <code>SCRIPT</code>). Wire selection from config.
+        <span class="why">Single-instance today, multi-instance ready. Same API, swap at boot.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p0">P0</span></span><span class="body">
+        Make rate limiter wallet-keyed in addition to IP. Composite key <code>{wallet}:{route}</code> when wallet is present, else <code>{ip}:{route}</code>.
+        <span class="why">Audit P3 issue — coordinated abuse from one IP bypasses today's per-user limit.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Add a generic <code>CircuitBreaker</code> wrapper for outbound HTTP (Meteora, Jupiter). Failures in N seconds open the breaker; half-open probe; close on success.
+        <span class="why">A Jupiter outage today means every <code>/prices</code> call hangs until timeout. Breaker fails fast.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Replace per-call Meteora fetches with a per-pool TTL cache (<code>node-cache</code> or <code>lru-cache</code>) keyed by pool address. Configurable TTL, currently effectively 5s.
+        <span class="why">Same data is requested by every <code>/dlmm/pools</code> hit. Cache is already conceptually present — formalize it.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p2">P2</span></span><span class="body">
+        Add missing indexes: <code>PositionReconciliation(positionId)</code>, <code>ExecutionSession(state, failureStage)</code>, <code>Position(state, createdAt)</code> for recovery-worker scans.
+        <span class="why">Recovery worker scans by <code>state</code> + age every 30s. Without index, sequential scan grows with table size.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p2">P2</span></span><span class="body">
+        Connection pool tuning: explicit Prisma datasource pool size; document PgBouncer mode (transaction vs session); add <code>statement_timeout</code> guard.
+        <span class="why">Default Prisma pool is 2× CPU — hits limits early on Vercel-style cold starts.</span>
+      </span></li>
+    </ul>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head"><span class="num">Phase 4</span><span class="title">Observability &amp; testing</span><span class="dur">~4 days</span></div>
+    <p class="goal">Catch regressions from this refactor and make the next one cheaper.</p>
+    <ul class="tasks">
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Per-route latency histograms in <code>/metrics</code>: <code>http_request_duration_ms{route, status}</code>. Already have JSON snapshot — add request timings.
+        <span class="why">Today metrics are point-in-time totals; no way to spot a route degrading.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p1">P1</span></span><span class="body">
+        Integration test layer: spin up Postgres + Fastify in <code>beforeAll</code>, hit real routes with real auth. One test per route happy-path + 401/403/422.
+        <span class="why">Today's tests are unit-only at services. The contract surface is untested.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p2">P2</span></span><span class="body">
+        Test the recovery worker against a fake RPC (sequence of <code>getSignatureStatuses</code> responses). Verify exact-once Sentry capture, idempotent state advance.
+      </span></li>
+      <li><span class="tag"><span class="pill p2">P2</span></span><span class="body">
+        Document Sentry activation in <code>README</code> (it's currently a dynamic import that nobody enables).
+      </span></li>
+      <li><span class="tag"><span class="pill p2">P2</span></span><span class="body">
+        Add OpenTelemetry traces (Fastify plugin) with span propagation through services → repos → outbound HTTP.
+        <span class="why">When a slow request gets reported, "which downstream call" should be a graph lookup, not a code reading exercise.</span>
+      </span></li>
+    </ul>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head"><span class="num">Phase 5</span><span class="title">Long-term: queues &amp; horizontal scale</span><span class="dur">~when traffic justifies</span></div>
+    <p class="goal">Defer until usage demands it. Plan now so the move is mechanical.</p>
+    <ul class="tasks">
+      <li><span class="tag"><span class="pill p3">P3</span></span><span class="body">
+        Move recovery worker to BullMQ (Redis) jobs. Each stuck position becomes a delayed job; retries / DLQ are free.
+        <span class="why">Removes the "single-instance only" footnote on the API. Vercel-deployable.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p3">P3</span></span><span class="body">
+        Materialize beta-cap aggregates as a Postgres view or trigger-maintained counter (<code>position_caps</code> table).
+        <span class="why">Even with <code>SUM()</code>, sub-ms reads matter for a hot pre-write check.</span>
+      </span></li>
+      <li><span class="tag"><span class="pill p3">P3</span></span><span class="body">
+        Read replica for analytics queries (<code>/metrics</code>, admin endpoints).
+      </span></li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>5. Migration discipline</h2>
+  <div class="callout">
+    <b>Each phase ships in its own PR series, behind an integration test.</b> No "while I'm in here" feature changes. If a phase breaks something, revert is one PR. The mega-services in particular get a "split is a no-op" PR (move code, keep public exports identical), then a second PR that simplifies callers.
+  </div>
+  <h3>Risk register</h3>
+  <table>
+    <thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Error envelope change breaks frontend</td><td>Ship Phase 0 envelope behind a per-route opt-in flag; flip routes one at a time after FE updates.</td></tr>
+      <tr><td>zod migration drops a validation case</td><td>Keep both validators in parallel for one release; log when zod accepts but JSONSchema would have rejected (and vice versa).</td></tr>
+      <tr><td>Repository split surfaces a hidden Prisma call</td><td>Lint rule lands first (Phase 0 task) — failures appear at PR time, not in production.</td></tr>
+      <tr><td>Redis dependency for rate limiter blocks dev</td><td><code>MemoryRateLimiter</code> stays the dev default. Redis only required when <code>RATE_LIMITER=redis</code>.</td></tr>
+      <tr><td>Index migrations lock <code>Position</code> table</td><td>All new indexes use <code>CREATE INDEX CONCURRENTLY</code>; ship as raw SQL migrations, not Prisma-generated ones.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>6. Definition of done</h2>
+  <div class="grid grid-2">
+    <div class="card">
+      <h4>Standardization</h4>
+      <ul>
+        <li>One error base class; controllers contain zero <code>if (err.message.includes(...))</code>.</li>
+        <li>One validator (zod). Same schemas drive OpenAPI and runtime.</li>
+        <li>One config module. <code>process.env</code> grep returns only <code>common/config/</code>.</li>
+        <li>Every module follows the 6-file template.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Cleanliness</h4>
+      <ul>
+        <li>No file over 500 LOC in <code>modules/</code>.</li>
+        <li>No test branches in production routes.</li>
+        <li>No <code>console.*</code> in <code>src/</code>.</li>
+        <li>Zero hardcoded program IDs / magic constants outside config.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Scalability</h4>
+      <ul>
+        <li>Beta-cap check is a single SQL aggregate.</li>
+        <li>Rate limiter has a Redis impl; wallet-keyed when wallet present.</li>
+        <li>All outbound HTTP wrapped in circuit breaker.</li>
+        <li>All recovery-worker scan paths covered by an index.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Observability</h4>
+      <ul>
+        <li>Per-route latency histograms exposed.</li>
+        <li>Integration tests cover every route's happy + auth-fail path.</li>
+        <li>Recovery worker has a deterministic test against a fake RPC.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>7. Sequencing</h2>
+  <p class="muted">
+    Phases are mostly parallelizable after Phase 0. Recommended order if one person:
+    <b>0 → 1 → 3 (P0 only) → 2 → 3 (rest) → 4 → 5</b>. The P0 items in Phase 3
+    (aggregation, rate limiter) jump the queue because they are surgical fixes
+    that don't depend on the module decomposition.
+  </p>
+</section>
+
+<footer>
+  Octora API · refactor plan v1 · drafted 2026-05-13
+</footer>
+
+</div>
+</body>
+</html>
