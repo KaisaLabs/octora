@@ -87,11 +87,13 @@ export function AppShell() {
           header so the warning can never be scrolled past. */}
       <BetaWarningBanner />
 
-      {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur-xl">
-        <div className="container flex min-h-14 items-center justify-between gap-3 py-2.5 sm:min-h-16 sm:py-3">
-          <div className="flex items-center gap-6">
-            <Link to="/" className="flex items-center gap-2">
+      {/* Header — floating rounded pill centered horizontally. Sticky so it
+          stays in view on scroll; the surrounding pt-3 keeps the pill off
+          the viewport edge instead of letting it slam into the very top. */}
+      <header className="sticky top-0 z-30 px-3 pt-3 sm:px-6 sm:pt-4">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-3 rounded-full border border-border/70 bg-background/90 px-3 py-2 backdrop-blur-xl shadow-[0_10px_30px_-12px_hsl(150_33%_2%/0.7)] sm:px-4 sm:py-2.5">
+          <div className="flex items-center gap-4 sm:gap-6">
+            <Link to="/" className="flex items-center gap-2 pl-1">
               <span className="font-display text-lg font-semibold tracking-tight text-foreground sm:text-xl">
                 Octora
               </span>
@@ -103,7 +105,7 @@ export function AppShell() {
                 <Link
                   key={tab.to}
                   to={tab.to}
-                  className={`rounded-lg px-3.5 py-2 text-sm transition-colors ${
+                  className={`rounded-full px-3.5 py-1.5 text-sm transition-colors ${
                     isActive(tab.to)
                       ? "bg-surface-elevated text-foreground"
                       : "text-muted-foreground hover:text-foreground"
