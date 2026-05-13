@@ -16,7 +16,7 @@ import { createMockMeteoraExecutor, type MeteoraExecutor } from "#modules/execut
 import { createIndexerService, type PositionIndexer } from "#modules/indexer";
 import type { ReconciliationRepository } from "#modules/indexer/indexer.repository";
 
-import { PositionNotFoundError, UnsupportedPositionActionError } from "#common/errors";
+import { PositionNotFoundError, RateLimitedError, UnsupportedPositionActionError } from "#common/errors";
 
 import type { BetaCapsConfig } from "#common/config";
 
@@ -41,9 +41,9 @@ export interface CreateDraftPositionIntentInput {
   walletAddress: string;
 }
 
-export class BetaCapExceededError extends Error {
+export class BetaCapExceededError extends RateLimitedError {
   constructor(message: string) {
-    super(message);
+    super(message, { code: "beta_cap_exceeded" });
     this.name = "BetaCapExceededError";
   }
 }

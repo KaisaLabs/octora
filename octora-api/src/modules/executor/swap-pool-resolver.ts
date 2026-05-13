@@ -10,6 +10,7 @@
  */
 
 import { listPools, type PoolSummary, type Network } from "#modules/dlmm";
+import { ValidationError } from "#common/errors";
 
 /** Solana wrapped-SOL native mint. */
 const NATIVE_SOL_MINT = "So11111111111111111111111111111111111111112";
@@ -34,11 +35,15 @@ export interface ResolveSwapSourceInput {
   minTvlUsd?: number;
 }
 
-export class NoSwapSourceAvailableError extends Error {
+export class NoSwapSourceAvailableError extends ValidationError {
   constructor(public readonly targetPoolAddress: string, public readonly nonSolMint: string) {
     super(
       `No SOL-paired Meteora DLMM pool found for ${nonSolMint} other than the LP target ` +
         `(${targetPoolAddress}). Privacy-preserving swap path unavailable for this pair.`,
+      {
+        code: "no_swap_source_available",
+        details: { targetPoolAddress, nonSolMint },
+      },
     );
     this.name = "NoSwapSourceAvailableError";
   }

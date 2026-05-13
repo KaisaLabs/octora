@@ -7,6 +7,7 @@ import type {
 } from "./meteora-executor.js";
 import type { OctoraExecutorClient } from "./octora-executor.client.js";
 import type { AccountMeta, Keypair, PublicKey } from "@solana/web3.js";
+import { UpstreamError } from "#common/errors";
 
 /**
  * Rich context the on-chain executor needs for each operation.
@@ -30,9 +31,9 @@ export interface OnchainPositionContext {
   positionWidth: number;
 }
 
-export class OnchainExecutorNotWiredError extends Error {
+export class OnchainExecutorNotWiredError extends UpstreamError {
   constructor(message = "On-chain Meteora executor is not wired") {
-    super(message);
+    super(message, { statusCode: 503, code: "onchain_executor_not_wired" });
     this.name = "OnchainExecutorNotWiredError";
   }
 }

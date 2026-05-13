@@ -1,9 +1,9 @@
 import { createApp } from "./app";
+import { loadConfig } from "#common/config";
 
 async function main() {
   const app = await createApp({ logger: true });
-
-  const port = Number(process.env.PORT ?? 8787);
+  const { port } = loadConfig();
 
   app.listen({ port, host: "0.0.0.0" }).catch((error) => {
     app.log.error(error);

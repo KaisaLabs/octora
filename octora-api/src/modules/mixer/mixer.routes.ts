@@ -3,12 +3,14 @@ import { PublicKey } from "@solana/web3.js";
 import { createMixerController } from "./mixer.controller.js";
 import { MixerRegistry } from "./mixer.registry.js";
 import { makeRateLimiter } from "./rate-limit.js";
+import { loadConfig } from "#common/config";
 
 // MAINNET_BLOCKER: default falls back to devnet. On mainnet deploy,
 // SOLANA_RPC_URL must be set explicitly to a real provider (Helius,
 // Triton, etc.) — public mainnet-beta rate-limits aggressively and
 // `getSignaturesForAddress` truncates under load. See docs/test-plan.md §14.
-const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
+const appConfig = loadConfig();
+const RPC_URL = appConfig.solanaRpcUrl;
 
 const WRITE_LIMIT = { windowMs: 60_000, max: 30 };
 const READ_LIMIT = { windowMs: 60_000, max: 120 };
@@ -61,7 +63,7 @@ export async function registerMixerRoutes(
   // rebuilding the Merkle tree would see a partial leaf set → RootNotFound.
   // Skipped under vitest: tests hit `createApp` repeatedly, and N pools ×
   // public-RPC 429-backoff blows past the 10s hook timeout.
-  if (process.env.VITEST !== "true") {
+  if (!appConfig.isTest) {
     await Promise.all(
       registry.list().map(async ({ denomination, service }) => {
         try {

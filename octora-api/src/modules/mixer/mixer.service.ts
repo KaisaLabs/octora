@@ -11,6 +11,9 @@ import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ApiError, ConflictError, ValidationError } from "#common/errors";
+import { loadConfig } from "#common/config";
+
 import {
   MIXER_POOL_IS_PAUSED_OFFSET,
   MIXER_POOL_NEXT_LEAF_INDEX_OFFSET,
@@ -38,27 +41,30 @@ const NULLIFIER_SEED = Buffer.from("nullifier");
  * Override via `MIXER_MIN_ANONYMITY_SET` env for staging/dev where you
  * need to test the withdraw path before twenty real deposits have landed.
  */
-export const MIN_ANONYMITY_SET = (() => {
-  const env = process.env.MIXER_MIN_ANONYMITY_SET;
-  if (!env) return 20;
-  const n = Number.parseInt(env, 10);
-  return Number.isFinite(n) && n >= 0 ? n : 20;
-})();
+export const MIN_ANONYMITY_SET = loadConfig().mixer.minAnonymitySet;
 
 /**
  * Thrown when a withdrawal build is rejected because the target pool has
  * fewer unspent deposits than `MIN_ANONYMITY_SET`. Surfaced by mixer +
  * relayer controllers as HTTP 400 `ANONYMITY_SET_TOO_THIN`.
  */
-export class AnonymitySetTooThinError extends Error {
-  readonly code = "ANONYMITY_SET_TOO_THIN" as const;
+export class AnonymitySetTooThinError extends ApiError {
+  // Keep HTTP 400 + literal `code` to match the legacy frontend contract.
+  // The bespoke handlers in mixer.controller.ts / relayer.routes.ts still
+  // map this to a route-specific body shape; the new global handler will
+  // emit `{ error: { code, message, details } }` if those handlers are
+  // ever removed.
+  declare readonly code: "ANONYMITY_SET_TOO_THIN";
   constructor(
     readonly current: number,
     readonly required: number,
     readonly denomination: bigint,
   ) {
     super(
+      400,
+      "ANONYMITY_SET_TOO_THIN",
       `Anonymity set too thin: pool has ${current} unspent deposit(s), required ${required}.`,
+      { details: { current, required, denomination: denomination.toString() } },
     );
     this.name = "AnonymitySetTooThinError";
   }
@@ -598,11 +604,15 @@ export class MixerService {
   }
 }
 
-export class MixerPoolNotInitializedError extends Error {
+export class MixerPoolNotInitializedError extends ConflictError {
   constructor(public readonly denomination: bigint, public readonly poolAddress: string) {
     super(
       `Mixer pool for denomination ${denomination.toString()} (${poolAddress}) not initialized. ` +
         `Run POST /mixer/initialize once with the admin authority before depositing.`,
+      {
+        code: "mixer_pool_not_initialized",
+        details: { denomination: denomination.toString(), poolAddress },
+      },
     );
     this.name = "MixerPoolNotInitializedError";
   }
@@ -613,9 +623,12 @@ export class MixerPoolNotInitializedError extends Error {
  * the value doesn't fit, instead of letting Solana's findProgramAddressSync
  * surface a cryptic "Max seed length exceeded" 500 deeper in the stack.
  */
-export class SeedRangeError extends Error {
+export class SeedRangeError extends ValidationError {
   constructor(public readonly field: string, public readonly value: bigint) {
-    super(`${field} value too large to fit in 32-byte PDA seed: ${value.toString()}`);
+    super(`${field} value too large to fit in 32-byte PDA seed: ${value.toString()}`, {
+      code: "seed_range",
+      details: { field, value: value.toString() },
+    });
     this.name = "SeedRangeError";
   }
 }

@@ -1,4 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
+import { ValidationError } from "#common/errors";
 import { MixerService } from "./mixer.service.js";
 
 export interface MixerRegistryConfig {
@@ -59,7 +60,7 @@ export class MixerRegistry {
   }
 }
 
-export class UnknownDenominationError extends Error {
+export class UnknownDenominationError extends ValidationError {
   constructor(
     public readonly requested: bigint,
     public readonly available: readonly bigint[],
@@ -68,6 +69,13 @@ export class UnknownDenominationError extends Error {
       `denomination ${requested.toString()} is not configured; available: ${available
         .map((d) => d.toString())
         .join(", ")}`,
+      {
+        code: "unknown_denomination",
+        details: {
+          requested: requested.toString(),
+          available: available.map((d) => d.toString()),
+        },
+      },
     );
     this.name = "UnknownDenominationError";
   }
@@ -102,9 +110,12 @@ export function parseDenomination(raw: unknown): bigint | null {
   throw new InvalidDenominationError(String(raw));
 }
 
-export class InvalidDenominationError extends Error {
+export class InvalidDenominationError extends ValidationError {
   constructor(public readonly value: string) {
-    super(`denomination must be a positive integer (lamports); got ${JSON.stringify(value)}`);
+    super(`denomination must be a positive integer (lamports); got ${JSON.stringify(value)}`, {
+      code: "invalid_denomination",
+      details: { value },
+    });
     this.name = "InvalidDenominationError";
   }
 }

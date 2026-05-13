@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyServerOptions } from "fastify";
 
+import { loadConfig } from "./config/index.js";
+
 /**
  * Observability wiring for octora-api (P1-30).
  *
@@ -37,7 +39,7 @@ export type CaptureException = (
  */
 export function buildLoggerOptions(): FastifyServerOptions["logger"] {
   return {
-    level: process.env.LOG_LEVEL ?? "info",
+    level: loadConfig().logLevel,
     timestamp: () => `,"time":"${new Date().toISOString()}"`,
     formatters: {
       level: (label: string) => ({ level: label }),
@@ -116,7 +118,7 @@ export async function initSentry(
 
   Sentry.init({
     dsn: opts.sentryDsn,
-    environment: process.env.NODE_ENV ?? "development",
+    environment: loadConfig().nodeEnv,
     tracesSampleRate: 0.1,
   });
 

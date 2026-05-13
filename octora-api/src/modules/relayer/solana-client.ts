@@ -4,6 +4,7 @@ import { readFileSync, statSync } from "node:fs";
 import { join, dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bigintToBytes32 } from "#modules/mixer/mixer.service";
+import { loadConfig } from "#common/config";
 import type { RelayerConfig } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -142,7 +143,7 @@ function loadHotWallet(secret: string): Keypair {
 
     // Optional allowlist: if OCTORA_HOT_WALLET_DIR is set, the resolved path
     // must be inside it. Defense in depth against accidental misconfig.
-    const allowlist = process.env.OCTORA_HOT_WALLET_DIR;
+    const allowlist = loadConfig().hotWalletDir;
     if (allowlist) {
       const allowedRoot = resolvePath(allowlist);
       const sep = allowedRoot.endsWith("/") ? "" : "/";

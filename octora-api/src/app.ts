@@ -8,6 +8,7 @@ import { loadConfig } from '#common/config'
 import { runHealthCheck } from '#common/health'
 import { collectMetrics } from '#common/metrics'
 import { buildLoggerOptions, genReqId, initSentry } from '#common/observability'
+import { registerErrorHandler } from '#common/errors'
 import { createPrismaPositionRepository, type PositionRepository } from '#modules/positions/position.repository'
 import { createPrismaActivityRepository, type ActivityRepository } from '#modules/positions/activity.repository'
 import { createPrismaReconciliationRepository, type ReconciliationRepository } from '#modules/indexer/indexer.repository'
@@ -116,23 +117,11 @@ export async function createApp(options: CreateAppOptions = {}) {
     routePrefix: '/docs',
   })
 
-  // Always print stack traces for unhandled 500s, regardless of the request
-  // logger setting. Without this Fastify swallows exceptions to a generic
-  // {"statusCode":500,"message":"..."} body which makes debugging by guesswork.
-  app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
-    const statusCode = err.statusCode ?? 500
-    if (statusCode >= 500) {
-      // eslint-disable-next-line no-console
-      console.error(
-        `[api] ${req.method} ${req.url} → ${statusCode} ${err.message}\n${err.stack ?? '<no stack>'}`,
-      )
-    }
-    reply.status(statusCode).send({
-      statusCode,
-      error: err.name ?? 'Error',
-      message: err.message,
-    })
-  })
+  // Global error handler. `ApiError` → `{ error: { code, message, details? } }`
+  // with the subclass's statusCode; Fastify validation errors → 422; anything
+  // else → 500 with the original message redacted and the full error logged.
+  // See common/errors/error-handler.ts.
+  registerErrorHandler(app)
 
   // Pick the MeteoraExecutor implementation up-front so we can hand the
   // same instance to every position route. Default = mock; switching to
@@ -198,7 +187,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   // consistent: the mixer routes hydrate it from chain at startup, and
   // the relayer route bumps it on every successful withdrawal.
   const mixerRegistry = new MixerRegistry({
-    rpcUrl: process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
+    rpcUrl: config.solanaRpcUrl,
     programId: new PublicKey(config.mixerProgramId),
     denominations: config.mixerDenominations,
   })
@@ -226,7 +215,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   // client — test harness skips it because there's nothing to recover.
   // Disable explicitly via OCTORA_RECOVERY_WORKER_ENABLED=false to keep
   // a deploy quiet during incident response.
-  if (prismaClient && process.env.OCTORA_RECOVERY_WORKER_ENABLED !== 'false') {
+  if (prismaClient && config.recoveryWorkerEnabled) {
     const worker = createRecoveryWorker({
       positionRepo: repos.positionRepo,
       activityService: createActivityService(repos.activityRepo),

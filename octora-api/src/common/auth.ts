@@ -4,6 +4,8 @@ import { PublicKey } from "@solana/web3.js";
 
 import type { PrismaClient } from "@prisma/client";
 
+import { ApiError } from "./errors/index.js";
+
 /**
  * Wallet-signature auth.
  *
@@ -282,9 +284,9 @@ function pickHeader(req: FastifyRequest, key: string): string | null {
   return null;
 }
 
-class AuthError extends Error {
-  constructor(message: string, public readonly statusCode: number) {
-    super(message);
+class AuthError extends ApiError {
+  constructor(message: string, statusCode: number) {
+    super(statusCode, "auth_error", message);
     this.name = "AuthError";
   }
 }

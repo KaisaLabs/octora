@@ -21,6 +21,7 @@
  */
 
 import type { PoolSummary } from "#modules/dlmm";
+import { ValidationError } from "#common/errors";
 
 import {
   listSwapSourceCandidates,
@@ -32,9 +33,10 @@ import type { ResolveSwapSourceInput } from "./swap-pool-resolver";
 const NATIVE_SOL_MINT = "So11111111111111111111111111111111111111112";
 const MAX_SLIPPAGE_BPS = 2_000; // 20%; UI soft-blocks above 5%, hard-blocks above 20%.
 
-export class SwapValidationError extends Error {
-  constructor(public readonly code: SwapValidationErrorCode, message: string) {
-    super(message);
+export class SwapValidationError extends ValidationError {
+  declare readonly code: SwapValidationErrorCode;
+  constructor(code: SwapValidationErrorCode, message: string) {
+    super(message, { code });
     this.name = "SwapValidationError";
   }
 }

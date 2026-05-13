@@ -1,8 +1,9 @@
 import { Resend } from "resend";
+import { loadConfig } from "#common/config";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
-const FROM_ADDRESS = process.env.EMAIL_FROM ?? "Octora <onboarding@resend.dev>";
+const { resend: resendConfig } = loadConfig();
+const resend = new Resend(resendConfig.apiKey ?? undefined);
+const FROM_ADDRESS = resendConfig.fromAddress;
 
 export async function sendWaitlistConfirmation(email: string) {
   const { data, error } = await resend.emails.send({

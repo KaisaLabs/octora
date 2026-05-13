@@ -3,8 +3,9 @@ import { Keypair, PublicKey } from "@solana/web3.js";
 import { readFileSync } from "node:fs";
 import { ExecutorService } from "./executor.service.js";
 import { createExecutorController } from "./executor.controller.js";
+import { loadConfig } from "#common/config";
 
-const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
+const RPC_URL = loadConfig().solanaRpcUrl;
 
 export interface ExecutorRoutesOptions {
   executorProgramId: string;

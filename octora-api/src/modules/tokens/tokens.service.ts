@@ -1,3 +1,5 @@
+import { UpstreamError } from '#common/errors'
+
 import type { TokenIcon, TokenIconMap } from './tokens.types'
 
 const JUPITER_SEARCH = 'https://lite-api.jup.ag/tokens/v2/search'
@@ -23,9 +25,9 @@ interface CachedEntry {
 
 const cache = new Map<string, CachedEntry>()
 
-export class JupiterTokensError extends Error {
+export class JupiterTokensError extends UpstreamError {
   constructor(public status: number, message: string) {
-    super(message)
+    super(message, { code: 'jupiter_tokens_upstream_error', details: { upstreamStatus: status } })
     this.name = 'JupiterTokensError'
   }
 }

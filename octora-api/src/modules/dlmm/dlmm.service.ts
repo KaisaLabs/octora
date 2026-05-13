@@ -1,6 +1,8 @@
 import { Connection, PublicKey } from '@solana/web3.js'
 import DLMM from '@meteora-ag/dlmm'
 import { BN } from '@coral-xyz/anchor'
+import { UpstreamError } from '#common/errors'
+import { loadConfig } from '#common/config'
 import type {
   PoolSummary,
   PoolDetail,
@@ -44,9 +46,9 @@ async function fetchMeteora(network: Network, path: string, params?: URLSearchPa
   return res
 }
 
-export class MeteoraApiError extends Error {
+export class MeteoraApiError extends UpstreamError {
   constructor(public status: number, message: string) {
-    super(message)
+    super(message, { code: 'meteora_upstream_error', details: { upstreamStatus: status } })
     this.name = 'MeteoraApiError'
   }
 }
@@ -626,20 +628,7 @@ export async function getProtocolMetrics(network: Network): Promise<ProtocolMetr
 // On-chain bin reading via @meteora-ag/dlmm — network-agnostic
 // ─────────────────────────────────────────────────────────────────────
 
-const RPC_URL: Record<Network, string> = {
-  mainnet:
-    process.env.OCTORA_DLMM_RPC_URL_MAINNET ??
-    process.env.OCTORA_EXECUTOR_RPC_URL ??
-    'https://api.mainnet-beta.solana.com',
-  devnet:
-    process.env.OCTORA_DLMM_RPC_URL_DEVNET ??
-    process.env.OCTORA_EXECUTOR_RPC_URL ??
-    'https://api.devnet.solana.com',
-  localnet:
-    process.env.OCTORA_DLMM_RPC_URL_LOCALNET ??
-    process.env.SOLANA_RPC_URL ??
-    'http://127.0.0.1:8899',
-}
+const RPC_URL: Record<Network, string> = loadConfig().dlmmRpcUrls
 
 const connections: Partial<Record<Network, Connection>> = {}
 function getConnection(network: Network): Connection {

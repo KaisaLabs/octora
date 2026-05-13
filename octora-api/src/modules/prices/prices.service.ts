@@ -1,3 +1,5 @@
+import { UpstreamError } from '#common/errors'
+
 import type { PriceInfo, PriceMap } from './prices.types'
 
 const JUPITER_PRICE_V3 = 'https://lite-api.jup.ag/price/v3'
@@ -16,9 +18,9 @@ interface CachedEntry {
 
 const cache = new Map<string, CachedEntry>()
 
-export class JupiterPriceError extends Error {
+export class JupiterPriceError extends UpstreamError {
   constructor(public status: number, message: string) {
-    super(message)
+    super(message, { code: 'jupiter_upstream_error', details: { upstreamStatus: status } })
     this.name = 'JupiterPriceError'
   }
 }

@@ -17,6 +17,8 @@
  * marker sit inside the user's chosen min/max handles.
  */
 
+import { ValidationError } from "#common/errors";
+
 export type DistributionShape = "spot" | "curve" | "bid-ask";
 
 /**
@@ -65,9 +67,9 @@ export interface SingleSidedSolInput {
   solIsTokenX: boolean;
 }
 
-export class SingleSidedRangeError extends Error {
+export class SingleSidedRangeError extends ValidationError {
   constructor(message: string) {
-    super(message);
+    super(message, { code: "single_sided_range" });
     this.name = "SingleSidedRangeError";
   }
 }
