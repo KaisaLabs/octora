@@ -131,6 +131,14 @@ export const appConfigSchema = z.object({
   betaCaps: betaCapsConfigSchema,
   adminApiToken: z.string().min(1).nullable(),
   sentryDsn: z.string().min(1).nullable(),
+  /**
+   * OpenTelemetry seam. When set, the app dynamically loads
+   * `@opentelemetry/sdk-node` and forwards traces to this OTLP/HTTP
+   * endpoint. Null disables tracing entirely. See common/observability.
+   */
+  otelExporterEndpoint: z.string().url().nullable(),
+  /** Service name attached to every emitted span. */
+  otelServiceName: z.string().min(1),
   recoveryWorkerEnabled: z.boolean(),
   dlmmRpcUrls: dlmmRpcUrlsSchema,
   dlmm: dlmmProgramConfigSchema,

@@ -263,6 +263,34 @@ curl -X POST http://localhost:8787/positions/intents \
 - **Mock-first**: Privacy adapters and Meteora executors are mock-implemented in the MVP with clearly defined seams for production.
 - **Non-custodial**: Stealth wallets are ephemeral and recoverable. Users keep full custody of funds.
 
+## Observability
+
+### Metrics
+
+`GET /metrics` returns a JSON snapshot (mixer TVL, position state distribution, process uptime) suitable for UptimeRobot custom checks, Datadog OpenMetrics scrape, or a Grafana JSON datasource. It also includes per-route latency histograms (`http.routes[]`) — `{ method, route, status, count, sumMs, buckets[] }` — using Prometheus-style cumulative ms buckets (5 / 10 / 25 / 50 / 100 / 250 / 500 / 1000 / 2500 / 5000 / 10000). Routes use Fastify's matched pattern (e.g. `/positions/:positionId`) so cardinality stays bounded.
+
+### Sentry (optional)
+
+Error capture is wired through a dynamic-import seam in `src/common/observability.ts` so `@sentry/node` is **not** a hard dependency. To activate:
+
+```bash
+cd octora-api
+pnpm add @sentry/node
+```
+
+Then set `SENTRY_DSN` in `.env` (any value from a Sentry project). On boot the app initializes Sentry with `environment = NODE_ENV` and `tracesSampleRate = 0.1`, and forwards every `onError` event with the request id, method, and matched route as scope tags. When `SENTRY_DSN` is unset or the package isn't installed, capture is a no-op and the boot log line confirms which path is active.
+
+### Tracing (optional, OpenTelemetry)
+
+OpenTelemetry traces follow the same opt-in seam. To activate:
+
+```bash
+cd octora-api
+pnpm add @opentelemetry/api @opentelemetry/sdk-node @opentelemetry/auto-instrumentations-node @opentelemetry/exporter-trace-otlp-http
+```
+
+Then set `OTEL_EXPORTER_OTLP_ENDPOINT` (e.g. `http://localhost:4318/v1/traces`) and optionally `OTEL_SERVICE_NAME` (defaults to `octora-api`). When unset or the packages aren't installed, tracing is a no-op.
+
 ## Testing
 
 ```bash

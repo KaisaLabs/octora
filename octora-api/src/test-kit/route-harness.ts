@@ -40,6 +40,40 @@ export const testWalletStamper: preHandlerHookHandler = async (
 };
 
 /**
+ * Test-only preHandler that mirrors production's wallet-signature gate at
+ * the *header-shape* level only: it 401s when `x-wallet-address` is
+ * missing, otherwise stamps `req.wallet`. Use in integration tests that
+ * need to exercise the 401 path without standing up the live nonce +
+ * Ed25519 verification pipeline.
+ *
+ * NOT a substitute for {@link testWalletStamper} — that one defaults
+ * unauthenticated requests to a known wallet so route happy-paths run
+ * without ceremony. This one fails closed.
+ */
+export const strictWalletStamper: preHandlerHookHandler = async (
+  req: FastifyRequest,
+  reply,
+) => {
+  const header = req.headers["x-wallet-address"];
+  if (typeof header !== "string" || header.trim().length === 0) {
+    return reply.code(401).send({
+      error: "Unauthorized",
+      message: "Missing wallet auth headers (x-wallet-address).",
+    });
+  }
+  const { PublicKey } = await import("@solana/web3.js");
+  try {
+    const pubkey = new PublicKey(header.trim());
+    req.wallet = { address: pubkey.toBase58(), pubkey };
+  } catch {
+    return reply.code(401).send({
+      error: "Unauthorized",
+      message: "x-wallet-address is not a valid base58 Solana pubkey.",
+    });
+  }
+};
+
+/**
  * Build a Fastify app for tests. Wires in-memory repositories, disables
  * the logger, and supplies the test wallet stamper so route owner-checks
  * still run without a real signature pipeline. Override any of those by

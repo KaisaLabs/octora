@@ -1,6 +1,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 
 import type { AppConfig } from "./config";
+import type { HttpTimingRegistry, HttpTimingSnapshot } from "./http/timing";
 import type { PositionRepository } from "#modules/positions/position.repository";
 import { TERMINAL_POSITION_STATES } from "#modules/positions/position.repository";
 import {
@@ -27,6 +28,8 @@ export interface MetricsSnapshot {
   uptimeSeconds: number;
   mixer: MixerMetrics | null;
   positions: PositionMetrics;
+  /** Per-route latency histograms ({method, route, status} cells). */
+  http: HttpTimingSnapshot | null;
 }
 
 export interface MixerMetrics {
@@ -55,6 +58,7 @@ const MIXER_POOL_SEED = Buffer.from("mixer_pool");
 export async function collectMetrics(
   positionRepo: PositionRepository,
   config: AppConfig,
+  httpTiming?: HttpTimingRegistry,
 ): Promise<MetricsSnapshot> {
   const [mixer, positions] = await Promise.all([
     collectMixer(config).catch(() => null),
@@ -65,6 +69,7 @@ export async function collectMetrics(
     uptimeSeconds: Math.round(process.uptime()),
     mixer,
     positions,
+    http: httpTiming?.snapshot() ?? null,
   };
 }
 

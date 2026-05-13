@@ -141,3 +141,91 @@ export async function initSentry(
     });
   };
 }
+
+export interface TelemetryOptions {
+  /** OTLP/HTTP traces endpoint, e.g. `http://localhost:4318/v1/traces`. */
+  endpoint: string | null;
+  /** Service name attached to every span. */
+  serviceName: string;
+}
+
+/**
+ * OpenTelemetry trace seam. Same dynamic-import pattern as Sentry: the
+ * SDK packages are optional dependencies, so we only require them when
+ * an operator opts in via `OTEL_EXPORTER_OTLP_ENDPOINT`.
+ *
+ * Activation:
+ *   pnpm add @opentelemetry/sdk-node @opentelemetry/api \
+ *           @opentelemetry/auto-instrumentations-node \
+ *           @opentelemetry/exporter-trace-otlp-http
+ *   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces
+ *
+ * Returns a shutdown function bound to the SDK's `shutdown()`. The
+ * caller wires it into `app.addHook('onClose', shutdown)` so the
+ * exporter flushes on graceful stop.
+ */
+export async function initTelemetry(
+  app: FastifyInstance,
+  opts: TelemetryOptions,
+): Promise<() => Promise<void>> {
+  if (!opts.endpoint) {
+    app.log.info("observability: OTEL_EXPORTER_OTLP_ENDPOINT unset, tracing disabled");
+    return async () => {};
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dyn = Function("m", "return import(m)") as (m: string) => Promise<any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let sdkPkg: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let exporterPkg: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let autoPkg: any;
+  try {
+    [sdkPkg, exporterPkg, autoPkg] = await Promise.all([
+      dyn("@opentelemetry/sdk-node"),
+      dyn("@opentelemetry/exporter-trace-otlp-http"),
+      dyn("@opentelemetry/auto-instrumentations-node"),
+    ]);
+  } catch {
+    app.log.warn(
+      "observability: OTEL_EXPORTER_OTLP_ENDPOINT is set but the OpenTelemetry packages are not installed. " +
+        "Run `pnpm add @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-http " +
+        "@opentelemetry/auto-instrumentations-node` to activate; tracing is no-op until then.",
+    );
+    return async () => {};
+  }
+
+  const sdk = new sdkPkg.NodeSDK({
+    serviceName: opts.serviceName,
+    traceExporter: new exporterPkg.OTLPTraceExporter({ url: opts.endpoint }),
+    instrumentations: [autoPkg.getNodeAutoInstrumentations()],
+  });
+  // `start()` can throw synchronously if a peer dep is missing.
+  // Catch + downgrade so a misconfigured trace pipeline never blocks boot.
+  try {
+    sdk.start();
+  } catch (err) {
+    app.log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      "observability: OpenTelemetry SDK failed to start; tracing disabled",
+    );
+    return async () => {};
+  }
+
+  app.log.info(
+    { otel: "on", endpoint: opts.endpoint, service: opts.serviceName },
+    "observability: OpenTelemetry initialized",
+  );
+
+  return async () => {
+    try {
+      await sdk.shutdown();
+    } catch (err) {
+      app.log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "observability: OpenTelemetry shutdown raised",
+      );
+    }
+  };
+}

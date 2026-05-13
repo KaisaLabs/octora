@@ -89,6 +89,8 @@ export function loadConfig(): AppConfig {
     },
     adminApiToken: process.env.OCTORA_ADMIN_API_TOKEN?.trim() || null,
     sentryDsn: process.env.SENTRY_DSN?.trim() || null,
+    otelExporterEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim() || null,
+    otelServiceName: process.env.OTEL_SERVICE_NAME?.trim() || 'octora-api',
     recoveryWorkerEnabled: process.env.OCTORA_RECOVERY_WORKER_ENABLED !== 'false',
     dlmmRpcUrls: {
       mainnet:

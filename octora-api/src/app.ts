@@ -8,7 +8,8 @@ import { loadConfig } from '#common/config'
 import { runHealthCheck } from '#common/health'
 import { pingDatabase } from '#common/db/health'
 import { collectMetrics } from '#common/metrics'
-import { buildLoggerOptions, genReqId, initSentry } from '#common/observability'
+import { createHttpTimingRegistry, registerHttpTiming } from '#common/http/timing'
+import { buildLoggerOptions, genReqId, initSentry, initTelemetry } from '#common/observability'
 import { registerErrorHandler } from '#common/errors'
 import { requireBetaAccess, requireWalletSignature } from '#common/auth'
 import { createRateLimiterFactoryFromConfig, type RateLimiterFactory } from '#common/ratelimit'
@@ -92,6 +93,21 @@ export async function createApp(options: CreateAppOptions = {}) {
   // Sentry seam (P1-30). No-op until SENTRY_DSN is set AND @sentry/node
   // is installed; see common/observability.ts for the pnpm command.
   await initSentry(app, { sentryDsn: config.sentryDsn })
+
+  // OpenTelemetry seam (Phase 4). No-op until OTEL_EXPORTER_OTLP_ENDPOINT
+  // is set AND the @opentelemetry/* packages are installed. Flushed on
+  // app close so the exporter doesn't drop the tail of a session.
+  const telemetryShutdown = await initTelemetry(app, {
+    endpoint: config.otelExporterEndpoint,
+    serviceName: config.otelServiceName,
+  })
+  app.addHook('onClose', telemetryShutdown)
+
+  // Per-route latency histograms. Registered before any routes so every
+  // request goes through the onRequest/onResponse hooks. Snapshot is
+  // exposed via /metrics below.
+  const httpTiming = createHttpTimingRegistry()
+  registerHttpTiming(app, httpTiming)
   // /health needs a Prisma client to ping; we keep the same instance the
   // repos use so a connection-pool exhaustion shows up in the health probe.
   let prismaClient: ReturnType<typeof createPrismaClient> | undefined
@@ -174,10 +190,14 @@ export async function createApp(options: CreateAppOptions = {}) {
   // the same minimal shape in test mode so probes don't 500 there.
   app.get('/metrics', async (_req, reply) => {
     if (!prismaClient) {
-      return reply.send({ collectedAt: new Date().toISOString(), mode: 'minimal' })
+      return reply.send({
+        collectedAt: new Date().toISOString(),
+        mode: 'minimal',
+        http: httpTiming.snapshot(),
+      })
     }
     try {
-      const snapshot = await collectMetrics(repos.positionRepo, config)
+      const snapshot = await collectMetrics(repos.positionRepo, config, httpTiming)
       return reply.send(snapshot)
     } catch (err) {
       app.log.error({ err }, '/metrics: collection failed')
