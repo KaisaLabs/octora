@@ -11,14 +11,13 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createApp } from "#app";
-import { createMemoryRepositories } from "#test-kit/memory-db";
+import { createTestApp } from "#test-kit/route-harness";
 
 describe("dlmm routes — request validation", () => {
-  let app: Awaited<ReturnType<typeof createApp>>;
+  let app: Awaited<ReturnType<typeof createTestApp>>;
 
   beforeEach(async () => {
-    app = await createApp({ repos: createMemoryRepositories() });
+    app = await createTestApp();
   });
 
   it("API-DLM-003: GET /dlmm/pools/:address rejects too-short addresses with 400", async () => {

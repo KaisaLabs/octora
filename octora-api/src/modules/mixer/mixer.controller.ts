@@ -170,8 +170,7 @@ export function createMixerController(
         if (err instanceof InvalidDenominationError) {
           return reply.status(400).send({ error: err.message });
         }
-        // eslint-disable-next-line no-console
-        console.error("[/mixer/deposit] build failed:", err instanceof Error ? err.stack : err);
+        req.log.error({ err }, "[/mixer/deposit] build failed");
         return reply
           .status(400)
           .send({ error: err instanceof Error ? err.message : "deposit build failed" });
@@ -233,8 +232,7 @@ export function createMixerController(
             denomination: err.denomination.toString(),
           });
         }
-        // eslint-disable-next-line no-console
-        console.error("[/mixer/withdraw] build failed:", err instanceof Error ? err.stack : err);
+        req.log.error({ err }, "[/mixer/withdraw] build failed");
         return reply
           .status(400)
           .send({ error: err instanceof Error ? err.message : "withdraw build failed" });

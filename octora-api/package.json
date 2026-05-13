@@ -34,8 +34,9 @@
     "seed:demo": "tsx --env-file=.env src/scripts/seed-demo-data.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "tsc -p tsconfig.json --noEmit && node scripts/check-process-env.mjs",
-    "lint:env": "node scripts/check-process-env.mjs"
+    "lint": "tsc -p tsconfig.json --noEmit && node scripts/check-process-env.mjs && node scripts/check-prisma-imports.mjs",
+    "lint:env": "node scripts/check-process-env.mjs",
+    "lint:prisma": "node scripts/check-prisma-imports.mjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.30.1",

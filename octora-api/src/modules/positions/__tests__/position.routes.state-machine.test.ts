@@ -13,14 +13,13 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createApp } from "#app";
-import { createMemoryRepositories } from "#test-kit/memory-db";
+import { createTestApp } from "#test-kit/route-harness";
 
 describe("position routes — schema + state-machine guards", () => {
-  let app: Awaited<ReturnType<typeof createApp>>;
+  let app: Awaited<ReturnType<typeof createTestApp>>;
 
   beforeEach(async () => {
-    app = await createApp({ repos: createMemoryRepositories() });
+    app = await createTestApp();
   });
 
   it("API-POS-007: GET /positions/:id for unknown id returns 404", async () => {

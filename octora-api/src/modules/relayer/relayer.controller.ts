@@ -188,8 +188,7 @@ export function createRelayerController(
         if (err instanceof InvalidDenominationError) {
           return reply.status(400).send({ error: err.message });
         }
-        // eslint-disable-next-line no-console
-        console.error("[/relayer/withdraw] failed:", err instanceof Error ? err.stack : err);
+        req.log.error({ err }, "[/relayer/withdraw] failed");
         return reply
           .status(400)
           .send({ error: err instanceof Error ? err.message : "withdraw build failed" });

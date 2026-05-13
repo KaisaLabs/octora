@@ -1,4 +1,4 @@
-import Fastify from 'fastify'
+import Fastify, { type preHandlerHookHandler } from 'fastify'
 import cors from '@fastify/cors'
 import fastifySwagger from '@fastify/swagger'
 import scalarApiReference from '@scalar/fastify-api-reference'
@@ -6,9 +6,11 @@ import scalarApiReference from '@scalar/fastify-api-reference'
 import { createPrismaClient } from '#common/db/client'
 import { loadConfig } from '#common/config'
 import { runHealthCheck } from '#common/health'
+import { pingDatabase } from '#common/db/health'
 import { collectMetrics } from '#common/metrics'
 import { buildLoggerOptions, genReqId, initSentry } from '#common/observability'
 import { registerErrorHandler } from '#common/errors'
+import { requireBetaAccess, requireWalletSignature } from '#common/auth'
 import { createPrismaPositionRepository, type PositionRepository } from '#modules/positions/position.repository'
 import { createPrismaActivityRepository, type ActivityRepository } from '#modules/positions/activity.repository'
 import { createPrismaReconciliationRepository, type ReconciliationRepository } from '#modules/indexer/indexer.repository'
@@ -23,7 +25,9 @@ import { MixerRegistry } from '#modules/mixer/mixer.registry'
 import { registerExecutorRoutes } from '#modules/executor/executor.routes'
 import { registerDepositsRoutes } from '#modules/deposits'
 import { registerRelayerRoutes } from '#modules/relayer'
+import { createPrismaRootSeenRepository } from '#modules/relayer/root-seen.repository'
 import { registerAuthRoutes } from '#modules/auth/auth.routes'
+import { createPrismaAuthRepository } from '#modules/auth/auth.repository'
 import { registerAdminRoutes } from '#modules/admin/admin.routes'
 import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
 import { createActivityService } from '#modules/positions/activity.service'
@@ -41,6 +45,18 @@ export interface AppRepositories {
 export interface CreateAppOptions {
   repos?: AppRepositories
   logger?: boolean
+  /**
+   * preHandler chain that authenticates a request and stamps
+   * `req.wallet`. Wired into the position routes (and any future
+   * wallet-gated route) so the route file itself doesn't decide
+   * whether auth is real or stubbed.
+   *
+   * Omit in production: `createApp` builds the live chain
+   * (`requireWalletSignature` + `requireBetaAccess`) from the Prisma
+   * client. The test harness (`test-kit/route-harness.ts`) supplies a
+   * header-stamping stub so route owner-checks still run.
+   */
+  authPreHandlers?: preHandlerHookHandler[]
 }
 
 function createPrismaRepositories(): { repos: AppRepositories; client: ReturnType<typeof createPrismaClient> } {
@@ -137,12 +153,12 @@ export async function createApp(options: CreateAppOptions = {}) {
     if (!prismaClient) {
       return reply.send({ status: 'ok', mode: 'minimal' })
     }
-    const report = await runHealthCheck(prismaClient, config)
+    const report = await runHealthCheck(() => pingDatabase(prismaClient!), config)
     const code = report.status === 'ok' ? 200 : 503
     return reply.code(code).send(report)
   })
 
-  // Metrics endpoint (P1-44). JSON snapshot of mixer TVL, position state
+  // Metrics endpoint. JSON snapshot of mixer TVL, position state
   // distribution, and process uptime — meant to be polled by external
   // monitoring (UptimeRobot, Datadog, Grafana JSON datasource). Returns
   // the same minimal shape in test mode so probes don't 500 there.
@@ -151,7 +167,7 @@ export async function createApp(options: CreateAppOptions = {}) {
       return reply.send({ collectedAt: new Date().toISOString(), mode: 'minimal' })
     }
     try {
-      const snapshot = await collectMetrics(prismaClient, config)
+      const snapshot = await collectMetrics(repos.positionRepo, config)
       return reply.send(snapshot)
     } catch (err) {
       app.log.error({ err }, '/metrics: collection failed')
@@ -161,11 +177,28 @@ export async function createApp(options: CreateAppOptions = {}) {
       })
     }
   })
-  // Wallet-signature auth + admin routes (P0-20, P1-25). Both depend on the
-  // live Prisma client; they degrade to no-op when the app is built with
+  // Build the auth chain. Prefer an explicitly-supplied stub (test
+  // harness path); otherwise build the live wallet-signature + beta-
+  // access gate from the Prisma client. Failing here at boot is
+  // intentional — running position routes with no auth in production
+  // would be a foot-cannon.
+  const authRepo = prismaClient ? createPrismaAuthRepository(prismaClient) : null
+  const authPreHandlers: preHandlerHookHandler[] = options.authPreHandlers
+    ?? (authRepo
+      ? [requireWalletSignature(authRepo), requireBetaAccess(authRepo)]
+      : (() => {
+        throw new Error(
+          'createApp: no authPreHandlers supplied and no Prisma client available. '
+          + 'Production wiring should pass a live PrismaClient; tests should call '
+          + 'createTestApp() from #test-kit/route-harness.',
+        )
+      })())
+
+  // Wallet-signature auth + admin routes. Both depend on the live
+  // Prisma client; they degrade to no-op when the app is built with
   // injected repos and no client (test harness).
-  if (prismaClient) {
-    await app.register(registerAuthRoutes, { prisma: prismaClient })
+  if (authRepo) {
+    await app.register(registerAuthRoutes, { authRepo })
     await app.register(registerAdminRoutes, {
       waitlistRepo: repos.waitlistRepo,
       adminApiToken: config.adminApiToken,
@@ -176,7 +209,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     ...repos,
     meteoraExecutor,
     betaCaps: config.betaCaps,
-    prisma: prismaClient,
+    authPreHandlers,
   })
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)
@@ -207,7 +240,8 @@ export async function createApp(options: CreateAppOptions = {}) {
   // holds a hot wallet. Driven by OCTORA_MIXER_RELAYER_ENABLED=true plus the
   // other OCTORA_MIXER_RELAYER_* env vars (see common/config.ts).
   if (config.mixerRelayer) {
-    await registerRelayerRoutes(app, config.mixerRelayer, prismaClient ?? null, mixerRegistry)
+    const rootSeenRepo = prismaClient ? createPrismaRootSeenRepository(prismaClient) : null
+    await registerRelayerRoutes(app, config.mixerRelayer, rootSeenRepo, mixerRegistry)
   }
 
   // Recovery worker (P1-29). Polls every 30s to advance stuck positions

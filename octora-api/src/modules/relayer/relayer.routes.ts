@@ -1,5 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import type { PrismaClient } from "@prisma/client";
 import { PublicKey } from "@solana/web3.js";
 import type { MixerRelayerConfig } from "#common/config";
 import { makeRateLimiter } from "#modules/mixer/rate-limit";
@@ -9,6 +8,7 @@ import {
   type WithdrawBody,
 } from "./relayer.controller.js";
 import { RelayerRegistry } from "./relayer.registry.js";
+import type { RootSeenRepository } from "./root-seen.repository.js";
 import {
   InvalidDenominationError,
   MixerRegistry,
@@ -40,18 +40,18 @@ import { AnonymitySetTooThinError } from "#modules/mixer/mixer.service";
 export async function registerRelayerRoutes(
   app: FastifyInstance,
   cfg: MixerRelayerConfig,
-  prisma: PrismaClient | null = null,
+  rootSeenRepo: RootSeenRepository | null = null,
   mixerRegistry: MixerRegistry | null = null,
 ): Promise<void> {
   const tags = ["Relayer"];
 
-  if (!prisma) {
+  if (!rootSeenRepo) {
     app.log.warn(
-      "mixer relayer running without a Prisma client — privacy-delay gate is disabled.",
+      "mixer relayer running without a root-seen repository — privacy-delay gate is disabled.",
     );
   }
 
-  const registry = await RelayerRegistry.create(cfg, prisma);
+  const registry = await RelayerRegistry.create(cfg, rootSeenRepo);
 
   app.log.info(
     {

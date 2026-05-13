@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createApp } from "#app";
-import { createMemoryRepositories } from "#test-kit/memory-db";
+import { createTestApp } from "#test-kit/route-harness";
 
 describe("position routes", () => {
-  let app: Awaited<ReturnType<typeof createApp>>;
+  let app: Awaited<ReturnType<typeof createTestApp>>;
 
   beforeEach(async () => {
-    app = await createApp({ repos: createMemoryRepositories() });
+    app = await createTestApp();
   });
 
   it("creates a draft position intent and returns awaiting-signature state data", async () => {

@@ -101,8 +101,7 @@ export function createExecutorController(executor: ExecutorService) {
         });
         return reply.send(result);
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("[/executor/add-liquidity-tx] failed:", err instanceof Error ? err.stack : err);
+        req.log.error({ err }, "[/executor/add-liquidity-tx] failed");
         return reply
           .status(400)
           .send({ error: err instanceof Error ? err.message : "add-liquidity-tx failed" });
@@ -125,8 +124,7 @@ export function createExecutorController(executor: ExecutorService) {
         });
         return reply.send(result);
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("[/executor/claim-fees-tx] failed:", err instanceof Error ? err.stack : err);
+        req.log.error({ err }, "[/executor/claim-fees-tx] failed:");
         return reply
           .status(400)
           .send({ error: err instanceof Error ? err.message : "claim-fees-tx failed" });
@@ -165,8 +163,7 @@ export function createExecutorController(executor: ExecutorService) {
         });
         return reply.send(result);
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("[/executor/dlmm-swap-tx] failed:", err instanceof Error ? err.stack : err);
+        req.log.error({ err }, "[/executor/dlmm-swap-tx] failed:");
         return reply
           .status(400)
           .send({ error: err instanceof Error ? err.message : "dlmm-swap-tx failed" });
@@ -190,8 +187,7 @@ export function createExecutorController(executor: ExecutorService) {
         });
         return reply.send(result);
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("[/executor/withdraw-close-tx] failed:", err instanceof Error ? err.stack : err);
+        req.log.error({ err }, "[/executor/withdraw-close-tx] failed:");
         return reply
           .status(400)
           .send({ error: err instanceof Error ? err.message : "withdraw-close-tx failed" });
@@ -265,11 +261,7 @@ export function createExecutorController(executor: ExecutorService) {
         if (!result) return reply.status(404).send({ error: "position not found" });
         return reply.send(result);
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error(
-          "[/executor/position-state] failed:",
-          err instanceof Error ? err.stack : err,
-        );
+        req.log.error({ err }, "[/executor/position-state] failed");
         return reply
           .status(400)
           .send({ error: err instanceof Error ? err.message : "position-state failed" });
@@ -291,8 +283,7 @@ export function createExecutorController(executor: ExecutorService) {
         });
         return reply.send(config);
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("[/executor/use-pool] failed:", err instanceof Error ? err.stack : err);
+        req.log.error({ err }, "[/executor/use-pool] failed:");
         return reply
           .status(400)
           .send({ error: err instanceof Error ? err.message : "use-pool failed" });

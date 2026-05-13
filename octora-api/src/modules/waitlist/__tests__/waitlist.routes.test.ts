@@ -5,14 +5,13 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createApp } from "#app";
-import { createMemoryRepositories } from "#test-kit/memory-db";
+import { createTestApp } from "#test-kit/route-harness";
 
 describe("waitlist routes", () => {
-  let app: Awaited<ReturnType<typeof createApp>>;
+  let app: Awaited<ReturnType<typeof createTestApp>>;
 
   beforeEach(async () => {
-    app = await createApp({ repos: createMemoryRepositories() });
+    app = await createTestApp();
   });
 
   it("API-MISC-004: accepts a valid email and returns the new entry", async () => {

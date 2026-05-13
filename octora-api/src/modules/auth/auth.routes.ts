@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import type { PrismaClient } from "@prisma/client";
 
 import { issueAuthNonce } from "#common/auth";
 import { makeRateLimiter } from "#modules/mixer/rate-limit";
 
+import type { AuthRepository } from "./auth.repository.js";
+
 export interface AuthRoutesDeps {
-  prisma: PrismaClient;
+  authRepo: AuthRepository;
 }
 
 /**
@@ -40,7 +41,7 @@ export async function registerAuthRoutes(
       async (req, reply) => {
         const { walletAddress } = req.body;
         try {
-          const issued = await issueAuthNonce(deps.prisma, walletAddress);
+          const issued = await issueAuthNonce(deps.authRepo, walletAddress);
           return reply.send({
             nonce: issued.nonce,
             expiresAt: issued.expiresAt.toISOString(),

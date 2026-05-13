@@ -74,6 +74,12 @@ export interface PositionRepository {
    * on every poll tick.
    */
   findRecentlyFailed(since: Date, limit: number): Promise<PositionRow[]>;
+  /**
+   * Count of positions grouped by `state`. Powers the `/metrics`
+   * snapshot. Terminal states are included so monitors can see
+   * lifetime distribution, not just live load.
+   */
+  countByState(): Promise<Record<string, number>>;
 }
 
 export function createPrismaPositionRepository(client: PrismaClient): PositionRepository {
@@ -131,5 +137,14 @@ export function createPrismaPositionRepository(client: PrismaClient): PositionRe
         orderBy: { updatedAt: "desc" },
         take: limit,
       }),
+    countByState: async () => {
+      const grouped = await client.position.groupBy({
+        by: ["state"],
+        _count: { _all: true },
+      });
+      const out: Record<string, number> = {};
+      for (const row of grouped) out[row.state] = row._count._all;
+      return out;
+    },
   };
 }

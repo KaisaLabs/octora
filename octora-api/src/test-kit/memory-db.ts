@@ -105,6 +105,13 @@ export function createMemoryPositionRepository(): PositionRepository {
       matches.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
       return matches.slice(0, limit);
     },
+    async countByState() {
+      const out: Record<string, number> = {};
+      for (const row of positions.values()) {
+        out[row.state] = (out[row.state] ?? 0) + 1;
+      }
+      return out;
+    },
   };
 }
 

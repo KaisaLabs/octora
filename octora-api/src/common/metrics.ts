@@ -1,7 +1,8 @@
 import { Connection, PublicKey } from "@solana/web3.js";
-import type { PrismaClient } from "@prisma/client";
 
 import type { AppConfig } from "./config";
+import type { PositionRepository } from "#modules/positions/position.repository";
+import { TERMINAL_POSITION_STATES } from "#modules/positions/position.repository";
 import {
   MIXER_POOL_IS_PAUSED_OFFSET,
   MIXER_POOL_NEXT_LEAF_INDEX_OFFSET,
@@ -52,12 +53,12 @@ const MIXER_POOL_SEED = Buffer.from("mixer_pool");
 
 /** Build a one-shot snapshot. Reads on-chain mixer state + DB position state. */
 export async function collectMetrics(
-  prisma: PrismaClient,
+  positionRepo: PositionRepository,
   config: AppConfig,
 ): Promise<MetricsSnapshot> {
   const [mixer, positions] = await Promise.all([
     collectMixer(config).catch(() => null),
-    collectPositions(prisma),
+    collectPositions(positionRepo),
   ]);
   return {
     collectedAt: new Date().toISOString(),
@@ -92,29 +93,17 @@ async function collectMixer(config: AppConfig): Promise<MixerMetrics | null> {
   };
 }
 
-async function collectPositions(prisma: PrismaClient): Promise<PositionMetrics> {
-  const grouped = await prisma.position.groupBy({ by: ["state"], _count: { _all: true } });
-  const byState: Record<string, number> = {};
-  for (const row of grouped) {
-    byState[row.state] = row._count._all;
-  }
+async function collectPositions(positionRepo: PositionRepository): Promise<PositionMetrics> {
+  const [byState, activeTvlSol] = await Promise.all([
+    positionRepo.countByState(),
+    positionRepo.sumActiveAmountSol(),
+  ]);
 
-  const terminal = new Set(["completed", "failed"]);
-  const activeStates = Object.keys(byState).filter((s) => !terminal.has(s));
-  const activeCount = activeStates.reduce((sum, s) => sum + (byState[s] ?? 0), 0);
-
-  // Same JS-side reduce pattern the position repository uses for the
-  // beta-cap math. Bounded by the active position count — fine at beta
-  // scale, replace with a SUM materialised view if it ever isn't.
-  const active = await prisma.position.findMany({
-    where: { state: { notIn: ["completed", "failed"] } },
-    select: { amount: true },
-  });
-  let activeTvlSol = 0;
-  for (const row of active) {
-    const v = Number(row.amount);
-    if (Number.isFinite(v)) activeTvlSol += v;
-  }
+  const terminal = new Set<string>(TERMINAL_POSITION_STATES);
+  const activeCount = Object.entries(byState).reduce(
+    (sum, [state, count]) => (terminal.has(state) ? sum : sum + count),
+    0,
+  );
 
   return { byState, activeCount, activeTvlSol };
 }

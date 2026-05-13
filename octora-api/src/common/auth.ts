@@ -2,7 +2,7 @@ import { createPublicKey, randomBytes, timingSafeEqual, verify } from "node:cryp
 import type { FastifyReply, FastifyRequest, preHandlerHookHandler } from "fastify";
 import { PublicKey } from "@solana/web3.js";
 
-import type { PrismaClient } from "@prisma/client";
+import type { AuthRepository } from "#modules/auth/auth.repository";
 
 import { ApiError } from "./errors/index.js";
 
@@ -60,7 +60,7 @@ declare module "fastify" {
  * `x-signed-nonce`.
  */
 export async function issueAuthNonce(
-  prisma: PrismaClient,
+  authRepo: AuthRepository,
   walletAddress: string,
 ): Promise<{ nonce: string; expiresAt: Date }> {
   // Validate the wallet up-front so we don't store junk.
@@ -73,16 +73,12 @@ export async function issueAuthNonce(
   const nonce = randomBytes(NONCE_BYTE_LEN).toString("hex");
   const expiresAt = new Date(Date.now() + NONCE_TTL_MS);
 
-  await prisma.authNonce.create({
-    data: { nonce, walletAddress, expiresAt },
-  });
+  await authRepo.createNonce({ nonce, walletAddress, expiresAt });
 
   // Best-effort GC: the index on `expiresAt` keeps this cheap. We don't
   // care about the exact return value, only that the table doesn't grow
   // unboundedly under churn.
-  await prisma.authNonce
-    .deleteMany({ where: { expiresAt: { lt: new Date(Date.now() - NONCE_TTL_MS) } } })
-    .catch(() => {});
+  await authRepo.pruneExpiredNonces(new Date(Date.now() - NONCE_TTL_MS));
 
   return { nonce, expiresAt };
 }
@@ -94,7 +90,7 @@ export async function issueAuthNonce(
  * On failure: replies 401/403 and short-circuits.
  */
 export function requireWalletSignature(
-  prisma: PrismaClient,
+  authRepo: AuthRepository,
 ): preHandlerHookHandler {
   return async (req: FastifyRequest, reply: FastifyReply) => {
     const walletHeader = pickHeader(req, "x-wallet-address");
@@ -136,20 +132,17 @@ export function requireWalletSignature(
       });
     }
 
-    // Look up the nonce. Use a single update-where to atomically claim it
-    // — two concurrent requests presenting the same signed nonce can't
-    // both pass (the second sees zero rows updated and we fail closed).
-    const claimed = await prisma.authNonce.updateMany({
-      where: {
-        nonce: nonceHeader,
-        walletAddress: walletHeader,
-        used: false,
-        expiresAt: { gt: new Date() },
-      },
-      data: { used: true },
+    // Look up the nonce. The repo's `claimNonce` is a single atomic
+    // update-where — two concurrent requests presenting the same signed
+    // nonce can't both pass (the second sees zero rows updated and we
+    // fail closed).
+    const claimed = await authRepo.claimNonce({
+      nonce: nonceHeader,
+      walletAddress: walletHeader,
+      now: new Date(),
     });
 
-    if (claimed.count !== 1) {
+    if (!claimed) {
       return reply.code(401).send({
         error: "Unauthorized",
         message:
@@ -174,7 +167,7 @@ export function requireWalletSignature(
  * Fastify preHandler — refuses requests whose authenticated wallet is not
  * in the `BetaAccess` table. Must run *after* `requireWalletSignature`.
  */
-export function requireBetaAccess(prisma: PrismaClient): preHandlerHookHandler {
+export function requireBetaAccess(authRepo: AuthRepository): preHandlerHookHandler {
   return async (req: FastifyRequest, reply: FastifyReply) => {
     const wallet = req.wallet;
     if (!wallet) {
@@ -184,10 +177,8 @@ export function requireBetaAccess(prisma: PrismaClient): preHandlerHookHandler {
           "requireBetaAccess invoked before requireWalletSignature — register them in order.",
       });
     }
-    const row = await prisma.betaAccess.findUnique({
-      where: { walletAddress: wallet.address },
-    });
-    if (!row) {
+    const ok = await authRepo.walletHasBetaAccess(wallet.address);
+    if (!ok) {
       return reply.code(403).send({
         error: "Forbidden",
         message:

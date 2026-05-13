@@ -1,10 +1,18 @@
 import { existsSync, readFileSync } from "node:fs";
 import { Connection, PublicKey } from "@solana/web3.js";
 
-import type { PrismaClient } from "@prisma/client";
-
 import type { AppConfig } from "./config";
+import { pingDatabase } from "./db/health.js";
 import { MIXER_POOL_IS_PAUSED_OFFSET } from "../modules/mixer/layout.js";
+
+/**
+ * Minimal connectivity surface health checks need. The real
+ * implementation in production is `pingDatabase` from `common/db/`,
+ * which wraps Prisma. Keeping the dependency to a function reference
+ * (rather than a full PrismaClient) means health.ts never has to know
+ * about the ORM at all.
+ */
+export type DatabasePinger = () => ReturnType<typeof pingDatabase>;
 
 export interface HealthCheck {
   ok: boolean;
@@ -39,11 +47,11 @@ const MIXER_POOL_SEED = Buffer.from("mixer_pool");
  *   - `mixer`  — on-chain `MixerPool` account fetched + `is_paused === false`
  */
 export async function runHealthCheck(
-  prisma: PrismaClient,
+  pingDb: DatabasePinger,
   config: AppConfig,
 ): Promise<HealthReport> {
   const [db, rpc, relayer, mixer] = await Promise.all([
-    checkDatabase(prisma),
+    checkDatabase(pingDb),
     checkRpc(config.executorRpcUrl),
     checkRelayerKeypair(config.executorRelayerKeypairPath),
     checkMixer(config),
@@ -56,18 +64,10 @@ export async function runHealthCheck(
   };
 }
 
-async function checkDatabase(prisma: PrismaClient): Promise<HealthCheck> {
-  const t0 = Date.now();
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    return { ok: true, latencyMs: Date.now() - t0 };
-  } catch (err) {
-    return {
-      ok: false,
-      detail: err instanceof Error ? err.message : String(err),
-      latencyMs: Date.now() - t0,
-    };
-  }
+async function checkDatabase(pingDb: DatabasePinger): Promise<HealthCheck> {
+  const result = await pingDb();
+  if (result.ok) return { ok: true, latencyMs: result.latencyMs };
+  return { ok: false, detail: result.detail, latencyMs: result.latencyMs };
 }
 
 async function checkRpc(rpcUrl: string): Promise<HealthCheck> {

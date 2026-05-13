@@ -1,11 +1,10 @@
 import type { MixerRelayerConfig } from "#common/config";
 import { OnChainNullifierRegistry } from "./nullifier-registry.js";
-import { createPrismaRootSeenRepository, type RootSeenRepository } from "./root-seen.repository.js";
+import type { RootSeenRepository } from "./root-seen.repository.js";
 import { RelayerService } from "./relayer.service.js";
 import { createMixerClient, deriveMixerPoolPDA } from "./solana-client.js";
 import type { RelayerConfig } from "./types.js";
 import type { RelayerInfoResponse } from "./relayer.controller.js";
-import type { PrismaClient } from "@prisma/client";
 import {
   UnknownDenominationError,
 } from "#modules/mixer/mixer.registry";
@@ -55,20 +54,15 @@ export class RelayerRegistry {
 
   static async create(
     cfg: MixerRelayerConfig,
-    prisma: PrismaClient | null,
+    rootSeenRepo: RootSeenRepository | null,
   ): Promise<RelayerRegistry> {
     const denominations = cfg.denominations ?? [cfg.poolDenomination];
     if (denominations.length === 0) {
       throw new Error("RelayerRegistry requires at least one denomination");
     }
-
-    // One root-seen repository instance shared across all denominations —
-    // the table is keyed on root hex, which is globally unique regardless
-    // of which pool produced it, so a single repo is sufficient and avoids
-    // cross-contamination on cluster forks.
-    const rootSeenRepo: RootSeenRepository | null = prisma
-      ? createPrismaRootSeenRepository(prisma)
-      : null;
+    // One root-seen repository instance is shared across all
+    // denominations — the table is keyed on root hex, which is globally
+    // unique regardless of which pool produced it.
 
     const entries = new Map<string, RelayerEntry>();
     let firstPoolAddress = "";

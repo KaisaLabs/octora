@@ -1,7 +1,5 @@
-import type { FastifyInstance } from 'fastify'
-import type { PrismaClient } from '@prisma/client'
+import type { FastifyInstance, preHandlerHookHandler } from 'fastify'
 
-import { requireBetaAccess, requireWalletSignature } from '#common/auth'
 import { makeRateLimiter } from '#modules/mixer/rate-limit'
 
 import { createPositionController, type PositionControllerDeps } from './position.controller'
@@ -22,43 +20,17 @@ interface PositionParams {
   positionId: string
 }
 
-/**
- * Test-only default wallet. 32 chars of '1' — base58-decodes to the
- * all-zero pubkey (Solana's `SystemProgram.programId`). Always valid as
- * a `PublicKey` constructor input, so the stamper below never has to
- * recover from a bad default.
- */
-const TEST_DEFAULT_WALLET = '11111111111111111111111111111111'
-
-/**
- * Test-only preHandler. Skipped in production (where the real auth
- * preHandlers run instead). Stamps `req.wallet` from the
- * `x-wallet-address` header when present, falling back to
- * {@link TEST_DEFAULT_WALLET}. Gated by `options.prisma === undefined`,
- * which only happens in the in-process test harness.
- */
-async function testWalletStamper(req: import('fastify').FastifyRequest): Promise<void> {
-  const header = req.headers['x-wallet-address']
-  const address = typeof header === 'string' && header.trim().length > 0
-    ? header.trim()
-    : TEST_DEFAULT_WALLET
-  const { PublicKey } = await import('@solana/web3.js')
-  let pubkey: import('@solana/web3.js').PublicKey
-  try {
-    pubkey = new PublicKey(address)
-  } catch {
-    pubkey = new PublicKey(TEST_DEFAULT_WALLET)
-  }
-  req.wallet = { address: pubkey.toBase58(), pubkey }
-}
-
 export interface PositionRoutesOptions extends PositionControllerDeps {
   /**
-   * Prisma client used by the auth preHandlers. When omitted (test
-   * harness), routes run without auth — only safe in tests because
-   * production wiring in `app.ts` always passes the live client.
+   * preHandler chain that authenticates the request and stamps
+   * `req.wallet`. Built by `app.ts` from the live Prisma client in
+   * production (wallet-signature + beta-access gate); the test harness
+   * (`test-kit/route-harness.ts`) supplies a header-stamping stub.
+   *
+   * Routes shouldn't know which implementation they're using — they
+   * just run the chain and trust `req.wallet`.
    */
-  prisma?: PrismaClient
+  authPreHandlers: preHandlerHookHandler[]
 }
 
 export async function registerPositionRoutes(app: FastifyInstance, options: PositionRoutesOptions) {
@@ -66,22 +38,14 @@ export async function registerPositionRoutes(app: FastifyInstance, options: Posi
 
   const tags = ['Positions']
 
-  // Independent rate-limit buckets per route family. Per audit P1-24:
+  // Independent rate-limit buckets per route family:
   // - intents creation: 10/min/IP
   // - mutating ops on a specific position: 5/min/IP
-  // (Wallet-keyed quotas need a Redis-backed limiter — call out as P3.)
+  // Wallet-keyed quotas come with the Phase 3 Redis-backed limiter.
   const intentLimiter = makeRateLimiter({ windowMs: 60_000, max: 10 })
   const mutateLimiter = makeRateLimiter({ windowMs: 60_000, max: 5 })
 
-  // Auth + beta gate. Production wiring always supplies a Prisma client.
-  // The test harness path (no `prisma`) instead mounts a dev-only
-  // preHandler that stamps `req.wallet` from the `x-wallet-address`
-  // header (or a default), so the controller's owner / wallet checks
-  // still exercise the same code paths without a real wallet+signature
-  // pipeline.
-  const preHandlers = options.prisma
-    ? [requireWalletSignature(options.prisma), requireBetaAccess(options.prisma)]
-    : [testWalletStamper]
+  const preHandlers = options.authPreHandlers
 
   app.post<{ Body: CreateIntentBody }>(
     '/positions/intents',
