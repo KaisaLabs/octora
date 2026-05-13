@@ -1,6 +1,6 @@
 import type { FastifyInstance, preHandlerHookHandler } from 'fastify'
 
-import { makeRateLimiter } from '#modules/mixer/rate-limit'
+import { rateLimitHook, walletThenIpKey, type RateLimiterFactory } from '#common/ratelimit'
 
 import { createPositionController, type PositionControllerDeps } from './position.controller'
 import { createIntentSchema, executeIntentSchema, positionParamsSchema } from './position.schema'
@@ -31,6 +31,7 @@ export interface PositionRoutesOptions extends PositionControllerDeps {
    * just run the chain and trust `req.wallet`.
    */
   authPreHandlers: preHandlerHookHandler[]
+  rateLimiterFactory: RateLimiterFactory
 }
 
 export async function registerPositionRoutes(app: FastifyInstance, options: PositionRoutesOptions) {
@@ -38,21 +39,33 @@ export async function registerPositionRoutes(app: FastifyInstance, options: Posi
 
   const tags = ['Positions']
 
-  // Independent rate-limit buckets per route family:
-  // - intents creation: 10/min/IP
-  // - mutating ops on a specific position: 5/min/IP
-  // Wallet-keyed quotas come with the Phase 3 Redis-backed limiter.
-  const intentLimiter = makeRateLimiter({ windowMs: 60_000, max: 10 })
-  const mutateLimiter = makeRateLimiter({ windowMs: 60_000, max: 5 })
+  // Independent rate-limit buckets per route family. Wallet-keyed when
+  // present (auth runs first in the preHandler chain), IP-keyed when
+  // anonymous so the same caller can't sidestep by rotating IPs.
+  const intentLimiter = rateLimitHook(options.rateLimiterFactory, {
+    windowMs: 60_000,
+    max: 10,
+    prefix: 'positions:intents',
+    keyFor: walletThenIpKey,
+  })
+  const mutateLimiter = rateLimitHook(options.rateLimiterFactory, {
+    windowMs: 60_000,
+    max: 5,
+    prefix: 'positions:mutate',
+    keyFor: walletThenIpKey,
+  })
 
-  const preHandlers = options.authPreHandlers
+  // The limiter runs as a preHandler *after* the auth chain so it can
+  // observe `req.wallet`. Putting it on `onRequest` would defeat the
+  // wallet-key path because auth hasn't run yet at that stage.
+  const intentPreHandlers = [...options.authPreHandlers, intentLimiter]
+  const mutatePreHandlers = [...options.authPreHandlers, mutateLimiter]
 
   app.post<{ Body: CreateIntentBody }>(
     '/positions/intents',
     {
       schema: { ...createIntentSchema, tags },
-      onRequest: intentLimiter,
-      preHandler: preHandlers,
+      preHandler: intentPreHandlers,
     },
     controller.createIntent,
   )
@@ -69,8 +82,7 @@ export async function registerPositionRoutes(app: FastifyInstance, options: Posi
     '/positions/:positionId/execute',
     {
       schema: { ...positionParamsSchema, ...executeIntentSchema, tags },
-      onRequest: mutateLimiter,
-      preHandler: preHandlers,
+      preHandler: mutatePreHandlers,
     },
     controller.executeIntent,
   )
@@ -79,8 +91,7 @@ export async function registerPositionRoutes(app: FastifyInstance, options: Posi
     '/positions/:positionId/claim',
     {
       schema: { ...positionParamsSchema, tags },
-      onRequest: mutateLimiter,
-      preHandler: preHandlers,
+      preHandler: mutatePreHandlers,
     },
     controller.claimPosition,
   )
@@ -89,8 +100,7 @@ export async function registerPositionRoutes(app: FastifyInstance, options: Posi
     '/positions/:positionId/withdraw-close',
     {
       schema: { ...positionParamsSchema, tags },
-      onRequest: mutateLimiter,
-      preHandler: preHandlers,
+      preHandler: mutatePreHandlers,
     },
     controller.withdrawClosePosition,
   )

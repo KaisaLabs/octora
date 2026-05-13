@@ -11,6 +11,7 @@ import { collectMetrics } from '#common/metrics'
 import { buildLoggerOptions, genReqId, initSentry } from '#common/observability'
 import { registerErrorHandler } from '#common/errors'
 import { requireBetaAccess, requireWalletSignature } from '#common/auth'
+import { createRateLimiterFactoryFromConfig, type RateLimiterFactory } from '#common/ratelimit'
 import { createPrismaPositionRepository, type PositionRepository } from '#modules/positions/position.repository'
 import { createPrismaActivityRepository, type ActivityRepository } from '#modules/positions/activity.repository'
 import { createPrismaReconciliationRepository, type ReconciliationRepository } from '#modules/indexer/indexer.repository'
@@ -102,6 +103,15 @@ export async function createApp(options: CreateAppOptions = {}) {
     repos = built.repos
     prismaClient = built.client
   }
+
+  // Build the rate-limiter factory once at boot. Memory by default;
+  // Redis when `RATE_LIMITER=redis` so multiple replicas share one
+  // ceiling. Routes get the factory and create their own per-family
+  // limiter via `rateLimitHook`.
+  const rateLimiterFactory: RateLimiterFactory = await createRateLimiterFactoryFromConfig(config)
+  app.addHook('onClose', async () => {
+    await rateLimiterFactory.close()
+  })
 
   await app.register(cors, {
     origin: config.frontendUrl,
@@ -198,7 +208,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   // Prisma client; they degrade to no-op when the app is built with
   // injected repos and no client (test harness).
   if (authRepo) {
-    await app.register(registerAuthRoutes, { authRepo })
+    await app.register(registerAuthRoutes, { authRepo, rateLimiterFactory })
     await app.register(registerAdminRoutes, {
       waitlistRepo: repos.waitlistRepo,
       adminApiToken: config.adminApiToken,
@@ -210,6 +220,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     meteoraExecutor,
     betaCaps: config.betaCaps,
     authPreHandlers,
+    rateLimiterFactory,
   })
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)
@@ -229,6 +240,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     mixerProgramId: config.mixerProgramId,
     mixerDenominations: config.mixerDenominations,
     registry: mixerRegistry,
+    rateLimiterFactory,
   })
   app.register(registerExecutorRoutes, {
     executorProgramId: config.executorProgramId,
@@ -241,7 +253,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   // other OCTORA_MIXER_RELAYER_* env vars (see common/config.ts).
   if (config.mixerRelayer) {
     const rootSeenRepo = prismaClient ? createPrismaRootSeenRepository(prismaClient) : null
-    await registerRelayerRoutes(app, config.mixerRelayer, rootSeenRepo, mixerRegistry)
+    await registerRelayerRoutes(app, config.mixerRelayer, rootSeenRepo, mixerRegistry, rateLimiterFactory)
   }
 
   // Recovery worker (P1-29). Polls every 30s to advance stuck positions

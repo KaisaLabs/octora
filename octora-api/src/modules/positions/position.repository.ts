@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 export interface PositionRow {
   id: string;
@@ -58,8 +59,10 @@ export interface PositionRepository {
   countActiveByWallet(walletAddress: string): Promise<number>;
   /**
    * Sum of `amount` (SOL decimal string) over all non-terminal positions.
-   * Returns a `number` because beta caps are in SOL and Postgres SUM
-   * over a TEXT column requires a JS-side parse anyway.
+   * Returns a `number` because beta caps are in SOL. Backed by a single
+   * Postgres aggregate (`SUM(amount::numeric)`) so memory cost is constant
+   * regardless of active-row count — earlier impls pulled rows and reduced
+   * in JS, which would OOM if the active set grew unbounded.
    */
   sumActiveAmountSol(): Promise<number>;
   /**
@@ -113,17 +116,25 @@ export function createPrismaPositionRepository(client: PrismaClient): PositionRe
     countActiveByWallet: (walletAddress) =>
       client.position.count({ where: { walletAddress, ...terminalFilter } }),
     sumActiveAmountSol: async () => {
-      // amount is a decimal string in SOL — Prisma can't SUM a TEXT
-      // column, so pull active rows and reduce in JS. The caps are bounded
-      // (≤500 active positions in beta) so this is fine.
-      const active = await client.position.findMany({
-        where: terminalFilter,
-        select: { amount: true },
-      });
-      return active.reduce((acc, row) => {
-        const v = Number(row.amount);
-        return Number.isFinite(v) ? acc + v : acc;
-      }, 0);
+      // Cast TEXT -> NUMERIC inside Postgres so the work happens server-side.
+      // The partial index `Position_active_amount_idx` (state, amount) covers
+      // the filter; with the active set excluded, terminal rows never get
+      // scanned. Result row is `{ sum: Decimal | null }` — null when zero
+      // active rows. NUMERIC arrives as a Prisma Decimal, so use toNumber()
+      // rather than letting JS coerce a string with trailing precision.
+      // The driver may return NUMERIC as a Prisma.Decimal, a string, or a
+      // number depending on adapter / driver version, so coerce through
+      // `Number(...)` and guard against NaN rather than typing it tightly.
+      type Row = { sum: Prisma.Decimal | string | number | null };
+      const rows = await client.$queryRaw<Row[]>`
+        SELECT SUM("amount"::numeric) AS sum
+        FROM "Position"
+        WHERE "state" NOT IN ('completed', 'failed')
+      `;
+      const raw = rows[0]?.sum ?? null;
+      if (raw === null) return 0;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : 0;
     },
     findStuckPositions: (state, cutoff, limit) =>
       client.position.findMany({

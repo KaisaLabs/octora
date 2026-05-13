@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { PublicKey } from "@solana/web3.js";
 import type { MixerRelayerConfig } from "#common/config";
-import { makeRateLimiter } from "#modules/mixer/rate-limit";
+import { rateLimitHook, type RateLimiterFactory } from "#common/ratelimit";
 import {
   createRelayerController,
   type RelayerEntry,
@@ -42,6 +42,7 @@ export async function registerRelayerRoutes(
   cfg: MixerRelayerConfig,
   rootSeenRepo: RootSeenRepository | null = null,
   mixerRegistry: MixerRegistry | null = null,
+  rateLimiterFactory: RateLimiterFactory,
 ): Promise<void> {
   const tags = ["Relayer"];
 
@@ -86,13 +87,27 @@ export async function registerRelayerRoutes(
     },
   });
 
-  // Rate-limit ceilings:
+  // Rate-limit ceilings, keyed by caller IP — withdrawals are anonymous
+  // by design (the only identity is the ZK proof) so there's no wallet
+  // address to bucket on.
   //   - withdraw is the expensive endpoint, 10/min/IP
   //   - validate is a dry-run, 30/min/IP
   //   - status/info are read-only, 60/min/IP
-  const withdrawLimiter = makeRateLimiter({ windowMs: 60_000, max: 10 });
-  const validateLimiter = makeRateLimiter({ windowMs: 60_000, max: 30 });
-  const statusLimiter = makeRateLimiter({ windowMs: 60_000, max: 60 });
+  const withdrawLimiter = rateLimitHook(rateLimiterFactory, {
+    windowMs: 60_000,
+    max: 10,
+    prefix: "relayer:withdraw",
+  });
+  const validateLimiter = rateLimitHook(rateLimiterFactory, {
+    windowMs: 60_000,
+    max: 30,
+    prefix: "relayer:validate",
+  });
+  const statusLimiter = rateLimitHook(rateLimiterFactory, {
+    windowMs: 60_000,
+    max: 60,
+    prefix: "relayer:status",
+  });
 
   function resolveDenominationParam(
     raw: unknown,

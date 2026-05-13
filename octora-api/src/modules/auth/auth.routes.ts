@@ -1,12 +1,13 @@
 import type { FastifyInstance } from "fastify";
 
 import { issueAuthNonce } from "#common/auth";
-import { makeRateLimiter } from "#modules/mixer/rate-limit";
+import { rateLimitHook, type RateLimiterFactory } from "#common/ratelimit";
 
 import type { AuthRepository } from "./auth.repository.js";
 
 export interface AuthRoutesDeps {
   authRepo: AuthRepository;
+  rateLimiterFactory: RateLimiterFactory;
 }
 
 /**
@@ -15,17 +16,30 @@ export interface AuthRoutesDeps {
  * string (UTF-8 bytes) and presents the signature on the next mutating
  * call as `x-signature`.
  *
- * Rate-limited per IP because each issued nonce takes a row in
- * `AuthNonce` and a malicious caller could otherwise flood the table.
+ * Rate-limited by `{walletAddress, ip}` — the request body itself declares
+ * which wallet is asking, so use that as the primary bucket key. Without
+ * it, an attacker rotating wallet addresses could flood the `AuthNonce`
+ * table from one IP, or a coordinated multi-IP attack could exhaust a
+ * single wallet's quota.
  */
 export async function registerAuthRoutes(
   app: FastifyInstance,
   deps: AuthRoutesDeps,
 ): Promise<void> {
-  const limiter = makeRateLimiter({ windowMs: 60_000, max: 30 });
+  const limiter = rateLimitHook(deps.rateLimiterFactory, {
+    windowMs: 60_000,
+    max: 30,
+    prefix: "auth:nonce",
+    keyFor: (req) => {
+      const body = (req.body ?? {}) as { walletAddress?: unknown };
+      const wallet = typeof body.walletAddress === "string" ? body.walletAddress : null;
+      if (wallet) return `wallet:${wallet}`;
+      return `ip:${req.ip || "unknown"}`;
+    },
+  });
 
   await app.register(async (scope) => {
-    scope.addHook("onRequest", limiter);
+    scope.addHook("preHandler", limiter);
     scope.post<{ Body: { walletAddress: string } }>(
       "/auth/nonce",
       {

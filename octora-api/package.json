@@ -53,6 +53,7 @@
     "circomlibjs": "^0.1.7",
     "fastify": "^5.3.0",
     "fixed-merkle-tree": "^0.7.3",
+    "ioredis": "^5.10.1",
     "pg": "^8.20.0",
     "resend": "^6.12.2",
     "snarkjs": "^0.7.6",

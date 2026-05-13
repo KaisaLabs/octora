@@ -40,6 +40,17 @@ export const resendConfigSchema = z.object({
   fromAddress: z.string().min(1),
 })
 
+export const rateLimiterConfigSchema = z.object({
+  /**
+   * Selected limiter backend. `memory` keeps state in-process (single
+   * replica only); `redis` keeps state in Redis so multiple replicas
+   * enforce one shared ceiling.
+   */
+  backend: z.enum(['memory', 'redis']),
+  /** Required when `backend === 'redis'`. Ignored otherwise. */
+  redisUrl: z.string().min(1).nullable(),
+})
+
 export const mixerConfigSchema = z.object({
   /**
    * Minimum unspent-deposit count required to permit a withdrawal build.
@@ -65,6 +76,7 @@ export const appConfigSchema = z.object({
   mixerDenomination: z.bigint().positive(),
   mixerDenominations: z.array(z.bigint().positive()).nonempty(),
   mixer: mixerConfigSchema,
+  rateLimiter: rateLimiterConfigSchema,
   mixerRelayer: mixerRelayerConfigSchema.nullable(),
   betaCaps: betaCapsConfigSchema,
   adminApiToken: z.string().min(1).nullable(),
@@ -85,3 +97,4 @@ export type MixerRelayerConfig = z.infer<typeof mixerRelayerConfigSchema>
 export type DlmmRpcUrls = z.infer<typeof dlmmRpcUrlsSchema>
 export type ResendConfig = z.infer<typeof resendConfigSchema>
 export type MixerConfig = z.infer<typeof mixerConfigSchema>
+export type RateLimiterRuntimeConfig = z.infer<typeof rateLimiterConfigSchema>

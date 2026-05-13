@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { PublicKey } from "@solana/web3.js";
 import { createMixerController } from "./mixer.controller.js";
 import { MixerRegistry } from "./mixer.registry.js";
-import { makeRateLimiter } from "./rate-limit.js";
+import { rateLimitHook, type RateLimiterFactory } from "#common/ratelimit";
 import { loadConfig } from "#common/config";
 
 // MAINNET_BLOCKER: default falls back to devnet. On mainnet deploy,
@@ -40,6 +40,7 @@ export interface MixerRoutesOptions {
    * anonymity-set tracker stays consistent across endpoints.
    */
   registry?: MixerRegistry;
+  rateLimiterFactory: RateLimiterFactory;
 }
 
 export async function registerMixerRoutes(
@@ -95,8 +96,18 @@ export async function registerMixerRoutes(
     },
   );
 
-  const readLimiter = makeRateLimiter(READ_LIMIT);
-  const writeLimiter = makeRateLimiter(WRITE_LIMIT);
+  // Mixer routes are unauthenticated (wallet identity is the commitment,
+  // not a signed header) so we key on IP. Wallet-keying would require
+  // forcing every mixer caller through wallet-signature auth, which
+  // would defeat the point of the mixer.
+  const readLimiter = rateLimitHook(opts.rateLimiterFactory, {
+    ...READ_LIMIT,
+    prefix: "mixer:read",
+  });
+  const writeLimiter = rateLimitHook(opts.rateLimiterFactory, {
+    ...WRITE_LIMIT,
+    prefix: "mixer:write",
+  });
 
   // ── Read-only endpoints ────────────────────────────────────────
   await app.register(async (scope) => {

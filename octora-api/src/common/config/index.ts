@@ -24,6 +24,7 @@ export type {
   DlmmRpcUrls,
   ResendConfig,
   MixerConfig,
+  RateLimiterRuntimeConfig,
 } from './schema.js'
 
 function requireEnv(name: string): string {
@@ -68,6 +69,7 @@ export function loadConfig(): AppConfig {
     mixer: {
       minAnonymitySet: parseInteger(process.env.MIXER_MIN_ANONYMITY_SET) ?? 20,
     },
+    rateLimiter: loadRateLimiterConfig(),
     mixerRelayer: loadMixerRelayerConfig(),
     betaCaps: {
       maxPositionSol: parseFloat(process.env.BETA_MAX_POSITION_SOL) ?? 2.5,
@@ -124,6 +126,24 @@ function loadFrontendUrl(isProduction: boolean): string | string[] {
   const origins = parseCsv(raw)
   if (!origins) return '*'
   return origins.length === 1 ? origins[0]! : origins
+}
+
+/**
+ * Resolve the rate-limiter runtime config. `RATE_LIMITER` selects the
+ * backend; when set to `redis`, `REDIS_URL` becomes mandatory. The
+ * downstream factory (common/ratelimit) also asserts this — keeping
+ * the check here too means we fail at boot rather than at first request.
+ */
+function loadRateLimiterConfig(): { backend: 'memory' | 'redis'; redisUrl: string | null } {
+  const raw = process.env.RATE_LIMITER?.trim().toLowerCase() || 'memory'
+  if (raw !== 'memory' && raw !== 'redis') {
+    throw new Error(`RATE_LIMITER must be 'memory' or 'redis' (got '${raw}').`)
+  }
+  const redisUrl = process.env.REDIS_URL?.trim() || null
+  if (raw === 'redis' && !redisUrl) {
+    throw new Error("RATE_LIMITER=redis requires REDIS_URL to be set.")
+  }
+  return { backend: raw, redisUrl }
 }
 
 function loadMixerRelayerConfig(): MixerRelayerConfig | null {
