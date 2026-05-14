@@ -11,9 +11,15 @@ import { Program, Wallet } from "@coral-xyz/anchor";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ApiError, ConflictError, ValidationError } from "#common/errors";
+import { ApiError, ConflictError } from "#common/errors";
 import { loadConfig } from "#common/config";
 import type { SolanaChain } from "#common/solana/chain";
+import { bigintToBytes32, SeedRangeError } from "#common/solana/field-encoding";
+
+// Re-export so the existing import paths (`#modules/mixer/mixer.service`)
+// keep working. New callers should import directly from
+// `#common/solana/field-encoding`.
+export { bigintToBytes32, SeedRangeError };
 
 import {
   MIXER_POOL_IS_PAUSED_OFFSET,
@@ -629,30 +635,6 @@ export class MixerPoolNotInitializedError extends ConflictError {
   }
 }
 
-/**
- * Pack a bigint into exactly 32 big-endian bytes. Throws SeedRangeError if
- * the value doesn't fit, instead of letting Solana's findProgramAddressSync
- * surface a cryptic "Max seed length exceeded" 500 deeper in the stack.
- */
-export class SeedRangeError extends ValidationError {
-  constructor(public readonly field: string, public readonly value: bigint) {
-    super(`${field} value too large to fit in 32-byte PDA seed: ${value.toString()}`, {
-      code: "seed_range",
-      details: { field, value: value.toString() },
-    });
-    this.name = "SeedRangeError";
-  }
-}
-
-export function bigintToBytes32(value: bigint, field: string): Buffer {
-  if (value < 0n || value >= 1n << 256n) {
-    throw new SeedRangeError(field, value);
-  }
-  const out = Buffer.alloc(32);
-  let v = value;
-  for (let i = 31; i >= 0; i--) {
-    out[i] = Number(v & 0xffn);
-    v >>= 8n;
-  }
-  return out;
-}
+// SeedRangeError + bigintToBytes32 moved to common/solana/field-encoding.ts;
+// re-exported from the top of this file for back-compat with existing
+// import paths.

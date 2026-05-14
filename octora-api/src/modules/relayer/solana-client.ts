@@ -3,7 +3,7 @@ import { Keypair, PublicKey } from "@solana/web3.js";
 import { readFileSync, statSync } from "node:fs";
 import { join, dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import { bigintToBytes32 } from "#modules/mixer/mixer.service";
+import { bigintToBytes32 } from "#common/solana/field-encoding";
 import { loadConfig } from "#common/config";
 import type { SolanaChain } from "#common/solana/chain";
 import type { RelayerConfig } from "./types.js";

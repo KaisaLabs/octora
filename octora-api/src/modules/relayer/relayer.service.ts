@@ -1,6 +1,6 @@
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { verifyWithdrawProof } from "#modules/vault";
-import { bigintToBytes32 } from "#modules/mixer/mixer.service";
+import { bigintToBytes32 } from "#common/solana/field-encoding";
 import { submitConfirmed } from "#common/solana-tx";
 import type { SolanaChain } from "#common/solana/chain";
 import type { NullifierRegistry } from "./nullifier-registry.js";
