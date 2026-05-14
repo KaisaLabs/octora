@@ -84,8 +84,11 @@ export class ScriptedChain implements SolanaChain {
     return this.state.slot ?? 0
   }
 
-  async getSignatureStatus(signature: string): Promise<SignatureStatus | null> {
-    this.calls.push({ method: 'getSignatureStatus', args: [signature] })
+  async getSignatureStatus(
+    signature: string,
+    opts?: { searchTransactionHistory?: boolean },
+  ): Promise<SignatureStatus | null> {
+    this.calls.push({ method: 'getSignatureStatus', args: [signature, opts] })
     const statuses = this.state.signatureStatuses ?? {}
     return signature in statuses ? statuses[signature] : null
   }

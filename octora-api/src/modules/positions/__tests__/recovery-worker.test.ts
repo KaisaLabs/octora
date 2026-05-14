@@ -11,30 +11,34 @@ import { createMemoryRepositories } from "#test-kit/memory-db";
 import { createActivityService } from "../activity.service";
 import { createRecoveryWorker } from "#workers/recovery.worker";
 
-import type { Connection } from "@solana/web3.js";
 import type { PositionIndexer } from "#modules/indexer";
 import type { ReconciliationRepository } from "#modules/indexer/indexer.repository";
+import type { SolanaChain } from "#common/solana/chain";
 
 const TEST_WALLET = "TestWallet111111111111111111111111111111111";
 
-function makeFakeConnection(opts: {
+function makeFakeChain(opts: {
   status: "confirmed" | "finalized" | "processed" | "missing" | "errored";
-}): Connection {
+}): SolanaChain {
   return {
     async getSignatureStatus() {
-      if (opts.status === "missing") return { value: null, context: { slot: 1 } };
+      if (opts.status === "missing") return null;
       if (opts.status === "errored") {
         return {
-          value: { err: { InstructionError: [0, "Custom"] }, slot: 1, confirmations: null, confirmationStatus: "confirmed" as const },
-          context: { slot: 1 },
+          err: { InstructionError: [0, "Custom"] },
+          slot: 1,
+          confirmations: null,
+          confirmationStatus: "confirmed" as const,
         };
       }
       return {
-        value: { err: null, slot: 1, confirmations: null, confirmationStatus: opts.status },
-        context: { slot: 1 },
+        err: null,
+        slot: 1,
+        confirmations: null,
+        confirmationStatus: opts.status,
       };
     },
-  } as unknown as Connection;
+  } as unknown as SolanaChain;
 }
 
 function makeFakeIndexer(active: boolean): PositionIndexer {
@@ -100,7 +104,7 @@ describe("recovery worker", () => {
       positionRepo: repos.positionRepo,
       activityService: createActivityService(repos.activityRepo),
       positionIndexer: makeFakeIndexer(false),
-      connection: makeFakeConnection({ status: "confirmed" }),
+      chain: makeFakeChain({ status: "confirmed" }),
       reconciliationRepo: makeFakeReconciliationRepo("real_sig"),
       log: () => {},
     });
@@ -134,7 +138,7 @@ describe("recovery worker", () => {
       positionRepo: repos.positionRepo,
       activityService: createActivityService(repos.activityRepo),
       positionIndexer: makeFakeIndexer(false),
-      connection: makeFakeConnection({ status: "missing" }),
+      chain: makeFakeChain({ status: "missing" }),
       reconciliationRepo: makeFakeReconciliationRepo(null),
       log: () => {},
     });
@@ -168,7 +172,7 @@ describe("recovery worker", () => {
       positionRepo: repos.positionRepo,
       activityService: createActivityService(repos.activityRepo),
       positionIndexer: makeFakeIndexer(true),
-      connection: makeFakeConnection({ status: "confirmed" }),
+      chain: makeFakeChain({ status: "confirmed" }),
       reconciliationRepo: makeFakeReconciliationRepo("ignored"),
       log: () => {},
     });
@@ -205,7 +209,7 @@ describe("recovery worker", () => {
       positionRepo: repos.positionRepo,
       activityService: createActivityService(repos.activityRepo),
       positionIndexer: makeFakeIndexer(false),
-      connection: makeFakeConnection({ status: "confirmed" }),
+      chain: makeFakeChain({ status: "confirmed" }),
       reconciliationRepo: makeFakeReconciliationRepo(null),
       captureException: capture,
       log: () => {},

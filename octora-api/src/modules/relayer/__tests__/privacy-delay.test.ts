@@ -47,7 +47,6 @@ function makeConfig(over: Partial<RelayerConfig> = {}): RelayerConfig {
     baseFeelamports: 5000n,
     minFeeLamports: 5000n,
     hotWalletSecret: "test-hot-wallet",
-    rpcUrl: "http://localhost:8899",
     mixerProgramId: "MixerProgram111111111111111111111111111",
     poolDenomination: 1_000_000_000n,
     privacyDelayMs: 1000,

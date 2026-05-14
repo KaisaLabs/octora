@@ -39,7 +39,10 @@ export interface SolanaChain {
 
   getSlot(commitment?: Commitment): Promise<number>
 
-  getSignatureStatus(signature: string): Promise<SignatureStatus | null>
+  getSignatureStatus(
+    signature: string,
+    opts?: { searchTransactionHistory?: boolean },
+  ): Promise<SignatureStatus | null>
 
   getRecentPrioritizationFees(opts?: {
     lockedWritableAccounts?: PublicKey[]

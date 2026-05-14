@@ -2,6 +2,7 @@ import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { verifyWithdrawProof } from "#modules/vault";
 import { bigintToBytes32 } from "#modules/mixer/mixer.service";
 import { submitConfirmed } from "#common/solana-tx";
+import type { SolanaChain } from "#common/solana/chain";
 import type { NullifierRegistry } from "./nullifier-registry.js";
 import type { RootSeenRepository } from "./root-seen.repository.js";
 import type { StealthWallet } from "./stealth-wallet.js";
@@ -92,6 +93,15 @@ export class RelayerService {
     private readonly nullifiers: NullifierRegistry,
     private readonly rootSeenRepo: RootSeenRepository | null = null,
     slotProvider: (() => Promise<bigint>) | null = null,
+    /**
+     * Chain used by the relayer for on-chain reads (slot, pool account,
+     * hot wallet balance) and as the source for the Anchor provider.
+     * Optional only because the constructor predated the SolanaChain
+     * seam — callers that omit it skip `initializeClient()`, which is
+     * the path the in-memory test harness takes. Production wiring in
+     * `RelayerRegistry.create` always passes a real chain.
+     */
+    private readonly chain: SolanaChain | null = null,
   ) {
     this.privacyDelayMs = config.privacyDelayMs ?? 13_000;
     this.privacyDelaySlots = Math.max(
@@ -106,7 +116,13 @@ export class RelayerService {
    * Must be called before processing withdrawals.
    */
   initializeClient(): void {
-    this.client = createMixerClient(this.config);
+    if (!this.chain) {
+      throw new Error(
+        "RelayerService.initializeClient called without a SolanaChain. " +
+          "Pass `chain` to the constructor when wiring this service.",
+      );
+    }
+    this.client = createMixerClient(this.config, this.chain);
     const [poolPDA] = deriveMixerPoolPDA(
       this.client.programId,
       this.config.poolDenomination,
@@ -423,8 +439,8 @@ export class RelayerService {
 
     const currentSlot = this.slotProvider
       ? await this.slotProvider()
-      : this.client
-      ? BigInt(await this.client.provider.connection.getSlot("confirmed"))
+      : this.chain
+      ? BigInt(await this.chain.getSlot("confirmed"))
       : null;
     if (currentSlot == null) return { ok: true };
 
@@ -459,7 +475,7 @@ export class RelayerService {
     // Pre-flight: pool must exist before Anchor's IDL-driven PDA check tries
     // to read mixer_pool.denomination as a seed. Otherwise the failure
     // surfaces as Solana's cryptic "Max seed length exceeded".
-    const poolAcct = await this.client!.provider.connection.getAccountInfo(mixerPoolKey);
+    const poolAcct = await this.chain!.getAccountInfo(mixerPoolKey);
     if (!poolAcct) {
       throw new Error(
         `Mixer pool ${mixerPoolKey.toBase58()} (denom=${this.config.poolDenomination.toString()}) ` +
@@ -500,7 +516,10 @@ export class RelayerService {
 
     try {
       const tx = await submitConfirmed({
-        connection: this.client!.provider.connection,
+        // submitConfirmed still consumes a raw Connection — pull it out
+        // of the chain seam at the call site. Migrating submitConfirmed
+        // is a separate concern (it owns retry policy + priority fees).
+        connection: this.chain!.rawConnection(),
         instructions: [withdrawIx],
         signers: [hotWallet],
         payer: hotWallet.publicKey,
@@ -569,9 +588,8 @@ export class RelayerService {
 
   private async getHotWalletBalance(): Promise<string> {
     if (!this.client) return "0";
-    const balance = await this.client.provider.connection.getBalance(
-      this.client.hotWallet.publicKey,
-    );
+    if (!this.chain) return "0";
+    const balance = await this.chain.getBalance(this.client.hotWallet.publicKey);
     return balance.toString();
   }
 

@@ -1,4 +1,5 @@
-import { Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
+import type { SolanaChain } from "#common/solana/chain";
 import { isNullifierSpentOnChain } from "./solana-client.js";
 
 /**
@@ -64,7 +65,7 @@ export class OnChainNullifierRegistry implements NullifierRegistry {
   private readonly cache = new Map<string, NullifierEntry>();
 
   constructor(
-    private readonly connection: Connection,
+    private readonly chain: SolanaChain,
     private readonly programId: PublicKey,
     private readonly mixerPoolKey: PublicKey,
   ) {}
@@ -77,7 +78,7 @@ export class OnChainNullifierRegistry implements NullifierRegistry {
 
     // Slow path: check on-chain PDA existence
     const spentOnChain = await isNullifierSpentOnChain(
-      this.connection,
+      this.chain,
       this.programId,
       this.mixerPoolKey,
       nullifierHash,

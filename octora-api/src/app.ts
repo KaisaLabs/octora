@@ -37,7 +37,7 @@ import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
 import { createActivityService } from '#modules/positions/activity.service'
 import { createIndexerService } from '#modules/indexer'
 import { createRecoveryWorker } from '#workers/recovery.worker'
-import { Connection, PublicKey } from '@solana/web3.js'
+import { PublicKey } from '@solana/web3.js'
 
 export interface AppRepositories {
   positionRepo: PositionRepository
@@ -133,9 +133,19 @@ export async function createApp(options: CreateAppOptions = {}) {
   //   distinct from `executor` even when they resolve to the same URL
   //   in dev; the config has a footgun note (line ~96) about
   //   cross-cluster RPC leakage.
-  const chains: { executor: SolanaChain; cluster: SolanaChain } = {
+  // - `relayer` (mixer.relayer.rpcUrl): only present when the mixer
+  //   relayer is enabled. Wraps the relayer's submission endpoint
+  //   (may be a privileged RPC distinct from `cluster`).
+  const chains: {
+    executor: SolanaChain
+    cluster: SolanaChain
+    relayer: SolanaChain | null
+  } = {
     executor: new LiveSolanaChain({ rpcUrl: config.executorRpcUrl }),
     cluster: new LiveSolanaChain({ rpcUrl: config.solanaRpcUrl }),
+    relayer: config.mixerRelayer
+      ? new LiveSolanaChain({ rpcUrl: config.mixerRelayer.rpcUrl })
+      : null,
   }
 
   // Build the rate-limiter factory once at boot. Memory by default;
@@ -293,7 +303,16 @@ export async function createApp(options: CreateAppOptions = {}) {
   // other OCTORA_MIXER_RELAYER_* env vars (see common/config.ts).
   if (config.mixerRelayer) {
     const rootSeenRepo = prismaClient ? createPrismaRootSeenRepository(prismaClient) : null
-    await registerRelayerRoutes(app, config.mixerRelayer, rootSeenRepo, mixerRegistry, rateLimiterFactory)
+    // chains.relayer is non-null whenever config.mixerRelayer is set
+    // (they share the same gate). Assert to drop the union.
+    await registerRelayerRoutes(
+      app,
+      config.mixerRelayer,
+      chains.relayer!,
+      rootSeenRepo,
+      mixerRegistry,
+      rateLimiterFactory,
+    )
   }
 
   // Recovery worker (P1-29). Polls every 30s to advance stuck positions
@@ -306,7 +325,7 @@ export async function createApp(options: CreateAppOptions = {}) {
       positionRepo: repos.positionRepo,
       activityService: createActivityService(repos.activityRepo),
       positionIndexer: createIndexerService({ store: repos.reconciliationRepo }),
-      connection: new Connection(config.executorRpcUrl, 'confirmed'),
+      chain: chains.executor,
       reconciliationRepo: repos.reconciliationRepo,
       log: (msg, ctx) => app.log.info(ctx ?? {}, msg),
     })

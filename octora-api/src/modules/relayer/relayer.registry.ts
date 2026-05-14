@@ -1,4 +1,5 @@
 import type { MixerRelayerConfig } from "#common/config";
+import type { SolanaChain } from "#common/solana/chain";
 import { OnChainNullifierRegistry } from "./nullifier-registry.js";
 import type { RootSeenRepository } from "./root-seen.repository.js";
 import { RelayerService } from "./relayer.service.js";
@@ -54,6 +55,7 @@ export class RelayerRegistry {
 
   static async create(
     cfg: MixerRelayerConfig,
+    chain: SolanaChain,
     rootSeenRepo: RootSeenRepository | null,
   ): Promise<RelayerRegistry> {
     const denominations = cfg.denominations ?? [cfg.poolDenomination];
@@ -73,26 +75,33 @@ export class RelayerRegistry {
         baseFeelamports: cfg.minFeeLamports,
         minFeeLamports: cfg.minFeeLamports,
         hotWalletSecret: cfg.hotWalletSecret,
-        rpcUrl: cfg.rpcUrl,
         mixerProgramId: cfg.mixerProgramId,
         poolDenomination: denomination,
         privacyDelayMs: cfg.privacyDelayMs,
       };
 
-      // Each service constructs its own MixerClient — three connections + three
-      // program instances. The hot wallet keypair is the same across all of
-      // them (deterministic load from the same secret), so the on-chain
-      // signer is identical and the proof's `relayer` public input stays
-      // consistent regardless of which denomination the user picked.
-      const client = createMixerClient(serviceConfig);
+      // Every entry shares the same SolanaChain (= one underlying RPC
+      // endpoint). The MixerClient + AnchorProvider it produces share
+      // that connection too. The hot wallet keypair is the same across
+      // all entries (deterministic load from the same secret), so the
+      // on-chain signer is identical and the proof's `relayer` public
+      // input stays consistent regardless of which denomination the
+      // user picked.
+      const client = createMixerClient(serviceConfig, chain);
       const [poolPDA] = deriveMixerPoolPDA(client.programId, denomination);
       const nullifiers = new OnChainNullifierRegistry(
-        client.provider.connection,
+        chain,
         client.programId,
         poolPDA,
       );
 
-      const service = new RelayerService(serviceConfig, nullifiers, rootSeenRepo);
+      const service = new RelayerService(
+        serviceConfig,
+        nullifiers,
+        rootSeenRepo,
+        null,
+        chain,
+      );
       service.initializeClient();
 
       const pubkey = client.hotWallet.publicKey.toBase58();

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { PublicKey } from "@solana/web3.js";
 import type { MixerRelayerConfig } from "#common/config";
+import type { SolanaChain } from "#common/solana/chain";
 import { rateLimitHook, type RateLimiterFactory } from "#common/ratelimit";
 import {
   createRelayerController,
@@ -40,6 +41,7 @@ import { AnonymitySetTooThinError } from "#modules/mixer/mixer.service";
 export async function registerRelayerRoutes(
   app: FastifyInstance,
   cfg: MixerRelayerConfig,
+  chain: SolanaChain,
   rootSeenRepo: RootSeenRepository | null = null,
   mixerRegistry: MixerRegistry | null = null,
   rateLimiterFactory: RateLimiterFactory,
@@ -52,7 +54,7 @@ export async function registerRelayerRoutes(
     );
   }
 
-  const registry = await RelayerRegistry.create(cfg, rootSeenRepo);
+  const registry = await RelayerRegistry.create(cfg, chain, rootSeenRepo);
 
   app.log.info(
     {

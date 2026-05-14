@@ -1,10 +1,11 @@
 import { AnchorProvider, Program, Wallet } from "@coral-xyz/anchor";
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import { readFileSync, statSync } from "node:fs";
 import { join, dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bigintToBytes32 } from "#modules/mixer/mixer.service";
 import { loadConfig } from "#common/config";
+import type { SolanaChain } from "#common/solana/chain";
 import type { RelayerConfig } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -28,13 +29,10 @@ export interface MixerClient {
  * Loads the IDL, sets up a connection + provider using the relayer's
  * hot wallet as the signer, and returns a typed Program instance.
  */
-export function createMixerClient(config: RelayerConfig): MixerClient {
-  const connection = new Connection(config.rpcUrl, "confirmed");
+export function createMixerClient(config: RelayerConfig, chain: SolanaChain): MixerClient {
   const hotWallet = loadHotWallet(config.hotWalletSecret);
   const wallet = new Wallet(hotWallet);
-  const provider = new AnchorProvider(connection, wallet, {
-    commitment: "confirmed",
-  });
+  const provider = chain.anchorProvider(wallet);
 
   const idl = JSON.parse(readFileSync(IDL_PATH, "utf-8"));
   const programId = new PublicKey(config.mixerProgramId);
@@ -95,7 +93,7 @@ export function deriveCommitmentPDA(
  * Check if a nullifier PDA account exists on-chain (= nullifier is spent).
  */
 export async function isNullifierSpentOnChain(
-  connection: Connection,
+  chain: SolanaChain,
   programId: PublicKey,
   mixerPoolKey: PublicKey,
   nullifierHash: string,
@@ -103,7 +101,7 @@ export async function isNullifierSpentOnChain(
   const nullifierBuf = bigintToBytes32(BigInt(nullifierHash), "nullifierHash");
   const [pda] = deriveNullifierPDA(programId, mixerPoolKey, nullifierBuf);
 
-  const account = await connection.getAccountInfo(pda);
+  const account = await chain.getAccountInfo(pda);
   return account !== null;
 }
 

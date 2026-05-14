@@ -65,9 +65,14 @@ export class LiveSolanaChain implements SolanaChain {
     return this.read(() => this.conn.getSlot(commitment ?? this.commitment))
   }
 
-  async getSignatureStatus(signature: string): Promise<SignatureStatus | null> {
+  async getSignatureStatus(
+    signature: string,
+    opts?: { searchTransactionHistory?: boolean },
+  ): Promise<SignatureStatus | null> {
     return this.read(async () => {
-      const res = await this.conn.getSignatureStatus(signature, { searchTransactionHistory: false })
+      const res = await this.conn.getSignatureStatus(signature, {
+        searchTransactionHistory: opts?.searchTransactionHistory ?? false,
+      })
       return res.value
     })
   }

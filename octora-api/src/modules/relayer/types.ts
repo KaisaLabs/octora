@@ -95,8 +95,6 @@ export interface RelayerConfig {
    * Bare paths are no longer accepted (see solana-client.ts loadHotWallet).
    */
   hotWalletSecret: string;
-  /** RPC endpoint for submitting transactions. */
-  rpcUrl: string;
   /** Mixer program ID on-chain. */
   mixerProgramId: string;
   /** Denomination in lamports for the fixed-amount pool. */

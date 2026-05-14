@@ -1,5 +1,6 @@
-import { Connection, type Commitment } from "@solana/web3.js";
+import { type Commitment } from "@solana/web3.js";
 
+import type { SolanaChain } from "#common/solana/chain";
 import type { PositionRow, PositionRepository } from "#modules/positions/position.repository";
 import type { ActivityService } from "#modules/positions/activity.service";
 import type { PositionIndexer } from "#modules/indexer";
@@ -57,8 +58,8 @@ export interface RecoveryWorkerDeps {
   positionRepo: PositionRepository;
   activityService: ActivityService;
   positionIndexer: PositionIndexer;
-  /** RPC for signature-status checks. Same provider the relayer uses. */
-  connection: Connection;
+  /** Chain for signature-status checks. Same cluster the relayer uses. */
+  chain: SolanaChain;
   /** Reconciliation store — used to read signatures stamped by the executor path. */
   reconciliationRepo: ReconciliationRepository;
   /** Optional Sentry-shaped capture hook. No-op when null. */
@@ -258,11 +259,9 @@ async function checkVenueSignature(
     return ageMs > EXECUTING_STUCK_AFTER_MS ? "failed" : "pending";
   }
 
-  const status = await deps.connection.getSignatureStatus(reconciliation.signature, {
+  const value = await deps.chain.getSignatureStatus(reconciliation.signature, {
     searchTransactionHistory: true,
   });
-
-  const value = status?.value ?? null;
   if (!value) {
     // RPC returns null when the sig has dropped from cache and the
     // search-history flag couldn't find it. Treat as failed once we're
