@@ -34,6 +34,7 @@ import { registerAuthRoutes } from '#modules/auth/auth.routes'
 import { createPrismaAuthRepository } from '#modules/auth/auth.repository'
 import { registerAdminRoutes } from '#modules/admin/admin.routes'
 import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
+import { configureDlmmChain } from '#modules/dlmm/dlmm.chain'
 import { createActivityService } from '#modules/positions/activity.service'
 import { createIndexerService } from '#modules/indexer'
 import { createRecoveryWorker } from '#workers/recovery.worker'
@@ -136,17 +137,34 @@ export async function createApp(options: CreateAppOptions = {}) {
   // - `relayer` (mixer.relayer.rpcUrl): only present when the mixer
   //   relayer is enabled. Wraps the relayer's submission endpoint
   //   (may be a privileged RPC distinct from `cluster`).
+  // - `dlmm.{mainnet,devnet,localnet}`: chain-direct DLMM reads
+  //   (Meteora SDK via RPC). Per-network split is load-bearing —
+  //   reading a mainnet pool against a localnet RPC returns garbage
+  //   discriminators (see footgun comment in config/index.ts).
   const chains: {
     executor: SolanaChain
     cluster: SolanaChain
     relayer: SolanaChain | null
+    dlmm: { mainnet: SolanaChain; devnet: SolanaChain; localnet: SolanaChain }
   } = {
     executor: new LiveSolanaChain({ rpcUrl: config.executorRpcUrl }),
     cluster: new LiveSolanaChain({ rpcUrl: config.solanaRpcUrl }),
     relayer: config.mixerRelayer
       ? new LiveSolanaChain({ rpcUrl: config.mixerRelayer.rpcUrl })
       : null,
+    dlmm: {
+      mainnet: new LiveSolanaChain({ rpcUrl: config.dlmmRpcUrls.mainnet }),
+      devnet: new LiveSolanaChain({ rpcUrl: config.dlmmRpcUrls.devnet }),
+      localnet: new LiveSolanaChain({ rpcUrl: config.dlmmRpcUrls.localnet }),
+    },
   }
+
+  // Bind the per-network DLMM chain bag to `dlmm.chain.ts`'s
+  // module-level registry. Done once at boot so the chain-direct
+  // reads (getPoolBins, getSwapQuote, getPoolFromChain) can dispatch
+  // by network without each call site having to pass the right chain
+  // through.
+  configureDlmmChain({ chains: chains.dlmm })
 
   // Build the rate-limiter factory once at boot. Memory by default;
   // Redis when `RATE_LIMITER=redis` so multiple replicas share one
@@ -196,7 +214,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   // Pick the MeteoraExecutor implementation up-front so we can hand the
   // same instance to every position route. Default = mock; switching to
   // the on-chain executor is a single env flag (OCTORA_USE_ONCHAIN_EXECUTOR).
-  const meteoraExecutor = createMeteoraExecutorFromConfig(config)
+  const meteoraExecutor = createMeteoraExecutorFromConfig(config, chains.executor)
 
   // Real liveness/readiness probe. Returns 503 on any failed dependency so
   // load balancers and uptime monitors actually catch DB / RPC / relayer /

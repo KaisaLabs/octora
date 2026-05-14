@@ -1,7 +1,7 @@
-import { Connection, PublicKey } from '@solana/web3.js'
+import { PublicKey } from '@solana/web3.js'
 import DLMM from '@meteora-ag/dlmm'
 import { BN } from '@coral-xyz/anchor'
-import { loadConfig } from '#common/config'
+import type { SolanaChain } from '#common/solana/chain'
 import { MeteoraApiError } from './dlmm.api.shared.js'
 import type {
   Network,
@@ -10,16 +10,39 @@ import type {
   LiquidityBin,
 } from './dlmm.types.js'
 
-const RPC_URL: Record<Network, string> = loadConfig().dlmmRpcUrls
+/**
+ * Per-network DLMM chain bag. Wired once at boot via
+ * `configureDlmmChain` so the chain-direct reads (`getPoolBins`,
+ * `getPoolFromChain`, `getSwapQuote`) don't have to take a chain
+ * argument on every call — that would force the controller into a
+ * factory rewrite that this step is trying to keep out of scope.
+ *
+ * The previous version of this file read `loadConfig().dlmmRpcUrls`
+ * directly and built `new Connection(...)` per network; the per-network
+ * split is load-bearing (see the footgun comment in
+ * src/common/config/index.ts about cross-cluster RPC leakage).
+ */
+let chainByNetwork: Partial<Record<Network, SolanaChain>> = {}
 
-const connections: Partial<Record<Network, Connection>> = {}
-function getConnection(network: Network): Connection {
-  let conn = connections[network]
-  if (!conn) {
-    conn = new Connection(RPC_URL[network], 'confirmed')
-    connections[network] = conn
+export function configureDlmmChain(opts: {
+  chains: Record<Network, SolanaChain>
+}): void {
+  chainByNetwork = { ...opts.chains }
+  // Drop any cached DLMM instances so they don't keep pointing at the
+  // previous Connection underneath the chain — matters for tests that
+  // reconfigure between cases.
+  dlmmCache.clear()
+}
+
+function getChain(network: Network): SolanaChain {
+  const chain = chainByNetwork[network]
+  if (!chain) {
+    throw new Error(
+      `dlmm.chain: no SolanaChain configured for network "${network}". ` +
+        'Call configureDlmmChain({ chains }) at boot (app.ts wires this).',
+    )
   }
-  return conn
+  return chain
 }
 
 interface CachedDlmm {
@@ -36,8 +59,8 @@ async function getDlmmInstance(address: string, network: Network) {
   if (cached && Date.now() - cached.createdAt < DLMM_CACHE_TTL_MS) {
     return cached.instance
   }
-  const conn = getConnection(network)
-  const instance = await (DLMM as any).create(conn, new PublicKey(address))
+  const chain = getChain(network)
+  const instance = await (DLMM as any).create(chain.rawConnection(), new PublicKey(address))
   dlmmCache.set(key, { instance, createdAt: Date.now() })
   return instance
 }
@@ -146,14 +169,14 @@ export async function getPoolFromChain(address: string, network: Network): Promi
   } catch {
     return null
   }
-  const conn = getConnection(network)
+  const chain = getChain(network)
   const lbPair: any = dlmm.lbPair
   const tokenXMint: PublicKey = dlmm.tokenX?.publicKey ?? new PublicKey(lbPair.tokenXMint)
   const tokenYMint: PublicKey = dlmm.tokenY?.publicKey ?? new PublicKey(lbPair.tokenYMint)
 
   const [xDecimals, yDecimals] = await Promise.all([
-    fetchMintDecimals(conn, tokenXMint, dlmm.tokenX?.mint?.decimals ?? dlmm.tokenX?.decimals),
-    fetchMintDecimals(conn, tokenYMint, dlmm.tokenY?.mint?.decimals ?? dlmm.tokenY?.decimals),
+    fetchMintDecimals(chain, tokenXMint, dlmm.tokenX?.mint?.decimals ?? dlmm.tokenX?.decimals),
+    fetchMintDecimals(chain, tokenYMint, dlmm.tokenY?.mint?.decimals ?? dlmm.tokenY?.decimals),
   ])
 
   const xSymbol = labelForMint(tokenXMint)
@@ -207,12 +230,12 @@ export async function getPoolFromChain(address: string, network: Network): Promi
 }
 
 async function fetchMintDecimals(
-  conn: Connection,
+  chain: SolanaChain,
   mint: PublicKey,
   fallback: number | undefined,
 ): Promise<number> {
   if (typeof fallback === 'number') return fallback
-  const acct = await conn.getAccountInfo(mint, 'confirmed')
+  const acct = await chain.getAccountInfo(mint, 'confirmed')
   if (!acct || acct.data.length < 45) return 0
   // SPL mint layout: decimals at byte 44 (after mintAuthority option + supply).
   return acct.data[44]
