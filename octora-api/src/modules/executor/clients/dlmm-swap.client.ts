@@ -15,11 +15,12 @@
 import { AnchorProvider, BN, Program, Wallet } from "@coral-xyz/anchor";
 import {
   ComputeBudgetProgram,
-  Connection,
+  type Connection,
   Keypair,
   PublicKey,
   Transaction,
 } from "@solana/web3.js";
+import type { SolanaChain } from "#common/solana/chain";
 import type { AccountMeta } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import DLMM, {
@@ -48,7 +49,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const IDL_PATH = join(__dirname, "..", "..", "execution", "clients", "idl", "octora_executor.json");
 
 export interface DlmmSwapClientOptions {
-  rpcUrl: string;
+  chain: SolanaChain;
   /** Hot wallet that pays fees and pre-signs the tx. */
   relayerKeypair: Keypair;
   /** Deployed octora-executor program id. */
@@ -80,6 +81,7 @@ export interface BuildSwapTxResult {
 }
 
 export class DlmmSwapClient {
+  private chain: SolanaChain;
   private connection: Connection;
   private relayer: Keypair;
   private programId: PublicKey;
@@ -87,13 +89,12 @@ export class DlmmSwapClient {
   private provider: AnchorProvider;
 
   constructor(opts: DlmmSwapClientOptions) {
-    this.connection = new Connection(opts.rpcUrl, "confirmed");
+    this.chain = opts.chain;
+    this.connection = this.chain.rawConnection();
     this.relayer = opts.relayerKeypair;
     this.programId = opts.executorProgramId;
     const wallet = new Wallet(this.relayer);
-    this.provider = new AnchorProvider(this.connection, wallet, {
-      commitment: "confirmed",
-    });
+    this.provider = this.chain.anchorProvider(wallet);
     const idl = JSON.parse(readFileSync(IDL_PATH, "utf-8"));
     this.program = new Program(idl, this.provider);
   }
@@ -129,8 +130,8 @@ export class DlmmSwapClient {
     // refuse extensions we can't safely route. TransferHook is rejected
     // until Phase C lands the ExtraAccountMetaList expansion.
     const [tokenXInfo, tokenYInfo] = await Promise.all([
-      resolveMintProgram(this.connection, tokenX),
-      resolveMintProgram(this.connection, tokenY),
+      resolveMintProgram(this.chain, tokenX),
+      resolveMintProgram(this.chain, tokenY),
     ]);
     for (const [label, info] of [
       ["tokenX", tokenXInfo],
@@ -215,7 +216,7 @@ export class DlmmSwapClient {
       .instruction();
 
     const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
-    const { blockhash } = await this.connection.getLatestBlockhash("confirmed");
+    const { blockhash } = await this.chain.getLatestBlockhash("confirmed");
     const tx = new Transaction({
       recentBlockhash: blockhash,
       feePayer: this.relayer.publicKey,

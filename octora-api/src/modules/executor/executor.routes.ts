@@ -3,13 +3,17 @@ import { Keypair, PublicKey } from "@solana/web3.js";
 import { readFileSync } from "node:fs";
 import { ExecutorService } from "./executor.service.js";
 import { createExecutorController } from "./executor.controller.js";
-import { loadConfig } from "#common/config";
-
-const RPC_URL = loadConfig().solanaRpcUrl;
+import type { SolanaChain } from "#common/solana/chain";
 
 export interface ExecutorRoutesOptions {
   executorProgramId: string;
   relayerKeypairPath: string;
+  /**
+   * Chain used for executor program reads + Anchor provider. Wraps
+   * `solanaRpcUrl` (= the cluster the executor program is deployed
+   * to). Wired from `chains.cluster` in app.ts.
+   */
+  chain: SolanaChain;
 }
 
 /**
@@ -29,7 +33,7 @@ export async function registerExecutorRoutes(
 
   const relayerKeypair = loadKeypair(opts.relayerKeypairPath);
   const executor = new ExecutorService({
-    rpcUrl: RPC_URL,
+    chain: opts.chain,
     relayerKeypair,
     executorProgramId: new PublicKey(opts.executorProgramId),
   });

@@ -12,8 +12,8 @@
  * each builder, and exposes a flat API for the controller.
  */
 
-import { AnchorProvider, BN, Program, Wallet } from "@coral-xyz/anchor";
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { BN, Program, Wallet } from "@coral-xyz/anchor";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import DLMM, { binIdToBinArrayIndex, deriveBinArray } from "@meteora-ag/dlmm";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { getPrices } from "#modules/prices";
 import { resolveDlmmProgram } from "#common/solana/dlmm-program";
 import { loadConfig } from "#common/config";
+import type { SolanaChain } from "#common/solana/chain";
 
 import { DlmmSwapClient, type BuildSwapTxArgs, type BuildSwapTxResult } from "./clients/dlmm-swap.client.js";
 import { DlmmPoolBuilder } from "./builders/dlmm-pool.builder.js";
@@ -37,7 +38,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const IDL_PATH = join(__dirname, "..", "execution", "clients", "idl", "octora_executor.json");
 
 export interface ExecutorServiceConfig {
-  rpcUrl: string;
+  chain: SolanaChain;
   /** Hot wallet that pays fees, owns the mint authority for test mints, and acts as DLMM funder. */
   relayerKeypair: Keypair;
   /** Deployed octora-executor program id. */
@@ -45,7 +46,7 @@ export interface ExecutorServiceConfig {
 }
 
 export class ExecutorService {
-  private connection: Connection;
+  private chain: SolanaChain;
   private relayer: Keypair;
   private programId: PublicKey;
   private program: Program;
@@ -56,22 +57,23 @@ export class ExecutorService {
   private liquidityPlanner: LiquidityPlanner;
 
   constructor(config: ExecutorServiceConfig) {
-    this.connection = new Connection(config.rpcUrl, "confirmed");
+    this.chain = config.chain;
     this.relayer = config.relayerKeypair;
     this.programId = config.executorProgramId;
 
     const wallet = new Wallet(this.relayer);
-    const provider = new AnchorProvider(this.connection, wallet, { commitment: "confirmed" });
+    const provider = this.chain.anchorProvider(wallet);
     const idl = JSON.parse(readFileSync(IDL_PATH, "utf-8"));
     this.program = new Program(idl, provider);
     this.swapClient = new DlmmSwapClient({
-      rpcUrl: config.rpcUrl,
+      chain: this.chain,
       relayerKeypair: config.relayerKeypair,
       executorProgramId: config.executorProgramId,
     });
 
     const ctx: BuilderContext = {
-      connection: this.connection,
+      chain: this.chain,
+      connection: this.chain.rawConnection(),
       relayer: this.relayer,
       executorProgramId: this.programId,
       program: this.program,
@@ -155,7 +157,7 @@ export class ExecutorService {
       binStep: number;
     }> = {};
     try {
-      const dlmmInstance = await DLMM.create(this.connection, lbPair);
+      const dlmmInstance = await DLMM.create(this.chain.rawConnection(), lbPair);
       const lbPosition = await dlmmInstance.getPosition(dlmm.position as PublicKey);
       const lowerBinId = lbPosition.positionData.lowerBinId;
       const upperBinId = lbPosition.positionData.upperBinId;
@@ -207,7 +209,7 @@ export class ExecutorService {
     lbPair: PublicKey;
     positionPubkey: PublicKey;
   }): Promise<PositionStateView | null> {
-    const dlmm = await DLMM.create(this.connection, args.lbPair);
+    const dlmm = await DLMM.create(this.chain.rawConnection(), args.lbPair);
     let lbPosition;
     try {
       lbPosition = await dlmm.getPosition(args.positionPubkey);
@@ -221,8 +223,8 @@ export class ExecutorService {
     const tokenYMint = dlmm.lbPair.tokenYMint;
 
     const [decimalsX, decimalsY] = await Promise.all([
-      getMintDecimals(this.connection, tokenXMint),
-      getMintDecimals(this.connection, tokenYMint),
+      getMintDecimals(this.chain, tokenXMint),
+      getMintDecimals(this.chain, tokenYMint),
     ]);
 
     const prices = await getPrices([tokenXMint.toBase58(), tokenYMint.toBase58()]).catch(
@@ -307,8 +309,8 @@ export interface PositionStateView {
   priceYUsd: number;
 }
 
-async function getMintDecimals(connection: Connection, mint: PublicKey): Promise<number> {
-  const info = await connection.getAccountInfo(mint);
+export async function getMintDecimals(chain: SolanaChain, mint: PublicKey): Promise<number> {
+  const info = await chain.getAccountInfo(mint);
   if (!info || info.data.length < 45) return 0;
   // SPL Token mint layout: decimals at byte offset 44 (u8).
   return info.data[44];

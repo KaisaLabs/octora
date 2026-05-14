@@ -1,4 +1,4 @@
-import { Connection, PublicKey } from '@solana/web3.js'
+import { PublicKey } from '@solana/web3.js'
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -7,6 +7,7 @@ import {
   ExtensionType,
 } from '@solana/spl-token'
 import { TtlCache } from '#common/http/ttl-cache'
+import type { SolanaChain } from '#common/solana/chain'
 
 export type MintProgramInfo =
   | {
@@ -51,14 +52,14 @@ const cache = new TtlCache<string, MintProgramInfo>({ ttlMs: 5 * 60_000, max: 20
  * ix (see `expandTransferHookAccounts`).
  */
 export async function resolveMintProgram(
-  conn: Connection,
+  chain: SolanaChain,
   mint: PublicKey,
 ): Promise<MintProgramInfo> {
   const key = mint.toBase58()
   const cached = cache.get(key)
   if (cached) return cached
 
-  const info = await conn.getAccountInfo(mint, 'confirmed')
+  const info = await chain.getAccountInfo(mint, 'confirmed')
   if (!info) {
     throw new Error(`Mint account not found: ${key}`)
   }

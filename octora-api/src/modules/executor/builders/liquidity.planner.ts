@@ -126,10 +126,10 @@ export class LiquidityPlanner {
     positionAuthority: string;
     alreadyInitialized: boolean;
   }> {
-    const { connection, relayer, program, executorProgramId, dlmm } = this.ctx;
+    const { chain, relayer, program, executorProgramId, dlmm } = this.ctx;
     const [positionAuthority] = derivePoolAuthorityPda(executorProgramId, args.stealth, args.lbPair);
 
-    const existing = await connection.getAccountInfo(positionAuthority);
+    const existing = await chain.getAccountInfo(positionAuthority);
     if (existing) {
       const positionPubkey = await this.fetchPositionFromAuthority(positionAuthority);
       // PoolAuthority can outlive its DLMM Position: if a prior session
@@ -140,7 +140,7 @@ export class LiquidityPlanner {
       // The browser would proceed to add_liquidity against a stale pubkey
       // and the on-chain ix would fail with a confusing AccountNotFound.
       // Fail loudly here so the caller knows to wipe stealth state instead.
-      const positionAcct = await connection.getAccountInfo(positionPubkey);
+      const positionAcct = await chain.getAccountInfo(positionPubkey);
       if (!positionAcct) {
         throw new Error(
           `PoolAuthority ${positionAuthority.toBase58()} references a stale DLMM ` +
@@ -192,7 +192,7 @@ export class LiquidityPlanner {
       .instruction();
 
     const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 });
-    const { blockhash } = await connection.getLatestBlockhash("confirmed");
+    const { blockhash } = await chain.getLatestBlockhash("confirmed");
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: relayer.publicKey });
     tx.add(computeIx, fundStealthIx, ix);
 
@@ -236,7 +236,7 @@ export class LiquidityPlanner {
     /** Distribution shape selected in the deposit form. */
     shape: DistributionShape;
   }): Promise<{ transaction: string }> {
-    const { connection, relayer, program, executorProgramId, dlmm } = this.ctx;
+    const { chain, relayer, program, executorProgramId, dlmm } = this.ctx;
     const tokenX = new PublicKey(args.config.tokenX);
     const tokenY = new PublicKey(args.config.tokenY);
     const lbPair = new PublicKey(args.config.lbPair);
@@ -257,8 +257,8 @@ export class LiquidityPlanner {
     // can't safely handle (NonTransferable etc.) and TransferHook until
     // Phase C lands.
     const [tokenXInfo, tokenYInfo] = await Promise.all([
-      resolveMintProgram(connection, tokenX),
-      resolveMintProgram(connection, tokenY),
+      resolveMintProgram(chain, tokenX),
+      resolveMintProgram(chain, tokenY),
     ]);
     assertSupported("tokenX", tokenXInfo);
     assertSupported("tokenY", tokenYInfo);
@@ -373,7 +373,7 @@ export class LiquidityPlanner {
       .instruction();
 
     const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
-    const { blockhash } = await connection.getLatestBlockhash("confirmed");
+    const { blockhash } = await chain.getLatestBlockhash("confirmed");
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: relayer.publicKey });
     tx.add(
       computeIx,
@@ -402,7 +402,7 @@ export class LiquidityPlanner {
     stealth: PublicKey;
     config: TestPairConfig;
   }): Promise<{ transaction: string; exitRecipient: string }> {
-    const { connection, relayer, program, executorProgramId, dlmm } = this.ctx;
+    const { chain, relayer, program, executorProgramId, dlmm } = this.ctx;
     const tokenX = new PublicKey(args.config.tokenX);
     const tokenY = new PublicKey(args.config.tokenY);
     const lbPair = new PublicKey(args.config.lbPair);
@@ -417,8 +417,8 @@ export class LiquidityPlanner {
     const [reserveY] = deriveReserve(tokenY, lbPair, dlmm.programId);
 
     const [tokenXInfo, tokenYInfo] = await Promise.all([
-      resolveMintProgram(connection, tokenX),
-      resolveMintProgram(connection, tokenY),
+      resolveMintProgram(chain, tokenX),
+      resolveMintProgram(chain, tokenY),
     ]);
     assertSupported("tokenX", tokenXInfo);
     assertSupported("tokenY", tokenYInfo);
@@ -479,7 +479,7 @@ export class LiquidityPlanner {
       .instruction();
 
     const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 });
-    const { blockhash } = await connection.getLatestBlockhash("confirmed");
+    const { blockhash } = await chain.getLatestBlockhash("confirmed");
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: relayer.publicKey });
     tx.add(computeIx, createExitAtaXIx, createExitAtaYIx, ix);
     tx.partialSign(relayer);
@@ -502,7 +502,7 @@ export class LiquidityPlanner {
     stealth: PublicKey;
     config: TestPairConfig;
   }): Promise<{ transaction: string; exitRecipient: string }> {
-    const { connection, relayer, program, executorProgramId, dlmm } = this.ctx;
+    const { chain, relayer, program, executorProgramId, dlmm } = this.ctx;
     const tokenX = new PublicKey(args.config.tokenX);
     const tokenY = new PublicKey(args.config.tokenY);
     const lbPair = new PublicKey(args.config.lbPair);
@@ -514,8 +514,8 @@ export class LiquidityPlanner {
     const exitRecipient = acct.exitRecipient as PublicKey;
 
     const [tokenXInfo, tokenYInfo] = await Promise.all([
-      resolveMintProgram(connection, tokenX),
-      resolveMintProgram(connection, tokenY),
+      resolveMintProgram(chain, tokenX),
+      resolveMintProgram(chain, tokenY),
     ]);
     assertSupported("tokenX", tokenXInfo);
     assertSupported("tokenY", tokenYInfo);
@@ -583,7 +583,7 @@ export class LiquidityPlanner {
       .instruction();
 
     const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
-    const { blockhash } = await connection.getLatestBlockhash("confirmed");
+    const { blockhash } = await chain.getLatestBlockhash("confirmed");
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: relayer.publicKey });
     tx.add(computeIx, createExitAtaXIx, createExitAtaYIx, ix);
     tx.partialSign(relayer);

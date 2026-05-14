@@ -126,16 +126,16 @@ export async function createApp(options: CreateAppOptions = {}) {
   // `SolanaChain` seam — building them centrally here is the point:
   // `new Connection(...)` should disappear from every caller.
   //
-  // - `executor` (executorRpcUrl): used by /metrics + /health for
-  //   on-chain probes on the executor's submitter cluster.
-  // - `mixerReads` (solanaRpcUrl): used by /mixer/pools to read pool
-  //   PDAs on the cluster the deployed mixer program lives on. Keep
-  //   distinct from `executor` even though they often resolve to the
-  //   same URL in dev; the config has a footgun note (line ~96) that
-  //   explains why cross-cluster RPC leakage is a real failure mode.
-  const chains: { executor: SolanaChain; mixerReads: SolanaChain } = {
+  // - `executor` (executorRpcUrl): used by /metrics + /health on-chain
+  //   probes on the executor's submitter endpoint.
+  // - `cluster` (solanaRpcUrl): default cluster RPC. Reads on the
+  //   deployed mixer + executor programs go through this. Keep
+  //   distinct from `executor` even when they resolve to the same URL
+  //   in dev; the config has a footgun note (line ~96) about
+  //   cross-cluster RPC leakage.
+  const chains: { executor: SolanaChain; cluster: SolanaChain } = {
     executor: new LiveSolanaChain({ rpcUrl: config.executorRpcUrl }),
-    mixerReads: new LiveSolanaChain({ rpcUrl: config.solanaRpcUrl }),
+    cluster: new LiveSolanaChain({ rpcUrl: config.solanaRpcUrl }),
   }
 
   // Build the rate-limiter factory once at boot. Memory by default;
@@ -279,11 +279,12 @@ export async function createApp(options: CreateAppOptions = {}) {
     mixerDenominations: config.mixerDenominations,
     registry: mixerRegistry,
     rateLimiterFactory,
-    chain: chains.mixerReads,
+    chain: chains.cluster,
   })
   app.register(registerExecutorRoutes, {
     executorProgramId: config.executorProgramId,
     relayerKeypairPath: config.executorRelayerKeypairPath,
+    chain: chains.cluster,
   })
   app.register(registerDepositsRoutes, { mixerDenominations: config.mixerDenominations })
 
