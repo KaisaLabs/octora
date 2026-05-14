@@ -67,11 +67,19 @@ else
   done
 fi
 
-step "Running on-chain init (airdrop + executor Config + mixer pools)"
-RPC_URL="$RPC" \
-ANCHOR_PROVIDER_URL="$RPC" \
-ANCHOR_WALLET="$PAYER" \
-OCTORA_MIXER_ADMIN_KEYPAIR="${OCTORA_MIXER_ADMIN_KEYPAIR:-$PAYER}" \
-  npx tsx "$ROOT/scripts/init-surfpool.ts"
+step "Running on-chain init (airdrop + executor Config + mixer pools + relayer funding)"
+# Forward env to the TS script. Only forward relayer-keypair vars when they
+# are actually set in the shell — exporting them as empty strings would
+# defeat the .env loader inside the script (Node's process.loadEnvFile does
+# not overwrite already-set vars), so an unset shell var must stay unset
+# instead of being downgraded to "".
+export RPC_URL="$RPC"
+export ANCHOR_PROVIDER_URL="$RPC"
+export ANCHOR_WALLET="$PAYER"
+export OCTORA_MIXER_ADMIN_KEYPAIR="${OCTORA_MIXER_ADMIN_KEYPAIR:-$PAYER}"
+export RELAYER_FUND_SOL="${RELAYER_FUND_SOL:-5}"
+[[ -n "${OCTORA_EXECUTOR_RELAYER_KEYPAIR:-}" ]] && export OCTORA_EXECUTOR_RELAYER_KEYPAIR
+[[ -n "${OCTORA_MIXER_RELAYER_HOT_WALLET:-}" ]] && export OCTORA_MIXER_RELAYER_HOT_WALLET
+npx tsx "$ROOT/scripts/init-surfpool.ts"
 
 step "Done"

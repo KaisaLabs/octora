@@ -5,8 +5,9 @@
  *   1. requestAirdrop      — fund admin so subsequent txs can pay rent
  *   2. init_config         — executor singleton Config PDA (init-executor-config.ts)
  *   3. mixer_pool init     — one pool per denomination          (init-mixer-pools.ts)
+ *   4. fund relayer wallets — top up executor + mixer relayer hot wallets
  *
- * All three steps are idempotent: re-running on a partially-initialised
+ * All steps are idempotent: re-running on a partially-initialised
  * cluster (e.g. after a failed earlier run, or after adding a new denom)
  * skips the pieces that are already in place and only touches what's missing.
  *
@@ -28,7 +29,10 @@
  *   OCTORA_MIXER_PROGRAM_ID=BHxT3jyWJ1mRLyMjywQoiSXBqo7YpTiGWC1oVr2Ppnzx
  *   MIXER_DENOMINATIONS=100000000,1000000000,10000000000   (lamports, csv)
  *   AIRDROP_SOL=10
- *   SKIP_AIRDROP=0    SKIP_EXECUTOR=0    SKIP_MIXER=0
+ *   RELAYER_FUND_SOL=5                      target balance per relayer
+ *   OCTORA_EXECUTOR_RELAYER_KEYPAIR=...     path / file:<path> / inline JSON array
+ *   OCTORA_MIXER_RELAYER_HOT_WALLET=...     path / file:<path> / inline JSON array
+ *   SKIP_AIRDROP=0    SKIP_EXECUTOR=0    SKIP_MIXER=0    SKIP_RELAYERS=0
  *
  * Run:
  *   pnpm tsx scripts/init-surfpool.ts
@@ -47,6 +51,24 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { OctoraMixer } from "../target/types/octora_mixer";
+
+// Node's process.loadEnvFile will not overwrite vars that are already set in
+// process.env — including ones inherited as empty strings from a parent
+// shell (e.g. a wrapper that forwarded `VAR="${VAR:-}"`). Strip those
+// empties first so .env can populate them.
+for (const k of [
+  "OCTORA_EXECUTOR_RELAYER_KEYPAIR",
+  "OCTORA_MIXER_RELAYER_HOT_WALLET",
+  "OCTORA_MIXER_ADMIN_KEYPAIR",
+  "MIXER_DENOMINATIONS",
+  "RPC_URL",
+  "RELAYER_FUND_SOL",
+  "AIRDROP_SOL",
+]) {
+  if (process.env[k] !== undefined && process.env[k]!.trim() === "") {
+    delete process.env[k];
+  }
+}
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 if (existsSync(ENV_FILE)) {
@@ -100,6 +122,90 @@ function loadKeypair(path: string): Keypair {
     : path;
   const raw = readFileSync(resolve(expanded), "utf8");
   return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(raw)));
+}
+
+// Accepts the same forms the API config accepts:
+//   - inline JSON array: "[12,34,...]"
+//   - file:<absolute-or-relative-path>
+//   - bare path (with optional leading ~)
+function loadKeypairFromSecret(secret: string): Keypair {
+  const trimmed = secret.trim();
+  if (trimmed.startsWith("[")) {
+    return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(trimmed)));
+  }
+  const path = trimmed.startsWith("file:") ? trimmed.slice("file:".length) : trimmed;
+  return loadKeypair(path);
+}
+
+async function fundWallet(
+  connection: Connection,
+  label: string,
+  target: PublicKey,
+  targetSol: number,
+): Promise<void> {
+  const targetLamports = targetSol * LAMPORTS_PER_SOL;
+  const current = await connection.getBalance(target);
+  if (current >= targetLamports) {
+    console.log(
+      `  ${label}: ${target.toBase58()} balance ${(current / LAMPORTS_PER_SOL).toFixed(3)} SOL (>= ${targetSol}) — skip`,
+    );
+    return;
+  }
+  const need = targetLamports - current;
+  console.log(
+    `  ${label}: ${target.toBase58()} balance ${(current / LAMPORTS_PER_SOL).toFixed(3)} SOL — airdropping ${(need / LAMPORTS_PER_SOL).toFixed(3)} SOL`,
+  );
+  const sig = await connection.requestAirdrop(target, need);
+  await connection.confirmTransaction(sig, "confirmed");
+  const after = await connection.getBalance(target);
+  console.log(`  ${label}: balance ${(after / LAMPORTS_PER_SOL).toFixed(3)} SOL`);
+}
+
+async function fundRelayers(
+  connection: Connection,
+  adminPubkey: PublicKey,
+  targetSol: number,
+): Promise<void> {
+  const sources: { label: string; envVar: string; secret: string | undefined }[] = [
+    {
+      label: "executor relayer",
+      envVar: "OCTORA_EXECUTOR_RELAYER_KEYPAIR",
+      secret: process.env.OCTORA_EXECUTOR_RELAYER_KEYPAIR,
+    },
+    {
+      label: "mixer relayer ",
+      envVar: "OCTORA_MIXER_RELAYER_HOT_WALLET",
+      secret: process.env.OCTORA_MIXER_RELAYER_HOT_WALLET,
+    },
+  ];
+
+  const seen = new Set<string>([adminPubkey.toBase58()]);
+  let funded = 0;
+  for (const s of sources) {
+    if (!s.secret || s.secret.trim() === "") {
+      console.log(`  ${s.label}: ${s.envVar} unset — skip`);
+      continue;
+    }
+    let kp: Keypair;
+    try {
+      kp = loadKeypairFromSecret(s.secret);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`  ${s.label}: failed to load (${s.envVar}): ${msg} — skip`);
+      continue;
+    }
+    const b58 = kp.publicKey.toBase58();
+    if (seen.has(b58)) {
+      console.log(`  ${s.label}: ${b58} same as a prior wallet — skip`);
+      continue;
+    }
+    seen.add(b58);
+    await fundWallet(connection, s.label, kp.publicKey, targetSol);
+    funded++;
+  }
+  if (funded === 0) {
+    console.log("  no relayer wallets funded");
+  }
 }
 
 function anchorDiscriminator(ix: string): Buffer {
@@ -334,24 +440,32 @@ async function main() {
   console.log();
 
   if (envFlag("SKIP_AIRDROP")) {
-    console.log("[1/3] airdrop — skipped (SKIP_AIRDROP=1)");
+    console.log("[1/4] airdrop — skipped (SKIP_AIRDROP=1)");
   } else {
-    console.log(`[1/3] airdrop  (target ${airdropSol} SOL)`);
+    console.log(`[1/4] airdrop  (target ${airdropSol} SOL)`);
     await ensureAirdrop(connection, admin.publicKey, airdropSol);
   }
 
   if (envFlag("SKIP_EXECUTOR")) {
-    console.log("\n[2/3] executor init_config — skipped (SKIP_EXECUTOR=1)");
+    console.log("\n[2/4] executor init_config — skipped (SKIP_EXECUTOR=1)");
   } else {
-    console.log("\n[2/3] executor init_config");
+    console.log("\n[2/4] executor init_config");
     await initExecutorConfig(connection, admin, executorProgramId);
   }
 
   if (envFlag("SKIP_MIXER")) {
-    console.log("\n[3/3] mixer pool init — skipped (SKIP_MIXER=1)");
+    console.log("\n[3/4] mixer pool init — skipped (SKIP_MIXER=1)");
   } else {
-    console.log("\n[3/3] mixer pool init");
+    console.log("\n[3/4] mixer pool init");
     await initMixerPools(connection, admin, mixerProgramId, denominations);
+  }
+
+  const relayerFundSol = Number(process.env.RELAYER_FUND_SOL ?? "5");
+  if (envFlag("SKIP_RELAYERS")) {
+    console.log("\n[4/4] fund relayers — skipped (SKIP_RELAYERS=1)");
+  } else {
+    console.log(`\n[4/4] fund relayers (target ${relayerFundSol} SOL each)`);
+    await fundRelayers(connection, admin.publicKey, relayerFundSol);
   }
 
   console.log("\nDone.");
