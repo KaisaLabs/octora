@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 import { AnonymitySetTooThinError, MIN_ANONYMITY_SET, MixerService } from "./mixer.service.js";
 import {
   InvalidDenominationError,
@@ -7,9 +7,10 @@ import {
   parseDenomination,
   type MixerServiceResolver,
 } from "./mixer.registry.js";
+import type { SolanaChain } from "#common/solana/chain";
 
 export interface MixerPoolsDependencies {
-  rpcUrl: string;
+  chain: SolanaChain;
   programId: PublicKey;
   denominations: bigint[];
 }
@@ -82,11 +83,10 @@ export function createMixerController(
       if (poolsCache && now - poolsCache.ts < POOLS_TTL_MS) {
         return reply.send(poolsCache.payload);
       }
-      const connection = new Connection(pools.rpcUrl, "confirmed");
       const results = await Promise.all(
         pools.denominations.map(async (denomination) => {
           const status = await MixerService.readPoolStatus(
-            connection,
+            pools.chain,
             pools.programId,
             denomination,
           );

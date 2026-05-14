@@ -123,13 +123,19 @@ export async function createApp(options: CreateAppOptions = {}) {
   }
 
   // SolanaChain bag. Each entry wraps one RPC endpoint behind the
-  // `SolanaChain` seam. Today only the executor-side chain is wired in
-  // (used by /metrics); subsequent migrations move executor, relayer,
-  // and the per-network DLMM reads onto their own entries. Building
-  // them centrally here is the point — `new Connection(...)` should
-  // disappear from every caller.
-  const chains: { executor: SolanaChain } = {
+  // `SolanaChain` seam — building them centrally here is the point:
+  // `new Connection(...)` should disappear from every caller.
+  //
+  // - `executor` (executorRpcUrl): used by /metrics + /health for
+  //   on-chain probes on the executor's submitter cluster.
+  // - `mixerReads` (solanaRpcUrl): used by /mixer/pools to read pool
+  //   PDAs on the cluster the deployed mixer program lives on. Keep
+  //   distinct from `executor` even though they often resolve to the
+  //   same URL in dev; the config has a footgun note (line ~96) that
+  //   explains why cross-cluster RPC leakage is a real failure mode.
+  const chains: { executor: SolanaChain; mixerReads: SolanaChain } = {
     executor: new LiveSolanaChain({ rpcUrl: config.executorRpcUrl }),
+    mixerReads: new LiveSolanaChain({ rpcUrl: config.solanaRpcUrl }),
   }
 
   // Build the rate-limiter factory once at boot. Memory by default;
@@ -273,6 +279,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     mixerDenominations: config.mixerDenominations,
     registry: mixerRegistry,
     rateLimiterFactory,
+    chain: chains.mixerReads,
   })
   app.register(registerExecutorRoutes, {
     executorProgramId: config.executorProgramId,

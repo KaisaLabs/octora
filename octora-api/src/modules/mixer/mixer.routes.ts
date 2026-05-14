@@ -4,6 +4,7 @@ import { createMixerController } from "./mixer.controller.js";
 import { MixerRegistry } from "./mixer.registry.js";
 import { rateLimitHook, type RateLimiterFactory } from "#common/ratelimit";
 import { loadConfig } from "#common/config";
+import type { SolanaChain } from "#common/solana/chain";
 
 // MAINNET_BLOCKER: default falls back to devnet. On mainnet deploy,
 // SOLANA_RPC_URL must be set explicitly to a real provider (Helius,
@@ -41,6 +42,15 @@ export interface MixerRoutesOptions {
    */
   registry?: MixerRegistry;
   rateLimiterFactory: RateLimiterFactory;
+  /**
+   * Chain used for read-only mixer pool snapshots in `/mixer/pools`.
+   * Wired from `chains.mixerReads` in app.ts. Wraps `solanaRpcUrl`,
+   * which is the cluster the deployed mixer program lives on — note
+   * this is *not* `executorRpcUrl` (which can point at a localnet for
+   * dev). Keep this routing distinction; see the footgun comment in
+   * src/common/config/index.ts about cross-cluster RPC leakage.
+   */
+  chain: SolanaChain;
 }
 
 export async function registerMixerRoutes(
@@ -90,7 +100,7 @@ export async function registerMixerRoutes(
   const controller = createMixerController(
     (denomination) => registry.get(denomination ?? registry.defaultDenomination),
     {
-      rpcUrl: RPC_URL,
+      chain: opts.chain,
       programId,
       denominations: [...registry.denominations],
     },

@@ -13,6 +13,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ApiError, ConflictError, ValidationError } from "#common/errors";
 import { loadConfig } from "#common/config";
+import type { SolanaChain } from "#common/solana/chain";
 
 import {
   MIXER_POOL_IS_PAUSED_OFFSET,
@@ -507,7 +508,7 @@ export class MixerService {
    * "≥ N deposits", which is the conservative direction for an anonymity gate.
    */
   static async readPoolStatus(
-    connection: Connection,
+    chain: SolanaChain,
     programId: PublicKey,
     denomination: bigint,
   ): Promise<{
@@ -527,10 +528,10 @@ export class MixerService {
       programId,
     );
 
-    const accountInfo = await connection.getAccountInfo(poolPDA);
+    const accountInfo = await chain.getAccountInfo(poolPDA);
     if (!accountInfo) return null;
 
-    const balance = await connection.getBalance(poolPDA);
+    const balance = await chain.getBalance(poolPDA);
     const data = accountInfo.data;
     const nextLeafIndex = data.readUInt32LE(MIXER_POOL_NEXT_LEAF_INDEX_OFFSET);
     const isPaused = data[MIXER_POOL_IS_PAUSED_OFFSET] === 1;
