@@ -220,3 +220,15 @@ export async function getProtocolMetricsMainnet(): Promise<ProtocolMetrics> {
     totalPools: body.total_pools,
   }
 }
+
+import type { DlmmIndexProvider } from './dlmm.provider.js'
+
+export const mainnetDlmmIndex: DlmmIndexProvider = {
+  listPools: listPoolsMainnet,
+  getPool: getPoolMainnet,
+  listGroups: listGroupsMainnet,
+  getGroup: getGroupMainnet,
+  getOhlcv: getOhlcvMainnet,
+  getVolumeHistory: getVolumeHistoryMainnet,
+  getProtocolMetrics: getProtocolMetricsMainnet,
+}

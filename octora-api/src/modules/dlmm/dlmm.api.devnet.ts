@@ -338,3 +338,19 @@ export async function getProtocolMetricsDevnet(): Promise<ProtocolMetrics> {
     totalPools: 0,
   }
 }
+
+import type { DlmmIndexProvider } from './dlmm.provider.js'
+
+export const devnetDlmmIndex: DlmmIndexProvider = {
+  listPools: listPoolsDevnet,
+  getPool: getPoolDevnet,
+  listGroups: listGroupsDevnet,
+  getGroup: getGroupDevnet,
+  // Devnet indexer doesn't publish OHLCV — return an empty series to
+  // satisfy the interface without forcing callers into feature-detection.
+  async getOhlcv() {
+    return []
+  },
+  getVolumeHistory: getVolumeHistoryDevnet,
+  getProtocolMetrics: getProtocolMetricsDevnet,
+}

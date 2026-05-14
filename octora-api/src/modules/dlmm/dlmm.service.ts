@@ -1,30 +1,22 @@
 /**
- * DLMM resolution policy — picks the right source per (network, endpoint).
+ * DLMM resolution policy — picks the right `DlmmIndexProvider` per
+ * network, then dispatches the call.
  *
- * Mainnet uses `dlmm.api.mainnet.ts`. Devnet uses `dlmm.api.devnet.ts`.
- * Localnet has no indexer; `getPool` falls through to the chain-direct
- * path in `dlmm.chain.ts`. Bin reads (`getPoolBins`) and swap quotes
- * (`getSwapQuote`) are always chain-direct — they're cheap enough on
- * RPC and don't need the indexer's denormalised shape.
+ * Mainnet uses the hosted Meteora indexer, devnet uses its devnet
+ * sibling, localnet has no indexer and falls through to empty data
+ * (with one exception: `getPool` reaches into chain-direct
+ * `getPoolFromChain` so the browser can navigate to a pool by address
+ * on a local validator).
+ *
+ * Bin reads (`getPoolBins`) and swap quotes (`getSwapQuote`) live in
+ * `dlmm.chain.ts` — a *different* operation set (Meteora SDK via RPC),
+ * not parallel impls of the index methods. Re-exported here so callers
+ * keep importing from one place.
  */
+import { mainnetDlmmIndex } from './dlmm.api.mainnet.js'
+import { devnetDlmmIndex } from './dlmm.api.devnet.js'
+import { localnetDlmmIndex, type DlmmIndexProvider } from './dlmm.provider.js'
 import { MeteoraApiError } from './dlmm.api.shared.js'
-import {
-  listPoolsMainnet,
-  getPoolMainnet,
-  listGroupsMainnet,
-  getGroupMainnet,
-  getOhlcvMainnet,
-  getVolumeHistoryMainnet,
-  getProtocolMetricsMainnet,
-} from './dlmm.api.mainnet.js'
-import {
-  listPoolsDevnet,
-  getPoolDevnet,
-  listGroupsDevnet,
-  getGroupDevnet,
-  getVolumeHistoryDevnet,
-  getProtocolMetricsDevnet,
-} from './dlmm.api.devnet.js'
 import { getPoolBins, getPoolFromChain, getSwapQuote } from './dlmm.chain.js'
 import type {
   Network,
@@ -38,37 +30,41 @@ import type {
 } from './dlmm.types.js'
 
 export type { Network } from './dlmm.types.js'
+export type { DlmmIndexProvider } from './dlmm.provider.js'
 export { MeteoraApiError, getPoolBins, getSwapQuote }
 export type { SwapQuoteResult } from './dlmm.chain.js'
+
+/**
+ * Return the index provider for a given network. Exported so callers
+ * that need to make several calls back-to-back can resolve once instead
+ * of paying the dispatch on every method.
+ */
+export function getDlmmIndex(network: Network): DlmmIndexProvider {
+  if (network === 'localnet') return localnetDlmmIndex
+  if (network === 'devnet') return devnetDlmmIndex
+  return mainnetDlmmIndex
+}
 
 export async function listPools(
   network: Network,
   opts: { search?: string; page?: number; pageSize?: number; sortBy?: string; filterBy?: string } = {},
 ): Promise<PaginatedResponse<PoolSummary>> {
-  if (network === 'localnet') {
-    // No hosted indexer for localnet — the browser navigates by pool address
-    // directly. Return empty so the listing UI renders without errors.
-    return { data: [], total: 0, pages: 0, currentPage: 1, pageSize: opts.pageSize ?? 50 }
-  }
-  if (network === 'devnet') return listPoolsDevnet(opts)
-  return listPoolsMainnet(opts)
+  return getDlmmIndex(network).listPools(opts)
 }
 
 export async function getPool(address: string, network: Network): Promise<PoolDetail | null> {
+  // Localnet has no hosted index but still needs a pool detail when the
+  // browser navigates by address — fall through to the chain-direct
+  // reader so the page renders against the local validator.
   if (network === 'localnet') return getPoolFromChain(address, network)
-  if (network === 'devnet') return getPoolDevnet(address)
-  return getPoolMainnet(address)
+  return getDlmmIndex(network).getPool(address)
 }
 
 export async function listGroups(
   network: Network,
   opts: { page?: number; pageSize?: number } = {},
 ): Promise<PaginatedResponse<PoolGroup>> {
-  if (network === 'localnet') {
-    return { data: [], total: 0, pages: 0, currentPage: 1, pageSize: opts.pageSize ?? 50 }
-  }
-  if (network === 'devnet') return listGroupsDevnet(opts)
-  return listGroupsMainnet(opts)
+  return getDlmmIndex(network).listGroups(opts)
 }
 
 export async function getGroup(
@@ -76,20 +72,7 @@ export async function getGroup(
   network: Network,
   opts: { page?: number; pageSize?: number } = {},
 ): Promise<PoolGroup> {
-  if (network === 'localnet') {
-    return {
-      name: mintPair,
-      pair: mintPair,
-      mintX: '',
-      mintY: '',
-      pools: [],
-      total: 0,
-      pages: 0,
-      currentPage: 1,
-    }
-  }
-  if (network === 'devnet') return getGroupDevnet(mintPair, opts)
-  return getGroupMainnet(mintPair, opts)
+  return getDlmmIndex(network).getGroup(mintPair, opts)
 }
 
 export async function getOhlcv(
@@ -97,10 +80,7 @@ export async function getOhlcv(
   network: Network,
   opts: { startTime?: number; endTime?: number; resolution?: string } = {},
 ): Promise<OhlcvCandle[]> {
-  // Devnet/localnet have no OHLCV endpoint. Return empty rather than 404
-  // so the UI can render its empty/fallback state.
-  if (network === 'devnet' || network === 'localnet') return []
-  return getOhlcvMainnet(address, opts)
+  return getDlmmIndex(network).getOhlcv(address, opts)
 }
 
 export async function getVolumeHistory(
@@ -108,15 +88,9 @@ export async function getVolumeHistory(
   network: Network,
   opts: { startTime?: number; endTime?: number; resolution?: string } = {},
 ): Promise<VolumeHistoryBucket[]> {
-  if (network === 'localnet') return []
-  if (network === 'devnet') return getVolumeHistoryDevnet(address, opts)
-  return getVolumeHistoryMainnet(address, opts)
+  return getDlmmIndex(network).getVolumeHistory(address, opts)
 }
 
 export async function getProtocolMetrics(network: Network): Promise<ProtocolMetrics> {
-  if (network === 'localnet') {
-    return { totalTvl: 0, volume24h: 0, fee24h: 0, totalVolume: 0, totalFees: 0, totalPools: 0 }
-  }
-  if (network === 'devnet') return getProtocolMetricsDevnet()
-  return getProtocolMetricsMainnet()
+  return getDlmmIndex(network).getProtocolMetrics()
 }
