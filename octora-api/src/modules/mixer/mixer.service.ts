@@ -11,8 +11,7 @@ import { Program, Wallet } from "@coral-xyz/anchor";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ApiError, ConflictError } from "#common/errors";
-import { loadConfig } from "#common/config";
+import { ConflictError } from "#common/errors";
 import type { SolanaChain } from "#common/solana/chain";
 import { bigintToBytes32, SeedRangeError } from "#common/solana/field-encoding";
 
@@ -33,49 +32,12 @@ const MIXER_POOL_SEED = Buffer.from("mixer_pool");
 const COMMITMENT_SEED = Buffer.from("commitment");
 const NULLIFIER_SEED = Buffer.from("nullifier");
 
-/**
- * Minimum anonymity set required to permit a withdrawal build.
- *
- * The anonymity set is `next_leaf_index - withdrawals_so_far` — the count
- * of *unspent* deposits in the pool, which is the upper bound on how many
- * leaves a chain observer could plausibly link to any given withdrawal.
- *
- * Twenty is the smallest set where naive intersection attacks (overlap the
- * deposits set with a candidate stealth wallet's known link set) stop being
- * trivially decisive — Tornado Cash's empirical analysis showed sharp
- * de-anonymization risk under ~10 and acceptable mixing above ~20.
- *
- * Override via `MIXER_MIN_ANONYMITY_SET` env for staging/dev where you
- * need to test the withdraw path before twenty real deposits have landed.
- */
-export const MIN_ANONYMITY_SET = loadConfig().mixer.minAnonymitySet;
-
-/**
- * Thrown when a withdrawal build is rejected because the target pool has
- * fewer unspent deposits than `MIN_ANONYMITY_SET`. Surfaced by mixer +
- * relayer controllers as HTTP 400 `ANONYMITY_SET_TOO_THIN`.
- */
-export class AnonymitySetTooThinError extends ApiError {
-  // Keep HTTP 400 + literal `code` to match the legacy frontend contract.
-  // The bespoke handlers in mixer.controller.ts / relayer.routes.ts still
-  // map this to a route-specific body shape; the new global handler will
-  // emit `{ error: { code, message, details } }` if those handlers are
-  // ever removed.
-  declare readonly code: "ANONYMITY_SET_TOO_THIN";
-  constructor(
-    readonly current: number,
-    readonly required: number,
-    readonly denomination: bigint,
-  ) {
-    super(
-      400,
-      "ANONYMITY_SET_TOO_THIN",
-      `Anonymity set too thin: pool has ${current} unspent deposit(s), required ${required}.`,
-      { details: { current, required, denomination: denomination.toString() } },
-    );
-    this.name = "AnonymitySetTooThinError";
-  }
-}
+// MIN_ANONYMITY_SET + AnonymitySetTooThinError moved to ./anonymity.ts;
+// re-exported here for back-compat with the existing import paths from
+// mixer.controller.ts and relayer.routes.ts. New callers should import
+// directly from `./anonymity`.
+import { AnonymitySetTooThinError, MIN_ANONYMITY_SET } from "./anonymity.js";
+export { AnonymitySetTooThinError, MIN_ANONYMITY_SET };
 
 export interface MixerServiceConfig {
   chain: SolanaChain;

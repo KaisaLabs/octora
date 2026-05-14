@@ -16,7 +16,7 @@ import {
   UnknownDenominationError,
   parseDenomination,
 } from "#modules/mixer/mixer.registry";
-import { AnonymitySetTooThinError } from "#modules/mixer/mixer.service";
+import { AnonymitySetTooThinError } from "#modules/mixer/anonymity";
 
 /**
  * Mixer relayer routes.

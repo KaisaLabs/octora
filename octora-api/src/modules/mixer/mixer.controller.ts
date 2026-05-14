@@ -1,6 +1,7 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { PublicKey } from "@solana/web3.js";
-import { AnonymitySetTooThinError, MIN_ANONYMITY_SET, MixerService } from "./mixer.service.js";
+import { AnonymitySetTooThinError, MIN_ANONYMITY_SET } from "./anonymity.js";
+import { MixerService } from "./mixer.service.js";
 import {
   InvalidDenominationError,
   UnknownDenominationError,
