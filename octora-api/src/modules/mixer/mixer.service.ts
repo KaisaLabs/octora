@@ -2,9 +2,6 @@ import {
   type Connection,
   Keypair,
   PublicKey,
-  SystemProgram,
-  Transaction,
-  ComputeBudgetProgram,
   type ConfirmedSignatureInfo,
 } from "@solana/web3.js";
 import { Program, Wallet } from "@coral-xyz/anchor";
@@ -14,6 +11,20 @@ import { fileURLToPath } from "node:url";
 import { ConflictError } from "#common/errors";
 import type { SolanaChain } from "#common/solana/chain";
 import { bigintToBytes32, SeedRangeError } from "#common/solana/field-encoding";
+
+import {
+  buildDepositTransaction,
+  type BuildDepositArgs,
+} from "./builders/deposit.builder.js";
+import {
+  buildWithdrawTransaction,
+  type BuildWithdrawArgs,
+} from "./builders/withdraw.builder.js";
+import {
+  buildInitializeTransaction,
+  type BuildInitializeArgs,
+} from "./builders/initialize.builder.js";
+import type { MixerTxContext } from "./builders/types.js";
 
 // Re-export so the existing import paths (`#modules/mixer/mixer.service`)
 // keep working. New callers should import directly from
@@ -29,8 +40,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const IDL_PATH = join(__dirname, "..", "relayer", "idl", "octora_mixer.json");
 
 const MIXER_POOL_SEED = Buffer.from("mixer_pool");
-const COMMITMENT_SEED = Buffer.from("commitment");
-const NULLIFIER_SEED = Buffer.from("nullifier");
 
 // MIN_ANONYMITY_SET + AnonymitySetTooThinError moved to ./anonymity.ts;
 // re-exported here for back-compat with the existing import paths from
@@ -51,11 +60,6 @@ export interface PublicDepositRecord {
   leafIndex: number;
   /** On-chain signature (or "pending" when only the build was requested). */
   txSignature: string;
-}
-
-interface BuildDepositArgs {
-  depositorPubkey: string;
-  commitment: bigint;
 }
 
 /**
@@ -98,6 +102,9 @@ export class MixerService {
   // makes recordWithdrawal() idempotent so a re-scan can't double-count.
   private knownNullifiers = new Set<string>();
 
+  /** Bundled context handed to each tx-builder; built once at construct. */
+  private txCtx: MixerTxContext;
+
   constructor(config: MixerServiceConfig) {
     this.chain = config.chain;
     this.connection = this.chain.rawConnection();
@@ -118,6 +125,14 @@ export class MixerService {
     const idl = JSON.parse(readFileSync(IDL_PATH, "utf-8"));
     idl.address = this.programId.toBase58();
     this.program = new Program(idl, provider);
+
+    this.txCtx = {
+      program: this.program,
+      programId: this.programId,
+      poolPDA: this.poolPDA,
+      denomination: this.denomination,
+      chain: this.chain,
+    };
   }
 
   /**
@@ -134,36 +149,7 @@ export class MixerService {
    */
   async buildDepositTransaction(args: BuildDepositArgs): Promise<{ transaction: string }> {
     await this.assertPoolInitialized();
-    const depositor = new PublicKey(args.depositorPubkey);
-    const commitmentBytes = this.bigintToBytes32(args.commitment);
-
-    const [commitmentPDA] = PublicKey.findProgramAddressSync(
-      [COMMITMENT_SEED, this.poolPDA.toBuffer(), commitmentBytes],
-      this.programId,
-    );
-
-    const ix = await this.program.methods
-      .deposit(Array.from(commitmentBytes))
-      .accounts({
-        depositor,
-        mixerPool: this.poolPDA,
-        commitmentAccount: commitmentPDA,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction();
-
-    const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
-
-    const { blockhash } = await this.chain.getLatestBlockhash("confirmed");
-    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: depositor });
-    tx.add(computeIx, ix);
-
-    const serialized = tx.serialize({
-      requireAllSignatures: false,
-      verifySignatures: false,
-    });
-
-    return { transaction: serialized.toString("base64") };
+    return buildDepositTransaction(this.txCtx, args);
   }
 
   /**
@@ -398,42 +384,13 @@ export class MixerService {
   ): Promise<{ transaction: string }> {
     await this.assertPoolInitialized();
     await this.assertAnonymitySetSatisfied();
-    const signer = new PublicKey(signerPubkey);
-    const recipient = new PublicKey(recipientPubkey);
-    const nullifierHashBuf = this.bigintToBytes32(BigInt(nullifierHash));
-
-    const proofBytes = Buffer.from(proofBytesBase64, "base64");
-    const publicInputsBytes = Buffer.from(publicInputsBytesBase64, "base64");
-
-    const [nullifierPDA] = PublicKey.findProgramAddressSync(
-      [NULLIFIER_SEED, this.poolPDA.toBuffer(), nullifierHashBuf],
-      this.programId,
-    );
-
-    const ix = await this.program.methods
-      .withdraw(Array.from(proofBytes), Array.from(publicInputsBytes))
-      .accounts({
-        signer,
-        mixerPool: this.poolPDA,
-        nullifierAccount: nullifierPDA,
-        recipient,
-        relayer: signer,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction();
-
-    const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
-
-    const { blockhash } = await this.chain.getLatestBlockhash("confirmed");
-    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: signer });
-    tx.add(computeIx, ix);
-
-    const serialized = tx.serialize({
-      requireAllSignatures: false,
-      verifySignatures: false,
+    return buildWithdrawTransaction(this.txCtx, {
+      signerPubkey,
+      recipientPubkey,
+      proofBytesBase64,
+      publicInputsBytesBase64,
+      nullifierHash,
     });
-
-    return { transaction: serialized.toString("base64") };
   }
 
   /** Get pool status from on-chain. */
@@ -535,34 +492,7 @@ export class MixerService {
   async buildInitializeTransaction(
     authorityPubkey: string,
   ): Promise<{ transaction: string; poolAddress: string }> {
-    const authority = new PublicKey(authorityPubkey);
-
-    const ix = await this.program.methods
-      .initialize(new (await import("@coral-xyz/anchor")).BN(this.denomination.toString()))
-      .accounts({
-        authority,
-        mixerPool: this.poolPDA,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction();
-
-    const { blockhash } = await this.chain.getLatestBlockhash("confirmed");
-    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: authority });
-    tx.add(ix);
-
-    const serialized = tx.serialize({
-      requireAllSignatures: false,
-      verifySignatures: false,
-    });
-
-    return {
-      transaction: serialized.toString("base64"),
-      poolAddress: this.poolPDA.toBase58(),
-    };
-  }
-
-  private bigintToBytes32(value: bigint): Buffer {
-    return bigintToBytes32(value, "commitment");
+    return buildInitializeTransaction(this.txCtx, { authorityPubkey });
   }
 
   /**
