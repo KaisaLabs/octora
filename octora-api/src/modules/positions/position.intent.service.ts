@@ -3,22 +3,20 @@
  * preflight, return a draft session waiting for signature. Also hosts the
  * read-side `getPosition` and the indexer-driven advance to `active`.
  */
-import { randomUUID } from "node:crypto";
-
 import type { ExecutionMode, ExecutionState, PositionAction } from "#domain";
 import type { PositionIndexer } from "#modules/indexer";
 import type { BetaCapsConfig } from "#common/config";
-import { PositionNotFoundError } from "#common/errors";
 
 import type { PositionRepository } from "./position.repository";
 import type { ActivityService } from "./activity.service";
 import { createRecoveryService } from "./recovery.service";
 import {
   BetaCapExceededError,
-  buildResponse,
   formatPoolLabel,
+  Position,
+  type PositionAggregateDeps,
   type PositionResponse,
-} from "./position.shared";
+} from "./position.aggregate";
 
 export interface CreateDraftPositionIntentInput {
   action: PositionAction;
@@ -41,37 +39,26 @@ export async function createDraftPositionIntent(
 
   await assertBetaCaps(positionRepo, betaCaps, input);
 
-  const positionId = randomUUID();
-  const intentId = randomUUID();
-  const sessionId = randomUUID();
+  const deps: PositionAggregateDeps = {
+    positionRepo,
+    activityService,
+    recoveryService: createRecoveryService(),
+  };
 
-  const position = await positionRepo.createPosition({
-    id: positionId,
-    intentId,
+  const position = await Position.create(deps, {
     walletAddress: input.walletAddress,
     action: input.action,
     mode: input.mode,
-    state: "draft",
     poolSlug: input.pool,
     amount: input.amount,
+    firstActivity: {
+      headline: "Intent received",
+      detail: `Queued a draft ${formatPoolLabel(input.pool)} position for signature review.`,
+      safeNextStep: "wait",
+    },
   });
 
-  const session = await positionRepo.createExecutionSession({
-    id: sessionId,
-    positionId,
-    state: "awaiting_signature",
-    failureStage: null,
-  });
-
-  const activity = await activityService.record(
-    position,
-    "awaiting_signature",
-    "Intent received",
-    `Queued a draft ${formatPoolLabel(input.pool)} position for signature review.`,
-    "wait",
-  );
-
-  return buildResponse(position, session, [activity]);
+  return position.toResponse();
 }
 
 export async function getPosition(
@@ -80,50 +67,35 @@ export async function getPosition(
   positionIndexer: PositionIndexer,
   positionId: string,
 ): Promise<PositionResponse> {
-  const position = await positionRepo.getPositionById(positionId);
-  if (!position) {
-    throw new PositionNotFoundError(positionId);
-  }
-
-  const session = await positionRepo.getLatestExecutionSession(positionId);
-  if (!session) {
-    throw new PositionNotFoundError(positionId);
-  }
-
-  let activities = await activityService.list(positionId);
   const recoveryService = createRecoveryService();
+  const deps: PositionAggregateDeps = { positionRepo, activityService, recoveryService };
 
-  if ((session.state as ExecutionState) === "indexing") {
+  const position = await Position.load(deps, positionId);
+
+  if (position.sessionState === "indexing") {
     const reconciliation = await positionIndexer.reconcile(positionId);
 
-    if (reconciliation.state === "active" && (position.state as ExecutionState) !== "active") {
-      const activePosition = await positionRepo.updatePositionState(positionId, "active");
-      const activeSession = await positionRepo.updateExecutionSession(positionId, "active");
-      await activityService.record(
-        activePosition,
-        "active",
-        "Position active",
-        "The final snapshot is available and the position is now live.",
-        "wait",
-      );
-
-      return buildResponse(activePosition, activeSession, await activityService.list(positionId), recoveryService);
+    if (reconciliation.state === "active" && position.state !== "active") {
+      await position.advance("active", {
+        headline: "Position active",
+        detail: "The final snapshot is available and the position is now live.",
+        safeNextStep: "wait",
+      });
+      return position.toResponse();
     }
 
+    const activities = await activityService.list(positionId);
     if (activities.at(-1)?.headline !== "Execution delayed") {
       const indexingRecovery = recoveryService.getIndexingRecovery();
-      await activityService.record(
-        position,
-        "indexing",
-        "Execution delayed",
-        indexingRecovery.message,
-        indexingRecovery.safeNextStep,
-      );
-      activities = await activityService.list(positionId);
+      await position.recordActivity("indexing", {
+        headline: "Execution delayed",
+        detail: indexingRecovery.message,
+        safeNextStep: indexingRecovery.safeNextStep,
+      });
     }
   }
 
-  return buildResponse(position, session, activities, recoveryService);
+  return position.toResponse();
 }
 
 /**

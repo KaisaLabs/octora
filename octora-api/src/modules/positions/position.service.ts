@@ -6,8 +6,9 @@
  *   - `position.execution.service`  — signed → indexing
  *   - `position.claim.service`      — active → completed (claim / withdraw)
  *
- * Shared helpers live in `position.shared` so the lifecycle files stay
- * concerned with one stage each.
+ * Shared aggregate (state transitions + failure recording + response
+ * shape) lives in `position.aggregate`; the lifecycle files use it
+ * directly so each stays focused on one stage.
  */
 import { MockPrivacyAdapter, type PrivacyAdapter } from "#modules/execution/adapters";
 import { createMockMeteoraExecutor, type MeteoraExecutor } from "#modules/execution/clients";
@@ -35,7 +36,11 @@ import {
   type ClaimPositionInput,
   type WithdrawClosePositionInput,
 } from "./position.claim.service";
-import { BetaCapExceededError, DEFAULT_BETA_CAPS, type PositionResponse } from "./position.shared";
+import {
+  BetaCapExceededError,
+  DEFAULT_BETA_CAPS,
+  type PositionResponse,
+} from "./position.aggregate";
 
 export { BetaCapExceededError, PositionNotFoundError, UnsupportedPositionActionError };
 export type { PositionResponse };
@@ -43,7 +48,7 @@ export type { CreateDraftPositionIntentInput, ExecuteSignedIntentInput, ClaimPos
 export type {
   PositionSessionState,
   PositionSnapshot,
-} from "./position.shared";
+} from "./position.aggregate";
 
 export interface PositionServiceDependencies {
   positionRepo: PositionRepository;

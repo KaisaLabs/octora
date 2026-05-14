@@ -3,22 +3,18 @@
  * an `active` position; claim leaves the position open and collects fees,
  * withdraw-close fully exits.
  */
-import type { ExecutionMode, ExecutionState } from "#domain";
+import type { ExecutionMode } from "#domain";
 import type { PrivacyAdapter } from "#modules/execution/adapters";
 import type { MeteoraExecutor } from "#modules/execution/clients";
 
 import type { PositionRepository } from "./position.repository";
 import type { ActivityService } from "./activity.service";
 import { createRecoveryService } from "./recovery.service";
-
 import {
-  assertTransition,
-  buildResponse,
-  getActivePosition,
-  getLatestActiveSession,
-  recordFailure,
+  Position,
+  type PositionAggregateDeps,
   type PositionResponse,
-} from "./position.shared";
+} from "./position.aggregate";
 
 export interface ClaimPositionInput {
   positionId: string;
@@ -36,34 +32,29 @@ export async function claimPosition(
   input: ClaimPositionInput,
 ): Promise<PositionResponse> {
   const recoveryService = createRecoveryService();
-  const position = await getActivePosition(positionRepo, input.positionId);
-  const session = await getLatestActiveSession(positionRepo, input.positionId);
+  const deps: PositionAggregateDeps = { positionRepo, activityService, recoveryService };
+  const position = await Position.loadActive(deps, input.positionId);
 
   const executionMode = recoveryService.resolveExecutionMode({
     selectedMode: position.mode as ExecutionMode,
     surfacedFallback: false,
   }).mode;
 
-  assertTransition(session.state as ExecutionState, "claiming");
-  const claimingPosition = await positionRepo.updatePositionState(position.id, "claiming");
-  const claimingSession = await positionRepo.updateExecutionSession(input.positionId, "claiming");
-  await activityService.record(
-    claimingPosition,
-    "claiming",
-    "Claiming fees",
-    "Octora is claiming the available fees and keeping the position flow private.",
-    "wait",
-  );
+  await position.advance("claiming", {
+    headline: "Claiming fees",
+    detail: "Octora is claiming the available fees and keeping the position flow private.",
+    safeNextStep: "wait",
+  });
 
   let exitReceipt;
   try {
     exitReceipt = await privacyAdapter.prepareExit({
       positionId: position.id,
-      intentId: position.intentId,
+      intentId: position.row.intentId,
       mode: executionMode,
     });
   } catch (error) {
-    return recordFailure(positionRepo, activityService, recoveryService, position, "venue-submission", error);
+    return position.recordFailure("venue-submission", error);
   }
 
   // MAINNET_BLOCKER: this lifecycle path goes through `meteoraExecutor` from
@@ -81,32 +72,21 @@ export async function claimPosition(
       positionId: position.id,
     });
   } catch (error) {
-    return recordFailure(positionRepo, activityService, recoveryService, position, "venue-confirmation", error);
+    return position.recordFailure("venue-confirmation", error);
   }
 
-  assertTransition(claimingSession.state as ExecutionState, "indexing");
-  const indexingPosition = await positionRepo.updatePositionState(position.id, "indexing");
-  const indexingSession = await positionRepo.updateExecutionSession(input.positionId, "indexing");
-  await activityService.record(
-    indexingPosition,
-    "indexing",
-    "Reconciling claim",
-    `Meteora returned ${venueReceipt.signature}; Octora is reconciling the claim before finishing the flow.`,
-    "wait",
-  );
+  await position.advance("indexing", {
+    headline: "Reconciling claim",
+    detail: `Meteora returned ${venueReceipt.signature}; Octora is reconciling the claim before finishing the flow.`,
+    safeNextStep: "wait",
+  });
+  await position.advance("completed", {
+    headline: "Claim completed",
+    detail: "Fees have been claimed and the position is settled.",
+    safeNextStep: "wait",
+  });
 
-  assertTransition(indexingSession.state as ExecutionState, "completed");
-  const completedPosition = await positionRepo.updatePositionState(position.id, "completed");
-  const completedSession = await positionRepo.updateExecutionSession(input.positionId, "completed");
-  await activityService.record(
-    completedPosition,
-    "completed",
-    "Claim completed",
-    "Fees have been claimed and the position is settled.",
-    "wait",
-  );
-
-  return buildResponse(completedPosition, completedSession, await activityService.list(input.positionId), recoveryService);
+  return position.toResponse();
 }
 
 export async function withdrawClosePosition(
@@ -117,34 +97,29 @@ export async function withdrawClosePosition(
   input: WithdrawClosePositionInput,
 ): Promise<PositionResponse> {
   const recoveryService = createRecoveryService();
-  const position = await getActivePosition(positionRepo, input.positionId);
-  const session = await getLatestActiveSession(positionRepo, input.positionId);
+  const deps: PositionAggregateDeps = { positionRepo, activityService, recoveryService };
+  const position = await Position.loadActive(deps, input.positionId);
 
   const executionMode = recoveryService.resolveExecutionMode({
     selectedMode: position.mode as ExecutionMode,
     surfacedFallback: false,
   }).mode;
 
-  assertTransition(session.state as ExecutionState, "withdrawing");
-  const withdrawingPosition = await positionRepo.updatePositionState(position.id, "withdrawing");
-  const withdrawingSession = await positionRepo.updateExecutionSession(input.positionId, "withdrawing");
-  await activityService.record(
-    withdrawingPosition,
-    "withdrawing",
-    "Withdrawing liquidity",
-    "Octora is removing the position through the private execution boundary.",
-    "wait",
-  );
+  await position.advance("withdrawing", {
+    headline: "Withdrawing liquidity",
+    detail: "Octora is removing the position through the private execution boundary.",
+    safeNextStep: "wait",
+  });
 
   let exitReceipt;
   try {
     exitReceipt = await privacyAdapter.prepareExit({
       positionId: position.id,
-      intentId: position.intentId,
+      intentId: position.row.intentId,
       mode: executionMode,
     });
   } catch (error) {
-    return recordFailure(positionRepo, activityService, recoveryService, position, "venue-submission", error);
+    return position.recordFailure("venue-submission", error);
   }
 
   let venueReceipt;
@@ -154,41 +129,24 @@ export async function withdrawClosePosition(
       positionId: position.id,
     });
   } catch (error) {
-    return recordFailure(positionRepo, activityService, recoveryService, position, "venue-confirmation", error);
+    return position.recordFailure("venue-confirmation", error);
   }
 
-  assertTransition(withdrawingSession.state as ExecutionState, "closing");
-  const closingPosition = await positionRepo.updatePositionState(position.id, "closing");
-  const closingSession = await positionRepo.updateExecutionSession(input.positionId, "closing");
-  await activityService.record(
-    closingPosition,
-    "closing",
-    "Closing position",
-    `Meteora returned ${venueReceipt.signature}; Octora is finalizing the close and reconciling balances.`,
-    "wait",
-  );
+  await position.advance("closing", {
+    headline: "Closing position",
+    detail: `Meteora returned ${venueReceipt.signature}; Octora is finalizing the close and reconciling balances.`,
+    safeNextStep: "wait",
+  });
+  await position.advance("indexing", {
+    headline: "Reconciling exit",
+    detail: "Octora is checking the final position state before marking the exit complete.",
+    safeNextStep: "wait",
+  });
+  await position.advance("completed", {
+    headline: "Withdraw-close completed",
+    detail: "Your position has been withdrawn and closed.",
+    safeNextStep: "wait",
+  });
 
-  assertTransition(closingSession.state as ExecutionState, "indexing");
-  const indexingPosition = await positionRepo.updatePositionState(position.id, "indexing");
-  const indexingSession = await positionRepo.updateExecutionSession(input.positionId, "indexing");
-  await activityService.record(
-    indexingPosition,
-    "indexing",
-    "Reconciling exit",
-    "Octora is checking the final position state before marking the exit complete.",
-    "wait",
-  );
-
-  assertTransition(indexingSession.state as ExecutionState, "completed");
-  const completedPosition = await positionRepo.updatePositionState(position.id, "completed");
-  const completedSession = await positionRepo.updateExecutionSession(input.positionId, "completed");
-  await activityService.record(
-    completedPosition,
-    "completed",
-    "Withdraw-close completed",
-    "Your position has been withdrawn and closed.",
-    "wait",
-  );
-
-  return buildResponse(completedPosition, completedSession, await activityService.list(input.positionId), recoveryService);
+  return position.toResponse();
 }
