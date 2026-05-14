@@ -40,6 +40,8 @@ function pool(opts: {
     baseFee: 0,
     createdAt: 0,
     network: "mainnet",
+    currentPrice: 0,
+    priceChange24h: 0,
   };
 }
 

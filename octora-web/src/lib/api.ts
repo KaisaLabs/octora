@@ -28,6 +28,10 @@ export interface PoolSummary {
   baseFee: number
   createdAt: number
   network: 'mainnet' | 'devnet' | 'localnet'
+  /** Pool price (tokenY-per-tokenX) from Meteora's `current_price`. Same
+   *  source the detail page reads, so discovery + detail stay in sync. */
+  currentPrice?: number
+  priceChange24h?: number
 }
 
 export interface PoolDetail extends PoolSummary {
@@ -87,7 +91,7 @@ export function mapPoolSummary(summary: PoolSummary): Pool {
     binRange: summary.binStep ? `±${summary.binStep} bins` : "Dynamic",
     priceRange: "Live pricing",
     activeBinId: 0,
-    activePrice: 0,
+    activePrice: summary.currentPrice ?? 0,
     allocation: { tokenA: 50, tokenB: 50 },
     tags: summary.binStep <= 10 ? ["Tight bands", "Active"] : ["Wide coverage", "Passive"],
   };

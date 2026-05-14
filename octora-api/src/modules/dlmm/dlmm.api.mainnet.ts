@@ -70,6 +70,8 @@ function mapPool(pool: MeteoraPoolMainnet): PoolSummary {
     baseFee: pool.pool_config.base_fee_pct,
     createdAt: pool.created_at ?? 0,
     network: 'mainnet',
+    currentPrice: pool.current_price ?? 0,
+    priceChange24h: 0,
   }
 }
 

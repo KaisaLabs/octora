@@ -110,6 +110,8 @@ function mapPool(p: MeteoraPairDevnet): PoolSummary {
     baseFee: baseFeePct,
     createdAt: 0,
     network: 'devnet',
+    currentPrice: p.current_price ?? 0,
+    priceChange24h: 0,
   }
 }
 

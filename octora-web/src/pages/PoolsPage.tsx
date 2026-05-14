@@ -346,6 +346,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
 
   return (
     <div className="space-y-5">
+      <PoolsHeaderStats pools={pools} />
       <section className="panel-shell rounded-2xl p-4 sm:p-6">
         {/* Header row: tabs (left), timeframe + search + filter (right) */}
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -411,7 +412,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
                 </th>
                 <th className="px-4 py-3 text-right font-normal">
                   <span className="inline-flex items-center justify-end gap-1.5">
-                    <span>Live Price (24h)</span>
+                    <span>Pool Price</span>
                     <LiveDot active={pricesQuery.isFetching} />
                   </span>
                 </th>
@@ -468,6 +469,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
                         tokenAMint={p.tokenAMint}
                         tokenBMint={p.tokenBMint}
                         prices={prices}
+                        activePrice={p.activePrice}
                       />
                     </td>
                     <td className="px-4 py-4 text-right align-middle font-mono tabular-nums text-foreground">
@@ -509,7 +511,7 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
               </div>
               <div className="mt-3 rounded-lg border border-border/60 bg-secondary/30 px-3 py-2">
                 <p className="mb-1 inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                  <span>Live price · 24h</span>
+                  <span>Pool price</span>
                   <LiveDot active={pricesQuery.isFetching} />
                 </p>
                 <PoolPairPrice
@@ -573,6 +575,56 @@ export function PoolsPage({ pools, loading, error }: PoolsPageProps) {
       </section>
     </div>
   );
+}
+
+function PoolsHeaderStats({ pools }: { pools: Pool[] }) {
+  // Aggregate from the unfiltered pool list so the headline numbers reflect
+  // the full DLMM universe Octora indexes, not just whatever the user
+  // narrowed the table to. 24h volume / fees are the buckets Meteora's own
+  // discovery page surfaces; we mirror that to keep the comparison honest.
+  const stats = useMemo(() => {
+    let tvl = 0;
+    let volume = 0;
+    let fees = 0;
+    for (const p of pools) {
+      tvl += parseUsd(p.tvl);
+      volume += p.volumeByTf?.["24h"] ?? 0;
+      fees += p.feesByTf?.["24h"] ?? 0;
+    }
+    return { tvl, volume, fees };
+  }, [pools]);
+
+  return (
+    <section className="grid gap-3 sm:grid-cols-3">
+      <HeaderStat label="Total Value Locked" value={fmtUsdBig(stats.tvl)} />
+      <HeaderStat label="24H Swap Volume" value={fmtUsdBig(stats.volume)} />
+      <HeaderStat label="24H Fees Generated" value={fmtUsdBig(stats.fees)} />
+    </section>
+  );
+}
+
+function HeaderStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="panel-shell rounded-2xl p-4 sm:p-5">
+      <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground sm:text-xs">
+        {label}
+      </p>
+      <p className="mt-1.5 font-mono text-2xl font-semibold tabular-nums text-foreground sm:text-3xl">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+/** Big-number USD formatter for header stats — same scale as fmtUsd but
+ *  keeps one decimal for B/M/K so a $1.8B figure doesn't read as $2B. */
+function fmtUsdBig(n: number): string {
+  if (!Number.isFinite(n) || n === 0) return "$0";
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B`;
+  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `$${(n / 1_000).toFixed(2)}K`;
+  return `$${n.toFixed(2)}`;
 }
 
 function PoolsSkeleton() {

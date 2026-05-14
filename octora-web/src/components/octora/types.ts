@@ -60,6 +60,14 @@ export type PortfolioPosition = {
    *  but funds may still be sitting at `stealthPubkey` waiting to be swept. */
   closed?: boolean;
   poolName: string;
+  /** Token symbols + mints joined from the Pool record so the detail page
+   *  can label the price axis the same way pool discovery + detail do
+   *  (base in quote: `0.000025 SOL` / `0.00220 USDC`). Optional because
+   *  early stored positions pre-date this field. */
+  tokenA?: string;
+  tokenB?: string;
+  tokenAMint?: string;
+  tokenBMint?: string;
   protocol: string;
   deposited: string;
   value: string;

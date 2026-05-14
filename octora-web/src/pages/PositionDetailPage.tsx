@@ -20,6 +20,7 @@ import {
 } from "@/lib/privateLifecycle";
 import { markLocalPositionClosed, removeLocalPosition } from "@/lib/localPositions";
 import { useSolana } from "@/providers/SolanaProvider";
+import { getPrices } from "@/lib/api";
 import { PrivateClaimModal } from "@/components/octora/lp/PrivateClaimModal";
 import { PrivateExitModal } from "@/components/octora/lp/PrivateExitModal";
 import { PrivateRebalanceModal } from "@/components/octora/lp/PrivateRebalanceModal";
@@ -156,6 +157,8 @@ export function PositionDetailPage({ positions }: Props) {
               </span>
             </div>
 
+            <ActivePriceLabel position={position} />
+
             <BinLiquidityChart
               bins={bins}
               activeBinId={center}
@@ -182,6 +185,80 @@ export function PositionDetailPage({ positions }: Props) {
       </Reveal>
     </div>
   );
+}
+
+const QUOTE_SYMBOLS = new Set(["SOL", "USDC", "USDT"]);
+const USD_QUOTES = new Set(["USDC", "USDT"]);
+
+/**
+ * Renders the position's active price the same way pool detail does:
+ * `<base in quote> · ≈ $<usd> / <base>`. When the pool's quote (tokenB)
+ * is a stable (USDC/USDT) we skip the USD line since it'd be a near-1:1
+ * tautology. Mirrors the discovery + detail formats so the user sees the
+ * same number in three places.
+ */
+function ActivePriceLabel({ position }: { position: PortfolioPosition }) {
+  const [quoteUsd, setQuoteUsd] = useState<number>(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!position.tokenBMint) return;
+    getPrices([position.tokenBMint])
+      .then((prices) => {
+        if (cancelled) return;
+        const p = prices[position.tokenBMint!]?.usdPrice;
+        if (p && p > 0) setQuoteUsd(p);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [position.tokenBMint]);
+
+  const active = position.activePrice ?? 0;
+  if (!Number.isFinite(active) || active <= 0) return null;
+
+  const tokenA = position.tokenA ?? "";
+  const tokenB = position.tokenB ?? "";
+  const isQuote = QUOTE_SYMBOLS.has(tokenB.toUpperCase());
+  const isUsdQuote = USD_QUOTES.has(tokenB.toUpperCase());
+
+  return (
+    <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Active price</span>
+      <span className="font-mono text-base text-foreground tabular-nums">{formatPositionPrice(active)}</span>
+      {isQuote && tokenA && tokenB && (
+        <span className="text-xs text-muted-foreground">
+          {tokenA}/{tokenB}
+        </span>
+      )}
+      {!isUsdQuote && quoteUsd > 0 && tokenA && (
+        <span className="font-mono text-xs text-muted-foreground tabular-nums">
+          ≈ {formatPositionUsd(active * quoteUsd)} / {tokenA}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function formatPositionPrice(p: number): string {
+  if (!Number.isFinite(p) || p === 0) return "—";
+  if (p >= 1000) return p.toFixed(2);
+  if (p >= 1) return p.toFixed(4);
+  if (p >= 0.01) return p.toFixed(5);
+  const magnitude = Math.floor(Math.log10(p));
+  const decimals = Math.max(4, 3 - magnitude);
+  return p.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatPositionUsd(p: number): string {
+  if (!Number.isFinite(p) || p === 0) return "$0";
+  if (p >= 1000) return `$${p.toFixed(2)}`;
+  if (p >= 1) return `$${p.toFixed(4)}`;
+  if (p >= 0.01) return `$${p.toFixed(5)}`;
+  const magnitude = Math.floor(Math.log10(p));
+  const decimals = Math.max(4, 3 - magnitude);
+  return `$${p.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "")}`;
 }
 
 function ClaimSummary({ position }: { position: PortfolioPosition }) {

@@ -128,14 +128,22 @@ function DepositPanel({
   // SOL/USD price drives the summary calculations (entry fee, daily est, etc.)
   // since the user now picks SOL amount instead of USD freetext. Falls back
   // to a sensible devnet value when /api/prices doesn't know SOL.
+  // `quoteUsdPrice` is the USD price of the pool's quote token (tokenY) —
+  // used to convert the DLMM bin price (tokenY-per-tokenX) into USD-per-X
+  // so the detail page reads in the same denomination as discovery's
+  // LIVE PRICE column.
   const [solUsdPrice, setSolUsdPrice] = useState<number>(200);
+  const [quoteUsdPrice, setQuoteUsdPrice] = useState<number>(0);
   useEffect(() => {
     let cancelled = false;
-    getPrices([SOL_MINT])
+    const mints = Array.from(new Set([SOL_MINT, pool.tokenBMint])).filter(Boolean);
+    getPrices(mints)
       .then((prices) => {
         if (cancelled) return;
-        const p = prices[SOL_MINT]?.usdPrice;
-        if (p && p > 0) setSolUsdPrice(p);
+        const sol = prices[SOL_MINT]?.usdPrice;
+        if (sol && sol > 0) setSolUsdPrice(sol);
+        const quote = prices[pool.tokenBMint]?.usdPrice;
+        if (quote && quote > 0) setQuoteUsdPrice(quote);
       })
       .catch(() => {
         // Keep the $200 fallback — summary numbers are guidance, not
@@ -144,7 +152,7 @@ function DepositPanel({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [pool.tokenBMint]);
 
   // Derived USD value drives the existing summary / projection block + the
   // PrivateDepositModal's preview UI without us having to refactor that
@@ -233,6 +241,11 @@ function DepositPanel({
             <span className="text-xs text-muted-foreground">
               {pool.tokenA}/{pool.tokenB}
             </span>
+            {quoteUsdPrice > 0 && activePrice > 0 && (
+              <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                ≈ {formatUsd(activePrice * quoteUsdPrice)} / {pool.tokenA}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <BinSourceBadge loading={binsLoading} fallback={isFallback} />
@@ -362,6 +375,16 @@ function formatPrice(p: number): string {
   const magnitude = Math.floor(Math.log10(p));
   const decimals = Math.max(4, 3 - magnitude);
   return p.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatUsd(p: number): string {
+  if (!Number.isFinite(p) || p === 0) return "$0";
+  if (p >= 1000) return `$${p.toFixed(2)}`;
+  if (p >= 1) return `$${p.toFixed(4)}`;
+  if (p >= 0.01) return `$${p.toFixed(5)}`;
+  const magnitude = Math.floor(Math.log10(p));
+  const decimals = Math.max(4, 3 - magnitude);
+  return `$${p.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "")}`;
 }
 
 function RangeReadout({

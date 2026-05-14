@@ -29,6 +29,12 @@ export interface PoolSummary {
   /** Unix seconds from Meteora; 0 if unavailable. */
   createdAt: number
   network: 'mainnet' | 'devnet' | 'localnet'
+  /** Pool price in tokenY-per-tokenX, from Meteora's `current_price` field.
+   *  Same source the pool-detail page uses, so discovery + detail stay in
+   *  sync without a per-row Jupiter division. 0 if upstream omits it. */
+  currentPrice: number
+  /** 24h price change pct for tokenX (the base token), 0 if not provided. */
+  priceChange24h: number
 }
 
 export interface PoolDetail extends PoolSummary {

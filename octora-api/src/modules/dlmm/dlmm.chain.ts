@@ -70,17 +70,29 @@ export async function getPoolBins(
   try {
     const { activeBin, bins } = (await dlmm.getBinsAroundActiveBin(half, half)) as {
       activeBin: number
-      bins: Array<{ binId: number; price: string; xAmount: any; yAmount: any }>
+      bins: Array<{
+        binId: number
+        /** Raw price-per-lamport `(1+bs/10000)^binId`. NOT decimal-adjusted. */
+        price: string
+        /** `price * 10^(decX-decY)` — human-readable tokenY-per-tokenX. */
+        pricePerToken: string
+        xAmount: any
+        yAmount: any
+      }>
     }
 
     const out: LiquidityBin[] = bins.map((b) => {
-      const price = Number(b.price)
+      // Use `pricePerToken` so the price axis is in tokenY-per-tokenX (the
+      // unit users expect — same one discovery shows after converting via
+      // an oracle). Falls back to recomputing from `price` if the SDK ever
+      // changes its bin shape.
+      const ppt = b.pricePerToken ? Number(b.pricePerToken) : Number(b.price) * Math.pow(10, tokenXDecimals - tokenYDecimals)
       const x = decimalize(b.xAmount, tokenXDecimals)
       const y = decimalize(b.yAmount, tokenYDecimals)
-      const liquidity = y + (Number.isFinite(price) ? x * price : 0)
+      const liquidity = y + (Number.isFinite(ppt) ? x * ppt : 0)
       return {
         binId: b.binId,
-        price,
+        price: ppt,
         liquidity,
         xAmount: bnToString(b.xAmount),
         yAmount: bnToString(b.yAmount),
@@ -151,9 +163,16 @@ export async function getPoolFromChain(address: string, network: Network): Promi
   const baseFeeBps = Math.round((baseFactor * binStep) / 100)
   const activeBinId = Number(lbPair.activeId ?? 0)
 
-  // Active bin price in tokenY-per-tokenX, scaled per the binStep formula:
-  //   price = (1 + binStep/10_000) ** activeId
-  const price = Math.pow(1 + binStep / 10_000, activeBinId)
+  // Active bin price in tokenY-per-tokenX, scaled per the binStep formula
+  // AND adjusted for the per-token decimal difference. Without the decimal
+  // adjustment this returns the per-lamport price, which doesn't match
+  // the USD-per-token figures shown in discovery (and is unitless to a
+  // user who hasn't dug into how DLMM stores prices).
+  //   pricePerLamport = (1 + binStep/10_000) ** activeId
+  //   pricePerToken   = pricePerLamport * 10^(decX - decY)
+  const price =
+    Math.pow(1 + binStep / 10_000, activeBinId) *
+    Math.pow(10, xDecimals - yDecimals)
 
   return {
     address,
@@ -172,6 +191,8 @@ export async function getPoolFromChain(address: string, network: Network): Promi
     baseFee: baseFeeBps,
     createdAt: 0,
     network,
+    currentPrice: price,
+    priceChange24h: 0,
     activeBinId,
     price,
     priceRange: { min: 0, max: 0 },
