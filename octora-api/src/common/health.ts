@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 
 import type { AppConfig } from "./config";
 import { pingDatabase } from "./db/health.js";
+import type { SolanaChain } from "./solana/chain.js";
 import { MIXER_POOL_IS_PAUSED_OFFSET } from "../modules/mixer/layout.js";
 
 /**
@@ -48,13 +49,14 @@ const MIXER_POOL_SEED = Buffer.from("mixer_pool");
  */
 export async function runHealthCheck(
   pingDb: DatabasePinger,
+  chain: SolanaChain,
   config: AppConfig,
 ): Promise<HealthReport> {
   const [db, rpc, relayer, mixer] = await Promise.all([
     checkDatabase(pingDb),
-    checkRpc(config.executorRpcUrl),
+    checkRpc(chain),
     checkRelayerKeypair(config.executorRelayerKeypairPath),
-    checkMixer(config),
+    checkMixer(chain, config),
   ]);
 
   const ok = db.ok && rpc.ok && relayer.ok && mixer.ok;
@@ -70,12 +72,11 @@ async function checkDatabase(pingDb: DatabasePinger): Promise<HealthCheck> {
   return { ok: false, detail: result.detail, latencyMs: result.latencyMs };
 }
 
-async function checkRpc(rpcUrl: string): Promise<HealthCheck> {
+export async function checkRpc(chain: SolanaChain): Promise<HealthCheck> {
   const t0 = Date.now();
   try {
-    const connection = new Connection(rpcUrl, "confirmed");
     const slot = await Promise.race([
-      connection.getSlot("confirmed"),
+      chain.getSlot("confirmed"),
       new Promise<never>((_, reject) =>
         setTimeout(
           () => reject(new Error(`RPC getSlot timed out after ${RPC_TIMEOUT_MS}ms`)),
@@ -120,7 +121,10 @@ function checkRelayerKeypair(keypairPath: string): HealthCheck {
   }
 }
 
-async function checkMixer(config: AppConfig): Promise<HealthCheck> {
+export async function checkMixer(
+  chain: SolanaChain,
+  config: AppConfig,
+): Promise<HealthCheck> {
   const t0 = Date.now();
   try {
     const programId = new PublicKey(config.mixerProgramId);
@@ -131,9 +135,8 @@ async function checkMixer(config: AppConfig): Promise<HealthCheck> {
       programId,
     );
 
-    const connection = new Connection(config.executorRpcUrl, "confirmed");
     const accountInfo = await Promise.race([
-      connection.getAccountInfo(poolPda),
+      chain.getAccountInfo(poolPda),
       new Promise<never>((_, reject) =>
         setTimeout(
           () => reject(new Error(`mixer pool fetch timed out after ${RPC_TIMEOUT_MS}ms`)),

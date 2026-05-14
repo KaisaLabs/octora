@@ -191,7 +191,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     if (!prismaClient) {
       return reply.send({ status: 'ok', mode: 'minimal' })
     }
-    const report = await runHealthCheck(() => pingDatabase(prismaClient!), config)
+    const report = await runHealthCheck(() => pingDatabase(prismaClient!), chains.executor, config)
     const code = report.status === 'ok' ? 200 : 503
     return reply.code(code).send(report)
   })
