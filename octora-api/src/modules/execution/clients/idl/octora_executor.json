@@ -166,7 +166,20 @@
           }
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "min_bin_id",
+          "type": "i32"
+        },
+        {
+          "name": "max_bin_id",
+          "type": "i32"
+        },
+        {
+          "name": "remaining_accounts_info",
+          "type": "bytes"
+        }
+      ]
     },
     {
       "name": "dlmm_init_position",
@@ -268,11 +281,11 @@
     {
       "name": "dlmm_swap",
       "docs": [
-        "Pause-gated, slippage-enforced wrapper around Meteora DLMM `swap`.",
+        "Pause-gated, slippage-enforced wrapper around Meteora DLMM `swap2`.",
         "Used by the swap layer to convert SOL ↔ target token before LP, so any",
-        "DLMM pair (including memecoins) can be reached without per-token mixer",
-        "pools. Source pool must differ from the LP target pool — enforced by",
-        "the backend orchestrator, not this instruction."
+        "DLMM pair (including memecoins, Token-2022) can be reached without",
+        "per-token mixer pools. Source pool must differ from the LP target pool",
+        "— enforced by the backend orchestrator, not this instruction."
       ],
       "discriminator": [
         16,
@@ -323,6 +336,10 @@
         {
           "name": "min_amount_out",
           "type": "u64"
+        },
+        {
+          "name": "remaining_accounts_info",
+          "type": "bytes"
         }
       ]
     },
@@ -416,6 +433,10 @@
         {
           "name": "bps_to_remove",
           "type": "u16"
+        },
+        {
+          "name": "remaining_accounts_info",
+          "type": "bytes"
         }
       ]
     },
@@ -435,8 +456,7 @@
         {
           "name": "authority",
           "writable": true,
-          "signer": true,
-          "address": "6LQkmEbJwJcM89p4XETZu77EtJSbRhwSUSjZMGQ6zNpp"
+          "signer": true
         },
         {
           "name": "config",

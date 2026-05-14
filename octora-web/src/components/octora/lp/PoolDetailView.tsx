@@ -303,15 +303,33 @@ function DepositPanel({
             <OutcomeRow label="30d est." value={`$${projection.monthlyRange.toFixed(2)}`} />
             <OutcomeRow label="Execution" value="Private relay" />
           </div>
+          {isFallback && !binsLoading && (
+            <div className="mt-5 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-[11px] leading-5 text-amber-200">
+              Live bin data unavailable for this pool. The chart shows a
+              modeled distribution centered at price 1.0 — the on-chain
+              active bin is elsewhere, so any deposit submitted now would
+              be rejected by the relayer. Try again in a moment, or pick a
+              different pool.
+            </div>
+          )}
           <Button
             variant="hero"
             size="lg"
             className="mt-5 w-full justify-center rounded-xl"
             onClick={() => setDepositOpen(true)}
-            disabled={!selectedDenomLamports || range.upper < range.lower}
+            disabled={
+              !selectedDenomLamports ||
+              range.upper < range.lower ||
+              isFallback ||
+              binsLoading
+            }
           >
-            Deposit privately
-            <ArrowRight />
+            {binsLoading
+              ? "Loading bins…"
+              : isFallback
+                ? "Live bins unavailable"
+                : "Deposit privately"}
+            {!binsLoading && !isFallback && <ArrowRight />}
           </Button>
           <p className="mt-3 text-xs leading-5 text-muted-foreground">
             Routed via Octora's private relayer. Origin wallet stays hidden.

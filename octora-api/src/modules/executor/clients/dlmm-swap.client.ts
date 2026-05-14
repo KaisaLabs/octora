@@ -21,21 +21,26 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import type { AccountMeta } from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import DLMM, {
   binIdToBinArrayIndex,
   deriveBinArray,
   deriveOracle,
   deriveReserve,
 } from "@meteora-ag/dlmm";
+
+const MEMO_PROGRAM_ID = new PublicKey(
+  "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+);
+
+// Borsh empty `RemainingAccountsInfo { slices: Vec<...> }` — u32 LE length = 0.
+const EMPTY_REMAINING_ACCOUNTS_INFO = Buffer.from([0, 0, 0, 0]);
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { getDlmmProgram } from "#common/solana/dlmm-program";
+import { resolveMintProgram } from "../builders/token-program.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // IDL is shared with the existing on-chain executor client. Copying the
@@ -120,17 +125,56 @@ export class DlmmSwapClient {
       dlmmCfg.programId,
     );
 
+    // Resolve token programs per mint (legacy SPL vs Token-2022) and
+    // refuse extensions we can't safely route. TransferHook is rejected
+    // until Phase C lands the ExtraAccountMetaList expansion.
+    const [tokenXInfo, tokenYInfo] = await Promise.all([
+      resolveMintProgram(this.connection, tokenX),
+      resolveMintProgram(this.connection, tokenY),
+    ]);
+    for (const [label, info] of [
+      ["tokenX", tokenXInfo],
+      ["tokenY", tokenYInfo],
+    ] as const) {
+      if (info.isToken2022 && info.unsupported) {
+        throw new Error(
+          `Mint ${label} has unsupported Token-2022 extension: ${info.unsupported}. ` +
+            `Swap source pool is not compatible with the private flow.`,
+        );
+      }
+      // Token-2022 plain (no hook) works on swap2. Hooked mints still need
+      // transfer-hook account expansion (Phase C) before they can route.
+      if (info.isToken2022 && info.hasTransferHook) {
+        throw new Error(
+          `Mint ${label} is Token-2022 with a TransferHook (program ` +
+            `${info.hookProgramId?.toBase58() ?? "unknown"}). ` +
+            `Transfer-hook account expansion not yet wired into the swap builder. ` +
+            `Pick a non-hook pool for now.`,
+        );
+      }
+    }
+    const tokenXProgram = tokenXInfo.programId;
+    const tokenYProgram = tokenYInfo.programId;
+
     // User token ATAs — owned by the stealth, mints derived from swap
-    // direction.
+    // direction. ATA derivation must pass the per-mint token program ID.
     const inputMint = args.swapForY ? tokenX : tokenY;
     const outputMint = args.swapForY ? tokenY : tokenX;
-    const userTokenIn = getAssociatedTokenAddressSync(inputMint, args.stealth);
-    const userTokenOut = getAssociatedTokenAddressSync(outputMint, args.stealth);
+    const inputProgram = args.swapForY ? tokenXProgram : tokenYProgram;
+    const outputProgram = args.swapForY ? tokenYProgram : tokenXProgram;
+    const userTokenIn = getAssociatedTokenAddressSync(
+      inputMint, args.stealth, false, inputProgram,
+    );
+    const userTokenOut = getAssociatedTokenAddressSync(
+      outputMint, args.stealth, false, outputProgram,
+    );
 
-    // Match programs/octora-executor/src/instructions/dlmm/swap.rs layout.
+    // v2 layout (swap2). Adds memo_program at slot 13 and shifts event/program
+    // back by one. Bin arrays move to the tail. Mirrors
+    // programs/octora-executor/src/instructions/dlmm/swap.rs.
     const remainingMetas: AccountMeta[] = [
       { pubkey: args.lbPair, isSigner: false, isWritable: true },                // 0 lb_pair
-      { pubkey: dlmmCfg.programId, isSigner: false, isWritable: true },            // 1 bitmap_ext sentinel
+      { pubkey: dlmmCfg.programId, isSigner: false, isWritable: false },         // 1 bitmap_ext sentinel
       { pubkey: reserveX, isSigner: false, isWritable: true },                   // 2 reserve_x
       { pubkey: reserveY, isSigner: false, isWritable: true },                   // 3 reserve_y
       { pubkey: userTokenIn, isSigner: false, isWritable: true },                // 4 user_token_in
@@ -138,15 +182,16 @@ export class DlmmSwapClient {
       { pubkey: tokenX, isSigner: false, isWritable: false },                    // 6 token_x_mint
       { pubkey: tokenY, isSigner: false, isWritable: false },                    // 7 token_y_mint
       { pubkey: oracle, isSigner: false, isWritable: true },                     // 8 oracle
-      { pubkey: dlmmCfg.programId, isSigner: false, isWritable: true },            // 9 host_fee_in sentinel
+      { pubkey: dlmmCfg.programId, isSigner: false, isWritable: true },          // 9 host_fee_in sentinel
       { pubkey: args.stealth, isSigner: true, isWritable: true },                // 10 user
-      // MAINNET_BLOCKER: Token-2022 — branch off mint owner.
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },          // 11 token_x_program
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },          // 12 token_y_program
-      { pubkey: dlmmCfg.eventAuthority, isSigner: false, isWritable: false },      // 13 event_authority
-      { pubkey: dlmmCfg.programId, isSigner: false, isWritable: false },           // 14 dlmm_program
-      { pubkey: binArray0, isSigner: false, isWritable: true },                  // 15 bin_array_0
-      { pubkey: binArray1, isSigner: false, isWritable: true },                  // 16 bin_array_1
+      { pubkey: tokenXProgram, isSigner: false, isWritable: false },             // 11 token_x_program
+      { pubkey: tokenYProgram, isSigner: false, isWritable: false },             // 12 token_y_program
+      { pubkey: MEMO_PROGRAM_ID, isSigner: false, isWritable: false },           // 13 memo_program
+      { pubkey: dlmmCfg.eventAuthority, isSigner: false, isWritable: false },    // 14 event_authority
+      { pubkey: dlmmCfg.programId, isSigner: false, isWritable: false },         // 15 dlmm_program
+      // tail: transfer-hook accounts + bin arrays.
+      { pubkey: binArray0, isSigner: false, isWritable: true },
+      { pubkey: binArray1, isSigner: false, isWritable: true },
     ];
 
     const [configPDA] = PublicKey.findProgramAddressSync(
@@ -155,7 +200,11 @@ export class DlmmSwapClient {
     );
 
     const ix = await this.program.methods
-      .dlmmSwap(new BN(args.amountIn.toString()), new BN(args.minAmountOut.toString()))
+      .dlmmSwap(
+        new BN(args.amountIn.toString()),
+        new BN(args.minAmountOut.toString()),
+        EMPTY_REMAINING_ACCOUNTS_INFO,
+      )
       .accounts({
         stealth: args.stealth,
         dlmmProgram: dlmmCfg.programId,

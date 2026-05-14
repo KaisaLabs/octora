@@ -69,6 +69,9 @@ export class OnchainMeteoraExecutor implements MeteoraExecutor {
       stealth: c.stealthKeypair.publicKey,
       lbPair: c.lbPair,
       dlmmRemainingAccounts: c.dlmmClaimAccounts,
+      minBinId: c.lowerBinId,
+      maxBinId: c.upperBinId,
+      remainingAccountsInfo: Buffer.from([0, 0, 0, 0]),
     });
 
     const sig = await this.client.sendIx(ix, [
@@ -90,6 +93,7 @@ export class OnchainMeteoraExecutor implements MeteoraExecutor {
       fromBinId: c.lowerBinId,
       toBinId: c.upperBinId,
       bpsToRemove: 10000, // 100%
+      remainingAccountsInfo: Buffer.from([0, 0, 0, 0]),
     });
 
     const sig = await this.client.sendIx(ix, [

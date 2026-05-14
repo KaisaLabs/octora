@@ -109,6 +109,9 @@ describe("OctoraExecutorClient", () => {
       stealth,
       lbPair,
       dlmmRemainingAccounts: remaining,
+      minBinId: -10,
+      maxBinId: 10,
+      remainingAccountsInfo: Buffer.from([0, 0, 0, 0]),
     });
 
     const expectedDisc = anchorDiscriminator("dlmm_claim_fees");
@@ -135,6 +138,7 @@ describe("OctoraExecutorClient", () => {
       fromBinId: -5,
       toBinId: 5,
       bpsToRemove: 10000,
+      remainingAccountsInfo: Buffer.from([0, 0, 0, 0]),
     });
 
     const expectedDisc = anchorDiscriminator("dlmm_withdraw_close");

@@ -59,6 +59,11 @@ export interface ClaimFeesParams {
   stealth: PublicKey;
   lbPair: PublicKey;
   dlmmRemainingAccounts: AccountMeta[];
+  /** Inclusive bin range claim_fee2 collects across. */
+  minBinId: number;
+  maxBinId: number;
+  /** Borsh-encoded `RemainingAccountsInfo` (empty Vec when no hooks). */
+  remainingAccountsInfo: Buffer;
 }
 
 export interface WithdrawCloseParams {
@@ -68,6 +73,8 @@ export interface WithdrawCloseParams {
   fromBinId: number;
   toBinId: number;
   bpsToRemove: number;
+  /** Borsh-encoded `RemainingAccountsInfo` (empty Vec when no hooks). */
+  remainingAccountsInfo: Buffer;
 }
 
 export class OctoraExecutorClient {
@@ -151,7 +158,7 @@ export class OctoraExecutorClient {
     const [config] = this.deriveConfig();
 
     return (this.program.methods as any)
-      .dlmmClaimFees()
+      .dlmmClaimFees(p.minBinId, p.maxBinId, p.remainingAccountsInfo)
       .accounts({
         stealth: p.stealth,
         poolAuthority: pa,
@@ -168,7 +175,7 @@ export class OctoraExecutorClient {
     const [config] = this.deriveConfig();
 
     return (this.program.methods as any)
-      .dlmmWithdrawClose(p.fromBinId, p.toBinId, p.bpsToRemove)
+      .dlmmWithdrawClose(p.fromBinId, p.toBinId, p.bpsToRemove, p.remainingAccountsInfo)
       .accounts({
         stealth: p.stealth,
         poolAuthority: pa,

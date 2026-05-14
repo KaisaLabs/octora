@@ -35,12 +35,25 @@ pub struct DlmmClaimFees<'info> {
     pub config: Account<'info, Config>,
 }
 
-pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>) -> Result<()> {
+pub fn handler<'info>(
+    ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>,
+    min_bin_id: i32,
+    max_bin_id: i32,
+    remaining_accounts_info: Vec<u8>,
+) -> Result<()> {
     require_dlmm_program(&ctx.accounts.dlmm_program)?;
 
     let pa = &ctx.accounts.pool_authority;
     let remaining = ctx.remaining_accounts;
-    require!(remaining.len() == 14, ExecutorError::AccountsTooShort);
+
+    // v2 layout (claim_fee2):
+    //   0 lb_pair, 1 position, 2 sender (PA — re-pinned below),
+    //   3 reserve_x, 4 reserve_y, 5 user_token_x, 6 user_token_y,
+    //   7 token_x_mint, 8 token_y_mint, 9 token_program_x,
+    //   10 token_program_y, 11 memo_program, 12 event_authority, 13 program.
+    //   tail: transfer-hook accounts + bin arrays (variable per
+    //         remaining_accounts_info).
+    require!(remaining.len() >= 14, ExecutorError::AccountsTooShort);
 
     let (stored_lb_pair, stored_position) = match &pa.pool_ref {
         PoolRef::Dlmm { lb_pair, position } => (*lb_pair, *position),
@@ -57,11 +70,12 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>) -> 
         stored_position,
         ExecutorError::PositionMismatch
     );
-    require_token_account_owner(&remaining[7], &pa.exit_recipient)?;
-    require_token_account_owner(&remaining[8], &pa.exit_recipient)?;
-    require_token_account_mint(&remaining[7], &remaining[11], &remaining[9].key())?;
-    require_token_account_mint(&remaining[8], &remaining[11], &remaining[10].key())?;
-    require_spl_token_program(&remaining[11])?;
+    require_token_account_owner(&remaining[5], &pa.exit_recipient)?;
+    require_token_account_owner(&remaining[6], &pa.exit_recipient)?;
+    require_token_account_mint(&remaining[5], &remaining[9], &remaining[7].key())?;
+    require_token_account_mint(&remaining[6], &remaining[10], &remaining[8].key())?;
+    require_spl_token_program(&remaining[9])?;
+    require_spl_token_program(&remaining[10])?;
     require_dlmm_event_authority(&remaining[12])?;
     require_dlmm_program(&remaining[13])?;
     require_keys_eq!(
@@ -75,7 +89,8 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>) -> 
         .iter()
         .enumerate()
         .map(|(i, ai)| {
-            if i == 4 {
+            // v2 sender at slot 2 (was 4 in v1).
+            if i == 2 {
                 AccountMeta {
                     pubkey: pa_key,
                     is_signer: true,
@@ -91,7 +106,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>) -> 
         })
         .collect();
 
-    let ix = build_dlmm_ix("claim_fee", metas, Vec::new());
+    // v2 payload = min_bin_id (i32 LE) + max_bin_id (i32 LE) + remaining_accounts_info bytes.
+    let mut payload = Vec::with_capacity(8 + remaining_accounts_info.len());
+    payload.extend_from_slice(&min_bin_id.to_le_bytes());
+    payload.extend_from_slice(&max_bin_id.to_le_bytes());
+    payload.extend_from_slice(&remaining_accounts_info);
+
+    let ix = build_dlmm_ix("claim_fee2", metas, payload);
 
     let stealth_key = ctx.accounts.stealth.key();
     let bump = pa.bump;
@@ -102,17 +123,19 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>) -> 
         &[bump],
     ];
 
-    // Fix #4: CPI signer re-pinning
+    // Fix #4: CPI signer re-pinning at v2 sender slot 2.
     let pa_info = ctx.accounts.pool_authority.to_account_info();
     let mut infos: Vec<AccountInfo> = remaining.to_vec();
-    infos[4] = pa_info;
+    infos[2] = pa_info;
     invoke_dlmm_signed(&ix, &infos, &[signer_seeds])?;
 
     msg!(
-        "dlmm_claim_fees: stealth={} pa={} position={}",
+        "dlmm_claim_fees: stealth={} pa={} position={} range=[{},{}]",
         stealth_key,
         pa_key,
         stored_position,
+        min_bin_id,
+        max_bin_id,
     );
 
     Ok(())

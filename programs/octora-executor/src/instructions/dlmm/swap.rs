@@ -26,10 +26,10 @@ use crate::cpi::{read_token_account_amount, require_spl_token_program, require_t
 use crate::errors::ExecutorError;
 use crate::state::Config;
 
-// ── Remaining-account layout (mirrors DLMM `swap` IDL) ──
+// ── Remaining-account layout (mirrors DLMM `swap2` IDL) ──
 //
 //  0  lb_pair                    (mut)
-//  1  bin_array_bitmap_extension (mut, may be DLMM program id if absent)
+//  1  bin_array_bitmap_extension (may be DLMM program id if absent)
 //  2  reserve_x                  (mut)
 //  3  reserve_y                  (mut)
 //  4  user_token_in              (mut, owned by stealth)
@@ -41,12 +41,14 @@ use crate::state::Config;
 // 10  user                       (signer = stealth)
 // 11  token_x_program
 // 12  token_y_program
-// 13  event_authority
-// 14  dlmm_program
-// 15+ bin_arrays                 (mut, ≥1)
+// 13  memo_program
+// 14  event_authority
+// 15  dlmm_program
+// 16+ transfer-hook accounts + bin_arrays (variable, ≥1 bin array;
+//     described by `remaining_accounts_info` arg)
 //
-// Minimum: 15 fixed + 1 bin array = 16.
-const MIN_REMAINING: usize = 16;
+// Minimum: 16 fixed + 1 bin array = 17.
+const MIN_REMAINING: usize = 17;
 
 const IDX_LB_PAIR: usize = 0;
 const IDX_USER_TOKEN_IN: usize = 4;
@@ -56,8 +58,8 @@ const IDX_TOKEN_Y_MINT: usize = 7;
 const IDX_USER: usize = 10;
 const IDX_TOKEN_X_PROGRAM: usize = 11;
 const IDX_TOKEN_Y_PROGRAM: usize = 12;
-const IDX_EVENT_AUTHORITY: usize = 13;
-const IDX_DLMM_PROGRAM: usize = 14;
+const IDX_EVENT_AUTHORITY: usize = 14;
+const IDX_DLMM_PROGRAM: usize = 15;
 
 #[derive(Accounts)]
 pub struct DlmmSwap<'info> {
@@ -82,6 +84,7 @@ pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, DlmmSwap<'info>>,
     amount_in: u64,
     min_amount_out: u64,
+    remaining_accounts_info: Vec<u8>,
 ) -> Result<()> {
     require!(
         amount_in > 0 && min_amount_out > 0,
@@ -161,19 +164,23 @@ pub fn handler<'info>(
     // ── Pre-balance for slippage enforcement ────────────────────────────────
     let pre_out = read_token_account_amount(&remaining[IDX_USER_TOKEN_OUT])?;
 
-    // ── Build inner DLMM `swap` ix ──────────────────────────────────────────
-    // Args: amount_in: u64, min_amount_out: u64
-    let mut args = Vec::with_capacity(16);
+    // ── Build inner DLMM `swap2` ix ─────────────────────────────────────────
+    // Args: amount_in: u64, min_amount_out: u64, remaining_accounts_info: bytes
+    let mut args = Vec::with_capacity(16 + remaining_accounts_info.len());
     args.extend_from_slice(&amount_in.to_le_bytes());
     args.extend_from_slice(&min_amount_out.to_le_bytes());
+    args.extend_from_slice(&remaining_accounts_info);
 
     // is_signer / is_writable are hardcoded per slot rather than copied
     // from `ai`. Trusting the caller's flags would let a client flip a
     // read-only sysvar to writable (or vice versa) and downstream rely
     // on whatever DLMM does with that — we don't grant that latitude.
     //
-    // Layout matches MIN_REMAINING + variable bin-array tail. Bin arrays
-    // (indices >= MIN_REMAINING - 1) are always mutable.
+    // Layout matches MIN_REMAINING + variable tail (transfer-hook accounts
+    // + bin arrays). Tail accounts default to non-writable; bin arrays
+    // need to be writable, but transfer-hook accounts may be either —
+    // since the SDK can't distinguish here, we conservatively mark the
+    // tail mutable. DLMM enforces hook-side read/write expectations.
     let metas: Vec<AccountMeta> = remaining
         .iter()
         .enumerate()
@@ -181,16 +188,17 @@ pub fn handler<'info>(
             let (is_signer, is_writable) = match i {
                 IDX_USER => (true, true),
                 IDX_LB_PAIR => (false, true),
-                1 => (false, true),                // bin_array_bitmap_extension
+                1 => (false, false),               // bin_array_bitmap_extension (v2: not writable)
                 2 | 3 => (false, true),            // reserve_x, reserve_y
                 IDX_USER_TOKEN_IN | IDX_USER_TOKEN_OUT => (false, true),
                 IDX_TOKEN_X_MINT | IDX_TOKEN_Y_MINT => (false, false),
                 8 => (false, true),                // oracle
                 9 => (false, true),                // host_fee_in
                 IDX_TOKEN_X_PROGRAM | IDX_TOKEN_Y_PROGRAM => (false, false),
+                13 => (false, false),              // memo_program
                 IDX_EVENT_AUTHORITY => (false, false),
                 IDX_DLMM_PROGRAM => (false, false),
-                _ => (false, true),                // bin_arrays — always mut
+                _ => (false, true),                // hook accounts + bin_arrays
             };
             AccountMeta {
                 pubkey: ai.key(),
@@ -200,7 +208,7 @@ pub fn handler<'info>(
         })
         .collect();
 
-    let ix = build_dlmm_ix("swap", metas, args);
+    let ix = build_dlmm_ix("swap2", metas, args);
 
     // No PDA signers: stealth signs the outer tx, that signature satisfies
     // DLMM's `user` requirement on the inner ix.

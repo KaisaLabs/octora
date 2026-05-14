@@ -24,7 +24,64 @@ import {
   type DistributionShape,
 } from "../single-sided.js";
 import { derivePoolAuthorityPda } from "./pool-authority.js";
+import { resolveMintProgram, type MintProgramInfo } from "./token-program.js";
 import type { BuilderContext, TestPairConfig } from "./types.js";
+
+// Meteora v2 ixes (add_liquidity_by_strategy2, claim_fee2,
+// remove_liquidity_by_range2, swap2) include a `memo_program` slot in the
+// fixed account list. The IDL hardcodes the address constraint to this
+// canonical SPL Memo program id, so we pass it directly.
+const MEMO_PROGRAM_ID = new PublicKey(
+  "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+);
+
+/**
+ * Borsh-encoded empty `RemainingAccountsInfo { slices: Vec<...> }`. Used
+ * whenever the pool has no transfer-hook'd mints — Anchor expects a u32
+ * length prefix (LE), so an empty vec = 4 zero bytes.
+ *
+ * Hooked mints replace this with a properly-populated buffer + the
+ * transfer-hook accounts appended to `remainingAccounts` (Phase C).
+ */
+const EMPTY_REMAINING_ACCOUNTS_INFO = Buffer.from([0, 0, 0, 0]);
+
+/**
+ * Reject mints whose Token-2022 extensions break the single-sided SOL
+ * flow as-designed (NonTransferable can't move at all; Confidential mints
+ * need a different ix family; PermanentDelegate hands an outside party
+ * unilateral seize rights on positions). Throws with a stable message
+ * prefix the UI matches on to render a clean error.
+ */
+function assertSupported(label: "tokenX" | "tokenY", info: MintProgramInfo): void {
+  if (info.isToken2022 && info.unsupported) {
+    throw new Error(
+      `Mint ${label} has unsupported Token-2022 extension: ${info.unsupported}. ` +
+        `Pool is not compatible with the private deposit flow.`,
+    );
+  }
+}
+
+/**
+ * Block Token-2022 mints that carry a TransferHook extension until the
+ * builder appends the hook's ExtraAccountMetaList entries to
+ * `remainingAccounts` and populates `RemainingAccountsInfo` accordingly.
+ * Plain Token-2022 (no hook) goes through fine on the v2 ix family.
+ *
+ * Lifted once `expandTransferHookAccounts` lands.
+ */
+function assertNoTransferHookYet(
+  label: "tokenX" | "tokenY",
+  info: MintProgramInfo,
+): void {
+  if (info.isToken2022 && info.hasTransferHook) {
+    throw new Error(
+      `Mint ${label} is Token-2022 with a TransferHook (program ` +
+        `${info.hookProgramId?.toBase58() ?? "unknown"}). ` +
+        `Transfer-hook account expansion not yet wired into the v2 builders. ` +
+        `Pick a non-hook pool for now.`,
+    );
+  }
+}
 
 /**
  * Lamports the relayer drops on the stealth wallet inside `dlmm_init_position`
@@ -195,6 +252,21 @@ export class LiquidityPlanner {
       );
     }
 
+    // Resolve token programs per mint. WSOL (NATIVE_MINT) is always legacy
+    // SPL Token; the other side may be Token-2022. Reject extensions we
+    // can't safely handle (NonTransferable etc.) and TransferHook until
+    // Phase C lands.
+    const [tokenXInfo, tokenYInfo] = await Promise.all([
+      resolveMintProgram(connection, tokenX),
+      resolveMintProgram(connection, tokenY),
+    ]);
+    assertSupported("tokenX", tokenXInfo);
+    assertSupported("tokenY", tokenYInfo);
+    assertNoTransferHookYet("tokenX", tokenXInfo);
+    assertNoTransferHookYet("tokenY", tokenYInfo);
+    const tokenXProgram = tokenXInfo.programId;
+    const tokenYProgram = tokenYInfo.programId;
+
     const plan = planSingleSidedSol({
       totalLamports: args.totalSolLamports,
       activeBinId: args.config.activeBin,
@@ -210,14 +282,20 @@ export class LiquidityPlanner {
 
     // PDA-owned escrow ATAs. Both must exist for DLMM CPI even when one
     // side is empty. Issued idempotently so a re-run after a confirmed
-    // first attempt doesn't blow up.
-    const pdaAtaX = getAssociatedTokenAddressSync(tokenX, positionAuthority, true);
-    const pdaAtaY = getAssociatedTokenAddressSync(tokenY, positionAuthority, true);
+    // first attempt doesn't blow up. ATA derivation + create must pass
+    // the per-mint token program ID — Token-2022 ATAs live under a
+    // different derivation than legacy.
+    const pdaAtaX = getAssociatedTokenAddressSync(
+      tokenX, positionAuthority, true, tokenXProgram,
+    );
+    const pdaAtaY = getAssociatedTokenAddressSync(
+      tokenY, positionAuthority, true, tokenYProgram,
+    );
     const createPdaAtaXIx = createAssociatedTokenAccountIdempotentInstruction(
-      relayer.publicKey, pdaAtaX, positionAuthority, tokenX,
+      relayer.publicKey, pdaAtaX, positionAuthority, tokenX, tokenXProgram,
     );
     const createPdaAtaYIx = createAssociatedTokenAccountIdempotentInstruction(
-      relayer.publicKey, pdaAtaY, positionAuthority, tokenY,
+      relayer.publicKey, pdaAtaY, positionAuthority, tokenY, tokenYProgram,
     );
 
     // Wrap stealth's SOL through a stealth-owned WSOL ATA before transferring
@@ -253,27 +331,38 @@ export class LiquidityPlanner {
       strategyType: plan.strategyType,
     });
 
+    // v2 layout (add_liquidity_by_strategy2). Bin arrays drop out of the
+    // fixed account list and move to the tail; transfer-hook accounts (when
+    // we add them) sit between sender and bin arrays.
     const dlmmAccounts: AccountMeta[] = [
       { pubkey: positionPubkey, isSigner: false, isWritable: true },         // 0 position
       { pubkey: lbPair, isSigner: false, isWritable: true },                 // 1 lb_pair
       { pubkey: dlmm.programId, isSigner: false, isWritable: false },        // 2 bitmap_ext = None (sentinel)
-      { pubkey: pdaAtaX, isSigner: false, isWritable: true },                // 3 user_token_x (PDA-owned)
-      { pubkey: pdaAtaY, isSigner: false, isWritable: true },                // 4 user_token_y (PDA-owned)
+      { pubkey: pdaAtaX, isSigner: false, isWritable: true },                // 3 user_token_x
+      { pubkey: pdaAtaY, isSigner: false, isWritable: true },                // 4 user_token_y
       { pubkey: reserveX, isSigner: false, isWritable: true },               // 5 reserve_x
       { pubkey: reserveY, isSigner: false, isWritable: true },               // 6 reserve_y
       { pubkey: tokenX, isSigner: false, isWritable: false },                // 7 token_x_mint
       { pubkey: tokenY, isSigner: false, isWritable: false },                // 8 token_y_mint
-      { pubkey: binArrayLower, isSigner: false, isWritable: true },          // 9 bin_array_lower
-      { pubkey: binArrayUpper, isSigner: false, isWritable: true },          // 10 bin_array_upper
-      { pubkey: positionAuthority, isSigner: false, isWritable: false },     // 11 sender
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 12 token_x_program  // MAINNET_BLOCKER: Token-2022
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 13 token_y_program  // MAINNET_BLOCKER: Token-2022
-      { pubkey: dlmm.eventAuthority, isSigner: false, isWritable: false },   // 14 event_authority
-      { pubkey: dlmm.programId, isSigner: false, isWritable: false },        // 15 program
+      { pubkey: positionAuthority, isSigner: false, isWritable: false },     // 9 sender (re-pinned to PA on-chain)
+      { pubkey: tokenXProgram, isSigner: false, isWritable: false },         // 10 token_x_program
+      { pubkey: tokenYProgram, isSigner: false, isWritable: false },         // 11 token_y_program
+      { pubkey: dlmm.eventAuthority, isSigner: false, isWritable: false },   // 12 event_authority
+      { pubkey: dlmm.programId, isSigner: false, isWritable: false },        // 13 program
+      // tail: bin arrays. Transfer-hook accounts go before them when added.
+      { pubkey: binArrayLower, isSigner: false, isWritable: true },          // 14 bin_array_lower
+      { pubkey: binArrayUpper, isSigner: false, isWritable: true },          // 15 bin_array_upper
     ];
 
+    // v2 payload = LiquidityParameterByStrategy bytes + RemainingAccountsInfo bytes.
+    // For non-hooked mints the RemainingAccountsInfo is just an empty Vec.
+    const v2Payload = Buffer.concat([
+      Buffer.from(liquidityParams),
+      EMPTY_REMAINING_ACCOUNTS_INFO,
+    ]);
+
     const addLiqIx = await program.methods
-      .dlmmAddLiquidity(Buffer.from(liquidityParams))
+      .dlmmAddLiquidity(v2Payload)
       .accounts({
         stealth: args.stealth,
         poolAuthority: positionAuthority,
@@ -327,43 +416,59 @@ export class LiquidityPlanner {
     const [reserveX] = deriveReserve(tokenX, lbPair, dlmm.programId);
     const [reserveY] = deriveReserve(tokenY, lbPair, dlmm.programId);
 
+    const [tokenXInfo, tokenYInfo] = await Promise.all([
+      resolveMintProgram(connection, tokenX),
+      resolveMintProgram(connection, tokenY),
+    ]);
+    assertSupported("tokenX", tokenXInfo);
+    assertSupported("tokenY", tokenYInfo);
+    assertNoTransferHookYet("tokenX", tokenXInfo);
+    assertNoTransferHookYet("tokenY", tokenYInfo);
+    const tokenXProgram = tokenXInfo.programId;
+    const tokenYProgram = tokenYInfo.programId;
+
     // exit_recipient ATAs (idempotent create paid by relayer fee payer).
-    const exitAtaX = getAssociatedTokenAddressSync(tokenX, exitRecipient);
-    const exitAtaY = getAssociatedTokenAddressSync(tokenY, exitRecipient);
+    const exitAtaX = getAssociatedTokenAddressSync(
+      tokenX, exitRecipient, false, tokenXProgram,
+    );
+    const exitAtaY = getAssociatedTokenAddressSync(
+      tokenY, exitRecipient, false, tokenYProgram,
+    );
     const createExitAtaXIx = createAssociatedTokenAccountIdempotentInstruction(
-      relayer.publicKey, exitAtaX, exitRecipient, tokenX,
+      relayer.publicKey, exitAtaX, exitRecipient, tokenX, tokenXProgram,
     );
     const createExitAtaYIx = createAssociatedTokenAccountIdempotentInstruction(
-      relayer.publicKey, exitAtaY, exitRecipient, tokenY,
+      relayer.publicKey, exitAtaY, exitRecipient, tokenY, tokenYProgram,
     );
 
-    // Account order matches the on-chain handler's index assertions —
-    // see programs/octora-executor/src/instructions/dlmm/claim_fees.rs.
-    //
-    // MAINNET_BLOCKER: token_program is hardcoded to classic SPL-Token. On
-    // mainnet DLMM has Token-2022 pools (e.g. some PYUSD, JUP-extension
-    // pairs); both the program-id account and the ATA derivation must
-    // branch per-side based on `mintAccount.owner`. See docs/test-plan.md
-    // §14 for the pre-mainnet checklist.
+    // v2 layout (claim_fee2). Bin range is now a required argument;
+    // pull it from the position's stored range (lowerBinId..upperBinId).
     const dlmmAccounts: AccountMeta[] = [
       { pubkey: lbPair, isSigner: false, isWritable: true },                 // 0 lb_pair
       { pubkey: positionPubkey, isSigner: false, isWritable: true },         // 1 position
-      { pubkey: binArrayLower, isSigner: false, isWritable: true },          // 2 bin_array_lower
-      { pubkey: binArrayUpper, isSigner: false, isWritable: true },          // 3 bin_array_upper
-      { pubkey: positionAuthority, isSigner: false, isWritable: false },     // 4 sender (re-pinned to PA on-chain)
-      { pubkey: reserveX, isSigner: false, isWritable: true },               // 5 reserve_x
-      { pubkey: reserveY, isSigner: false, isWritable: true },               // 6 reserve_y
-      { pubkey: exitAtaX, isSigner: false, isWritable: true },               // 7 user_token_x (exit_recipient)
-      { pubkey: exitAtaY, isSigner: false, isWritable: true },               // 8 user_token_y (exit_recipient)
-      { pubkey: tokenX, isSigner: false, isWritable: false },                // 9 token_x_mint
-      { pubkey: tokenY, isSigner: false, isWritable: false },                // 10 token_y_mint
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 11 token_program  // MAINNET_BLOCKER: Token-2022
+      { pubkey: positionAuthority, isSigner: false, isWritable: false },     // 2 sender (re-pinned to PA on-chain)
+      { pubkey: reserveX, isSigner: false, isWritable: true },               // 3 reserve_x
+      { pubkey: reserveY, isSigner: false, isWritable: true },               // 4 reserve_y
+      { pubkey: exitAtaX, isSigner: false, isWritable: true },               // 5 user_token_x (exit_recipient)
+      { pubkey: exitAtaY, isSigner: false, isWritable: true },               // 6 user_token_y (exit_recipient)
+      { pubkey: tokenX, isSigner: false, isWritable: false },                // 7 token_x_mint
+      { pubkey: tokenY, isSigner: false, isWritable: false },                // 8 token_y_mint
+      { pubkey: tokenXProgram, isSigner: false, isWritable: false },         // 9 token_program_x
+      { pubkey: tokenYProgram, isSigner: false, isWritable: false },         // 10 token_program_y
+      { pubkey: MEMO_PROGRAM_ID, isSigner: false, isWritable: false },       // 11 memo_program
       { pubkey: dlmm.eventAuthority, isSigner: false, isWritable: false },   // 12 event_authority
       { pubkey: dlmm.programId, isSigner: false, isWritable: false },        // 13 dlmm_program
+      // tail: transfer-hook accounts + bin arrays.
+      { pubkey: binArrayLower, isSigner: false, isWritable: true },
+      { pubkey: binArrayUpper, isSigner: false, isWritable: true },
     ];
 
     const ix = await program.methods
-      .dlmmClaimFees()
+      .dlmmClaimFees(
+        args.config.lowerBinId,
+        args.config.upperBinId,
+        EMPTY_REMAINING_ACCOUNTS_INFO,
+      )
       .accounts({
         stealth: args.stealth,
         poolAuthority: positionAuthority,
@@ -408,22 +513,37 @@ export class LiquidityPlanner {
     const acct = await (program.account as any).poolAuthority.fetch(positionAuthority);
     const exitRecipient = acct.exitRecipient as PublicKey;
 
-    const exitAtaX = getAssociatedTokenAddressSync(tokenX, exitRecipient);
-    const exitAtaY = getAssociatedTokenAddressSync(tokenY, exitRecipient);
+    const [tokenXInfo, tokenYInfo] = await Promise.all([
+      resolveMintProgram(connection, tokenX),
+      resolveMintProgram(connection, tokenY),
+    ]);
+    assertSupported("tokenX", tokenXInfo);
+    assertSupported("tokenY", tokenYInfo);
+    assertNoTransferHookYet("tokenX", tokenXInfo);
+    assertNoTransferHookYet("tokenY", tokenYInfo);
+    const tokenXProgram = tokenXInfo.programId;
+    const tokenYProgram = tokenYInfo.programId;
+
+    const exitAtaX = getAssociatedTokenAddressSync(
+      tokenX, exitRecipient, false, tokenXProgram,
+    );
+    const exitAtaY = getAssociatedTokenAddressSync(
+      tokenY, exitRecipient, false, tokenYProgram,
+    );
     const createExitAtaXIx = createAssociatedTokenAccountIdempotentInstruction(
-      relayer.publicKey, exitAtaX, exitRecipient, tokenX,
+      relayer.publicKey, exitAtaX, exitRecipient, tokenX, tokenXProgram,
     );
     const createExitAtaYIx = createAssociatedTokenAccountIdempotentInstruction(
-      relayer.publicKey, exitAtaY, exitRecipient, tokenY,
+      relayer.publicKey, exitAtaY, exitRecipient, tokenY, tokenYProgram,
     );
 
     const positionPubkey = await this.fetchPositionFromAuthority(positionAuthority);
     const [reserveX] = deriveReserve(tokenX, lbPair, dlmm.programId);
     const [reserveY] = deriveReserve(tokenY, lbPair, dlmm.programId);
-
-    // MAINNET_BLOCKER: token_x_program / token_y_program hardcoded to classic
-    // SPL-Token. Token-2022 pools require per-side branching off
-    // `mintAccount.owner` plus matching ATA derivation. See docs/test-plan.md §14.
+    // v2 layout (remove_liquidity_by_range2 + close_position2):
+    // 0..14 = v2 remove_liquidity_by_range2 fixed slots; 15 =
+    // rent_receiver (read by close_position2); tail = hook accounts +
+    // bin arrays.
     const dlmmAccounts: AccountMeta[] = [
       { pubkey: positionPubkey, isSigner: false, isWritable: true },         // 0 position
       { pubkey: lbPair, isSigner: false, isWritable: true },                 // 1 lb_pair
@@ -434,18 +554,25 @@ export class LiquidityPlanner {
       { pubkey: reserveY, isSigner: false, isWritable: true },               // 6 reserve_y
       { pubkey: tokenX, isSigner: false, isWritable: false },                // 7 token_x_mint
       { pubkey: tokenY, isSigner: false, isWritable: false },                // 8 token_y_mint
-      { pubkey: binArrayLower, isSigner: false, isWritable: true },          // 9 bin_array_lower
-      { pubkey: binArrayUpper, isSigner: false, isWritable: true },          // 10 bin_array_upper
-      { pubkey: positionAuthority, isSigner: false, isWritable: false },     // 11 sender
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 12 token_x_program  // MAINNET_BLOCKER: Token-2022
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },      // 13 token_y_program  // MAINNET_BLOCKER: Token-2022
-      { pubkey: dlmm.eventAuthority, isSigner: false, isWritable: false },   // 14 event_authority
-      { pubkey: dlmm.programId, isSigner: false, isWritable: false },        // 15 program
-      { pubkey: exitRecipient, isSigner: false, isWritable: true },          // 16 rent_receiver
+      { pubkey: positionAuthority, isSigner: false, isWritable: false },     // 9 sender (re-pinned to PA)
+      { pubkey: tokenXProgram, isSigner: false, isWritable: false },         // 10 token_x_program
+      { pubkey: tokenYProgram, isSigner: false, isWritable: false },         // 11 token_y_program
+      { pubkey: MEMO_PROGRAM_ID, isSigner: false, isWritable: false },       // 12 memo_program
+      { pubkey: dlmm.eventAuthority, isSigner: false, isWritable: false },   // 13 event_authority
+      { pubkey: dlmm.programId, isSigner: false, isWritable: false },        // 14 program
+      { pubkey: exitRecipient, isSigner: false, isWritable: true },          // 15 rent_receiver
+      // tail: transfer-hook accounts + bin arrays.
+      { pubkey: binArrayLower, isSigner: false, isWritable: true },
+      { pubkey: binArrayUpper, isSigner: false, isWritable: true },
     ];
 
     const ix = await program.methods
-      .dlmmWithdrawClose(args.config.lowerBinId, args.config.upperBinId, 10000)
+      .dlmmWithdrawClose(
+        args.config.lowerBinId,
+        args.config.upperBinId,
+        10000,
+        EMPTY_REMAINING_ACCOUNTS_INFO,
+      )
       .accounts({
         stealth: args.stealth,
         poolAuthority: positionAuthority,

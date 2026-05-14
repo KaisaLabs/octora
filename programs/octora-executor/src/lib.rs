@@ -49,8 +49,16 @@ pub mod octora_executor {
 
     pub fn dlmm_claim_fees<'info>(
         ctx: Context<'_, '_, '_, 'info, DlmmClaimFees<'info>>,
+        min_bin_id: i32,
+        max_bin_id: i32,
+        remaining_accounts_info: Vec<u8>,
     ) -> Result<()> {
-        instructions::dlmm::claim_fees::handler(ctx)
+        instructions::dlmm::claim_fees::handler(
+            ctx,
+            min_bin_id,
+            max_bin_id,
+            remaining_accounts_info,
+        )
     }
 
     pub fn dlmm_withdraw_close<'info>(
@@ -58,21 +66,34 @@ pub mod octora_executor {
         from_bin_id: i32,
         to_bin_id: i32,
         bps_to_remove: u16,
+        remaining_accounts_info: Vec<u8>,
     ) -> Result<()> {
-        instructions::dlmm::withdraw_close::handler(ctx, from_bin_id, to_bin_id, bps_to_remove)
+        instructions::dlmm::withdraw_close::handler(
+            ctx,
+            from_bin_id,
+            to_bin_id,
+            bps_to_remove,
+            remaining_accounts_info,
+        )
     }
 
-    /// Pause-gated, slippage-enforced wrapper around Meteora DLMM `swap`.
+    /// Pause-gated, slippage-enforced wrapper around Meteora DLMM `swap2`.
     /// Used by the swap layer to convert SOL ↔ target token before LP, so any
-    /// DLMM pair (including memecoins) can be reached without per-token mixer
-    /// pools. Source pool must differ from the LP target pool — enforced by
-    /// the backend orchestrator, not this instruction.
+    /// DLMM pair (including memecoins, Token-2022) can be reached without
+    /// per-token mixer pools. Source pool must differ from the LP target pool
+    /// — enforced by the backend orchestrator, not this instruction.
     pub fn dlmm_swap<'info>(
         ctx: Context<'_, '_, '_, 'info, DlmmSwap<'info>>,
         amount_in: u64,
         min_amount_out: u64,
+        remaining_accounts_info: Vec<u8>,
     ) -> Result<()> {
-        instructions::dlmm::swap::handler(ctx, amount_in, min_amount_out)
+        instructions::dlmm::swap::handler(
+            ctx,
+            amount_in,
+            min_amount_out,
+            remaining_accounts_info,
+        )
     }
 
 }

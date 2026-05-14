@@ -41,7 +41,24 @@ pub fn handler<'info>(
 
     let pa = &ctx.accounts.pool_authority;
     let remaining = ctx.remaining_accounts;
-    require!(remaining.len() == 16, ExecutorError::AccountsTooShort);
+
+    // v2 layout (add_liquidity_by_strategy2):
+    //   fixed:    0 position, 1 lb_pair, 2 bin_array_bitmap_extension (sentinel
+    //             = DLMM program when None), 3 user_token_x, 4 user_token_y,
+    //             5 reserve_x, 6 reserve_y, 7 token_x_mint, 8 token_y_mint,
+    //             9 sender (PA — re-pinned below), 10 token_x_program,
+    //             11 token_y_program, 12 event_authority, 13 program.
+    //   tail:    transfer-hook accounts (variable, described by the
+    //            RemainingAccountsInfo embedded in `liquidity_params`),
+    //            followed by bin_array_lower, bin_array_upper.
+    //
+    // The caller passes the full v2 payload bytes (LiquidityParameterByStrategy
+    // borsh + RemainingAccountsInfo borsh) as `liquidity_params`; the executor
+    // is opaque to its contents.
+    //
+    // Minimum total = 14 fixed + 2 bin arrays = 16. With hooks the count
+    // grows but the bin arrays still sit at the tail.
+    require!(remaining.len() >= 16, ExecutorError::AccountsTooShort);
 
     match &pa.pool_ref {
         PoolRef::Dlmm {
@@ -68,19 +85,20 @@ pub fn handler<'info>(
         ExecutorError::LbPairMismatch
     );
 
-    require_token_account_mint(&remaining[3], &remaining[12], &remaining[7].key())?;
-    require_token_account_mint(&remaining[4], &remaining[13], &remaining[8].key())?;
-    require_spl_token_program(&remaining[12])?;
-    require_spl_token_program(&remaining[13])?;
-    require_dlmm_event_authority(&remaining[14])?;
-    require_dlmm_program(&remaining[15])?;
+    require_token_account_mint(&remaining[3], &remaining[10], &remaining[7].key())?;
+    require_token_account_mint(&remaining[4], &remaining[11], &remaining[8].key())?;
+    require_spl_token_program(&remaining[10])?;
+    require_spl_token_program(&remaining[11])?;
+    require_dlmm_event_authority(&remaining[12])?;
+    require_dlmm_program(&remaining[13])?;
 
     let pa_key = pa.key();
     let metas: Vec<AccountMeta> = remaining
         .iter()
         .enumerate()
         .map(|(i, ai)| {
-            if i == 11 {
+            // v2 sender at slot 9 (was 11 in v1).
+            if i == 9 {
                 AccountMeta {
                     pubkey: pa_key,
                     is_signer: true,
@@ -96,7 +114,7 @@ pub fn handler<'info>(
         })
         .collect();
 
-    let ix = build_dlmm_ix("add_liquidity_by_strategy", metas, liquidity_params);
+    let ix = build_dlmm_ix("add_liquidity_by_strategy2", metas, liquidity_params);
 
     let stealth_key = ctx.accounts.stealth.key();
     let bump = pa.bump;
@@ -111,10 +129,10 @@ pub fn handler<'info>(
         &[bump],
     ];
 
-    // Fix #4: CPI signer re-pinning
+    // Fix #4: CPI signer re-pinning at v2 sender slot 9.
     let pa_info = ctx.accounts.pool_authority.to_account_info();
     let mut infos: Vec<AccountInfo> = remaining.to_vec();
-    infos[11] = pa_info;
+    infos[9] = pa_info;
     invoke_dlmm_signed(&ix, &infos, &[signer_seeds])?;
 
     msg!(

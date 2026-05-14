@@ -43,6 +43,7 @@ pub fn handler<'info>(
     from_bin_id: i32,
     to_bin_id: i32,
     bps_to_remove: u16,
+    remaining_accounts_info: Vec<u8>,
 ) -> Result<()> {
     require!(from_bin_id <= to_bin_id, ExecutorError::ArgOutOfRange);
     require!(
@@ -53,7 +54,20 @@ pub fn handler<'info>(
 
     let pa = &ctx.accounts.pool_authority;
     let remaining = ctx.remaining_accounts;
-    require!(remaining.len() == 17, ExecutorError::AccountsTooShort);
+
+    // v2 layout:
+    //   0 position, 1 lb_pair, 2 bin_array_bitmap_extension (sentinel),
+    //   3 user_token_x, 4 user_token_y, 5 reserve_x, 6 reserve_y,
+    //   7 token_x_mint, 8 token_y_mint, 9 sender (PA — re-pinned),
+    //   10 token_x_program, 11 token_y_program, 12 memo_program,
+    //   13 event_authority, 14 program,
+    //   15 rent_receiver (= exit_recipient — caller-supplied; second CPI
+    //      to close_position2 reads it from this slot).
+    //   tail: transfer-hook accounts (described by `remaining_accounts_info`)
+    //         followed by bin_array_lower, bin_array_upper.
+    //
+    // Minimum total = 15 v2 fixed slots + 1 rent_receiver + 2 bin arrays = 18.
+    require!(remaining.len() >= 18, ExecutorError::AccountsTooShort);
 
     let (stored_lb_pair, stored_position) = match &pa.pool_ref {
         PoolRef::Dlmm { lb_pair, position } => (*lb_pair, *position),
@@ -72,24 +86,24 @@ pub fn handler<'info>(
     );
     require_token_account_owner(&remaining[3], &pa.exit_recipient)?;
     require_token_account_owner(&remaining[4], &pa.exit_recipient)?;
-    require_token_account_mint(&remaining[3], &remaining[12], &remaining[7].key())?;
-    require_token_account_mint(&remaining[4], &remaining[13], &remaining[8].key())?;
-    require_spl_token_program(&remaining[12])?;
-    require_spl_token_program(&remaining[13])?;
-    require_dlmm_event_authority(&remaining[14])?;
-    require_dlmm_program(&remaining[15])?;
+    require_token_account_mint(&remaining[3], &remaining[10], &remaining[7].key())?;
+    require_token_account_mint(&remaining[4], &remaining[11], &remaining[8].key())?;
+    require_spl_token_program(&remaining[10])?;
+    require_spl_token_program(&remaining[11])?;
+    require_dlmm_event_authority(&remaining[13])?;
+    require_dlmm_program(&remaining[14])?;
     require_keys_eq!(
-        remaining[16].key(),
+        remaining[15].key(),
         pa.exit_recipient,
         ExecutorError::ExitRecipientMismatch
     );
     require_keys_neq!(
-        remaining[16].key(),
+        remaining[15].key(),
         remaining[0].key(),
         ExecutorError::PositionMismatch
     );
     require_keys_neq!(
-        remaining[16].key(),
+        remaining[15].key(),
         remaining[1].key(),
         ExecutorError::LbPairMismatch
     );
@@ -133,26 +147,44 @@ pub fn handler<'info>(
 
     let pa_info = ctx.accounts.pool_authority.to_account_info();
 
-    // CPI 1: remove_liquidity_by_range
-    let remove_indices: Vec<usize> = (0..=15).collect();
-    let remove_metas = build_metas(&remove_indices, 11);
-    let mut remove_args = Vec::with_capacity(10);
+    // CPI 1: remove_liquidity_by_range2. Pass v2 fixed slots 0..=14 plus
+    // every remaining account from 16..end (transfer hooks + bin arrays).
+    // Skip 15 (rent_receiver) — that account is for close_position2.
+    let mut remove_indices: Vec<usize> = (0..=14).collect();
+    remove_indices.extend(16..remaining.len());
+    let remove_metas = build_metas(&remove_indices, 9);
+    let mut remove_args =
+        Vec::with_capacity(4 + 4 + 2 + remaining_accounts_info.len());
     remove_args.extend_from_slice(&from_bin_id.to_le_bytes());
     remove_args.extend_from_slice(&to_bin_id.to_le_bytes());
     remove_args.extend_from_slice(&bps_to_remove.to_le_bytes());
-    let remove_ix = build_dlmm_ix("remove_liquidity_by_range", remove_metas, remove_args);
+    remove_args.extend_from_slice(&remaining_accounts_info);
+    let remove_ix = build_dlmm_ix("remove_liquidity_by_range2", remove_metas, remove_args);
 
-    let mut remove_infos: Vec<AccountInfo> = remaining.to_vec();
-    remove_infos[11] = pa_info.clone();
+    let mut remove_infos: Vec<AccountInfo> = remaining
+        .iter()
+        .enumerate()
+        .filter_map(|(i, ai)| {
+            if i == 15 {
+                None
+            } else {
+                Some(ai.clone())
+            }
+        })
+        .collect();
+    // After filtering out slot 15, sender (was at 9) keeps its index.
+    remove_infos[9] = pa_info.clone();
     invoke_dlmm_signed(&remove_ix, &remove_infos, &[signer_seeds])?;
 
-    // CPI 2: close_position
-    let close_indices = [0usize, 1, 9, 10, 11, 16, 14, 15];
-    let close_metas = build_metas(&close_indices, 11);
-    let close_ix = build_dlmm_ix("close_position", close_metas, Vec::new());
+    // CPI 2: close_position2 — position, sender (PA), rent_receiver,
+    // event_authority, program. Note close_position2 (v2) drops the
+    // bin_array_lower/upper slots that close_position (v1) required.
+    let close_indices = [0usize, 9, 15, 13, 14];
+    let close_metas = build_metas(&close_indices, 9);
+    let close_ix = build_dlmm_ix("close_position2", close_metas, Vec::new());
 
     let mut close_infos: Vec<AccountInfo> = remaining.to_vec();
-    close_infos[11] = pa_info;
+    close_infos[9] = pa_info;
     invoke_dlmm_signed(&close_ix, &close_infos, &[signer_seeds])?;
 
     msg!(

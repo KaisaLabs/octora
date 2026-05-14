@@ -57,35 +57,60 @@ export async function getPoolBins(
     throw new MeteoraApiError(404, `DLMM pool not found: ${err?.message ?? String(err)}`)
   }
 
-  const { activeBin, bins } = (await dlmm.getBinsAroundActiveBin(half, half)) as {
-    activeBin: number
-    bins: Array<{ binId: number; price: string; xAmount: any; yAmount: any }>
-  }
-
   const tokenXDecimals: number = dlmm.tokenX?.mint?.decimals ?? dlmm.tokenX?.decimals ?? 0
   const tokenYDecimals: number = dlmm.tokenY?.mint?.decimals ?? dlmm.tokenY?.decimals ?? 0
   const binStep: number = dlmm.lbPair?.binStep ?? 0
 
-  const out: LiquidityBin[] = bins.map((b) => {
-    const price = Number(b.price)
-    const x = decimalize(b.xAmount, tokenXDecimals)
-    const y = decimalize(b.yAmount, tokenYDecimals)
-    const liquidity = y + (Number.isFinite(price) ? x * price : 0)
-    return {
-      binId: b.binId,
-      price,
-      liquidity,
-      xAmount: bnToString(b.xAmount),
-      yAmount: bnToString(b.yAmount),
+  // Try the SDK's full bin-window read first. For fresh pools with only one
+  // bin array initialised, the SDK's outward walk can throw when it hits an
+  // un-allocated neighbour. Fall back to synthesising bins around the real
+  // on-chain `lbPair.activeId` so the UI still gets the correct active bin
+  // and a usable price axis — single-sided SOL deposits don't require any
+  // existing bin liquidity, only a correct active id.
+  try {
+    const { activeBin, bins } = (await dlmm.getBinsAroundActiveBin(half, half)) as {
+      activeBin: number
+      bins: Array<{ binId: number; price: string; xAmount: any; yAmount: any }>
     }
-  })
 
-  return {
-    address,
-    network,
-    activeBinId: activeBin,
-    binStep,
-    bins: out,
+    const out: LiquidityBin[] = bins.map((b) => {
+      const price = Number(b.price)
+      const x = decimalize(b.xAmount, tokenXDecimals)
+      const y = decimalize(b.yAmount, tokenYDecimals)
+      const liquidity = y + (Number.isFinite(price) ? x * price : 0)
+      return {
+        binId: b.binId,
+        price,
+        liquidity,
+        xAmount: bnToString(b.xAmount),
+        yAmount: bnToString(b.yAmount),
+      }
+    })
+
+    return { address, network, activeBinId: activeBin, binStep, bins: out }
+  } catch (err: any) {
+    const activeBin = Number(dlmm.lbPair?.activeId ?? 0)
+    if (!Number.isFinite(activeBin)) {
+      throw new MeteoraApiError(
+        502,
+        `Failed to read bins for ${address}: ${err?.message ?? String(err)}`,
+      )
+    }
+    const decimalAdj = Math.pow(10, tokenXDecimals - tokenYDecimals)
+    const ratio = 1 + binStep / 10_000
+    const out: LiquidityBin[] = []
+    for (let i = -half; i <= half; i++) {
+      const binId = activeBin + i
+      const price = Math.pow(ratio, binId) * decimalAdj
+      out.push({
+        binId,
+        price,
+        liquidity: 0,
+        xAmount: '0',
+        yAmount: '0',
+      })
+    }
+    return { address, network, activeBinId: activeBin, binStep, bins: out }
   }
 }
 

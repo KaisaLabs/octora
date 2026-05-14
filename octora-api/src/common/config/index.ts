@@ -92,14 +92,21 @@ export function loadConfig(): AppConfig {
     otelExporterEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim() || null,
     otelServiceName: process.env.OTEL_SERVICE_NAME?.trim() || 'octora-api',
     recoveryWorkerEnabled: process.env.OCTORA_RECOVERY_WORKER_ENABLED !== 'false',
+    // Per-network RPC for on-chain DLMM reads. Each network must resolve to
+    // an RPC that actually hosts that cluster — falling back to
+    // `executorRpcUrl` here was a footgun, because the executor RPC is
+    // typically localnet/devnet during dev. A mainnet bin read against a
+    // localnet RPC returns "Invalid account discriminator" for every
+    // mainnet pool, so the frontend ends up in MODELED fallback for every
+    // pool in the discovery list. Only `localnet` is allowed to share with
+    // `solanaRpcUrl`, since both intentionally point at the same dev
+    // validator.
     dlmmRpcUrls: {
       mainnet:
         process.env.OCTORA_DLMM_RPC_URL_MAINNET?.trim() ||
-        executorRpcUrl ||
         'https://api.mainnet-beta.solana.com',
       devnet:
         process.env.OCTORA_DLMM_RPC_URL_DEVNET?.trim() ||
-        executorRpcUrl ||
         'https://api.devnet.solana.com',
       localnet:
         process.env.OCTORA_DLMM_RPC_URL_LOCALNET?.trim() ||
