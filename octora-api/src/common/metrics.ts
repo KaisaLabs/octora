@@ -1,7 +1,8 @@
-import { Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 
 import type { AppConfig } from "./config";
 import type { HttpTimingRegistry, HttpTimingSnapshot } from "./http/timing";
+import type { SolanaChain } from "./solana/chain.js";
 import type { PositionRepository } from "#modules/positions/position.repository";
 import { TERMINAL_POSITION_STATES } from "#modules/positions/position.repository";
 import {
@@ -58,10 +59,11 @@ const MIXER_POOL_SEED = Buffer.from("mixer_pool");
 export async function collectMetrics(
   positionRepo: PositionRepository,
   config: AppConfig,
+  chain: SolanaChain,
   httpTiming?: HttpTimingRegistry,
 ): Promise<MetricsSnapshot> {
   const [mixer, positions] = await Promise.all([
-    collectMixer(config).catch(() => null),
+    collectMixer(chain, config).catch(() => null),
     collectPositions(positionRepo),
   ]);
   return {
@@ -73,17 +75,19 @@ export async function collectMetrics(
   };
 }
 
-async function collectMixer(config: AppConfig): Promise<MixerMetrics | null> {
+export async function collectMixer(
+  chain: SolanaChain,
+  config: AppConfig,
+): Promise<MixerMetrics | null> {
   const programId = new PublicKey(config.mixerProgramId);
   const denomBytes = Buffer.alloc(8);
   denomBytes.writeBigUInt64LE(config.mixerDenomination);
   const [poolPda] = PublicKey.findProgramAddressSync([MIXER_POOL_SEED, denomBytes], programId);
 
-  const connection = new Connection(config.executorRpcUrl, "confirmed");
-  const accountInfo = await connection.getAccountInfo(poolPda);
+  const accountInfo = await chain.getAccountInfo(poolPda);
   if (!accountInfo) return null;
 
-  const balance = await connection.getBalance(poolPda);
+  const balance = await chain.getBalance(poolPda);
 
   // Layout offsets live in octora-api/src/modules/mixer/layout.ts.
   const data = accountInfo.data;

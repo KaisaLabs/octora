@@ -13,6 +13,8 @@ import { buildLoggerOptions, genReqId, initSentry, initTelemetry } from '#common
 import { registerErrorHandler } from '#common/errors'
 import { requireBetaAccess, requireWalletSignature } from '#common/auth'
 import { createRateLimiterFactoryFromConfig, type RateLimiterFactory } from '#common/ratelimit'
+import { LiveSolanaChain } from '#common/solana/live-chain'
+import type { SolanaChain } from '#common/solana/chain'
 import { createPrismaPositionRepository, type PositionRepository } from '#modules/positions/position.repository'
 import { createPrismaActivityRepository, type ActivityRepository } from '#modules/positions/activity.repository'
 import { createPrismaReconciliationRepository, type ReconciliationRepository } from '#modules/indexer/indexer.repository'
@@ -120,6 +122,16 @@ export async function createApp(options: CreateAppOptions = {}) {
     prismaClient = built.client
   }
 
+  // SolanaChain bag. Each entry wraps one RPC endpoint behind the
+  // `SolanaChain` seam. Today only the executor-side chain is wired in
+  // (used by /metrics); subsequent migrations move executor, relayer,
+  // and the per-network DLMM reads onto their own entries. Building
+  // them centrally here is the point — `new Connection(...)` should
+  // disappear from every caller.
+  const chains: { executor: SolanaChain } = {
+    executor: new LiveSolanaChain({ rpcUrl: config.executorRpcUrl }),
+  }
+
   // Build the rate-limiter factory once at boot. Memory by default;
   // Redis when `RATE_LIMITER=redis` so multiple replicas share one
   // ceiling. Routes get the factory and create their own per-family
@@ -197,7 +209,7 @@ export async function createApp(options: CreateAppOptions = {}) {
       })
     }
     try {
-      const snapshot = await collectMetrics(repos.positionRepo, config, httpTiming)
+      const snapshot = await collectMetrics(repos.positionRepo, config, chains.executor, httpTiming)
       return reply.send(snapshot)
     } catch (err) {
       app.log.error({ err }, '/metrics: collection failed')
