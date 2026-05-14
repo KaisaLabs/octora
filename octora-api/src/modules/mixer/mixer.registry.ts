@@ -1,9 +1,10 @@
 import { PublicKey } from "@solana/web3.js";
 import { ValidationError } from "#common/errors";
+import type { SolanaChain } from "#common/solana/chain";
 import { MixerService } from "./mixer.service.js";
 
 export interface MixerRegistryConfig {
-  rpcUrl: string;
+  chain: SolanaChain;
   programId: PublicKey;
   denominations: bigint[];
 }
@@ -36,7 +37,7 @@ export class MixerRegistry {
       this.services.set(
         denomination.toString(),
         new MixerService({
-          rpcUrl: config.rpcUrl,
+          chain: config.chain,
           denomination,
           programId: config.programId,
         }),

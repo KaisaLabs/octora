@@ -279,7 +279,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   // consistent: the mixer routes hydrate it from chain at startup, and
   // the relayer route bumps it on every successful withdrawal.
   const mixerRegistry = new MixerRegistry({
-    rpcUrl: config.solanaRpcUrl,
+    chain: chains.cluster,
     programId: new PublicKey(config.mixerProgramId),
     denominations: config.mixerDenominations,
   })

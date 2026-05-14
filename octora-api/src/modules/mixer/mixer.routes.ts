@@ -6,12 +6,11 @@ import { rateLimitHook, type RateLimiterFactory } from "#common/ratelimit";
 import { loadConfig } from "#common/config";
 import type { SolanaChain } from "#common/solana/chain";
 
-// MAINNET_BLOCKER: default falls back to devnet. On mainnet deploy,
-// SOLANA_RPC_URL must be set explicitly to a real provider (Helius,
-// Triton, etc.) — public mainnet-beta rate-limits aggressively and
-// `getSignaturesForAddress` truncates under load. See docs/test-plan.md §14.
+// MAINNET_BLOCKER: the chain wired here (chains.cluster in app.ts) must
+// resolve to a real mainnet RPC provider on mainnet deploys. Public
+// `mainnet-beta` rate-limits aggressively and `getSignaturesForAddress`
+// truncates under load. See docs/test-plan.md §14.
 const appConfig = loadConfig();
-const RPC_URL = appConfig.solanaRpcUrl;
 
 const WRITE_LIMIT = { windowMs: 60_000, max: 30 };
 const READ_LIMIT = { windowMs: 60_000, max: 120 };
@@ -63,7 +62,7 @@ export async function registerMixerRoutes(
   const registry =
     opts.registry ??
     new MixerRegistry({
-      rpcUrl: RPC_URL,
+      chain: opts.chain,
       programId,
       denominations: opts.mixerDenominations,
     });

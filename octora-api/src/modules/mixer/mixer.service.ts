@@ -1,5 +1,5 @@
 import {
-  Connection,
+  type Connection,
   Keypair,
   PublicKey,
   SystemProgram,
@@ -7,7 +7,7 @@ import {
   ComputeBudgetProgram,
   type ConfirmedSignatureInfo,
 } from "@solana/web3.js";
-import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
+import { Program, Wallet } from "@coral-xyz/anchor";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,7 +72,7 @@ export class AnonymitySetTooThinError extends ApiError {
 }
 
 export interface MixerServiceConfig {
-  rpcUrl: string;
+  chain: SolanaChain;
   denomination: bigint;
   programId: PublicKey;
 }
@@ -101,6 +101,15 @@ interface BuildDepositArgs {
  *   - tracks which deposits the API has observed (best-effort cache)
  */
 export class MixerService {
+  private chain: SolanaChain;
+  /**
+   * Raw web3.js Connection — kept alongside `chain` because two paginated
+   * RPC reads inside `hydrateFromChain` (`getSignaturesForAddress` and
+   * `getTransaction`) are not on the `SolanaChain` interface. They're
+   * cold-path operational reads (one shot per boot) and adding them
+   * would widen the interface for a single caller. The Connection here
+   * is always `chain.rawConnection()`; do not build a fresh one.
+   */
   private connection: Connection;
   private denomination: bigint;
   private programId: PublicKey;
@@ -122,7 +131,8 @@ export class MixerService {
   private knownNullifiers = new Set<string>();
 
   constructor(config: MixerServiceConfig) {
-    this.connection = new Connection(config.rpcUrl, "confirmed");
+    this.chain = config.chain;
+    this.connection = this.chain.rawConnection();
     this.denomination = config.denomination;
     this.programId = config.programId;
 
@@ -136,7 +146,7 @@ export class MixerService {
     // Read-only provider — we never sign on the server.
     const dummyKeypair = Keypair.generate();
     const wallet = new Wallet(dummyKeypair);
-    const provider = new AnchorProvider(this.connection, wallet, { commitment: "confirmed" });
+    const provider = this.chain.anchorProvider(wallet);
     const idl = JSON.parse(readFileSync(IDL_PATH, "utf-8"));
     idl.address = this.programId.toBase58();
     this.program = new Program(idl, provider);
@@ -176,7 +186,7 @@ export class MixerService {
 
     const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
 
-    const { blockhash } = await this.connection.getLatestBlockhash("confirmed");
+    const { blockhash } = await this.chain.getLatestBlockhash("confirmed");
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: depositor });
     tx.add(computeIx, ix);
 
@@ -446,7 +456,7 @@ export class MixerService {
 
     const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
 
-    const { blockhash } = await this.connection.getLatestBlockhash("confirmed");
+    const { blockhash } = await this.chain.getLatestBlockhash("confirmed");
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: signer });
     tx.add(computeIx, ix);
 
@@ -468,10 +478,10 @@ export class MixerService {
     depositsTracked: number;
   } | null> {
     try {
-      const accountInfo = await this.connection.getAccountInfo(this.poolPDA);
+      const accountInfo = await this.chain.getAccountInfo(this.poolPDA);
       if (!accountInfo) return null;
 
-      const balance = await this.connection.getBalance(this.poolPDA);
+      const balance = await this.chain.getBalance(this.poolPDA);
 
       // Layout offsets are defined in ./layout.ts and must stay in lockstep
       // with programs/octora-mixer/src/state.rs::MixerPool.
@@ -568,7 +578,7 @@ export class MixerService {
       })
       .instruction();
 
-    const { blockhash } = await this.connection.getLatestBlockhash("confirmed");
+    const { blockhash } = await this.chain.getLatestBlockhash("confirmed");
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: authority });
     tx.add(ix);
 
@@ -600,7 +610,7 @@ export class MixerService {
    * `POST /mixer/initialize` once for the configured denomination.
    */
   async assertPoolInitialized(): Promise<void> {
-    const acct = await this.connection.getAccountInfo(this.poolPDA);
+    const acct = await this.chain.getAccountInfo(this.poolPDA);
     if (!acct) throw new MixerPoolNotInitializedError(this.denomination, this.poolPDA.toBase58());
   }
 }
