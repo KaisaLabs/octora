@@ -10,6 +10,7 @@ import {
   recordDepositSchema,
   lpFailedSchema,
   recoverFundsSchema,
+  remixClaimedFeesSchema,
 } from './position.schema'
 
 interface CreateIntentBody {
@@ -42,6 +43,13 @@ interface LpFailedBody {
 interface RecoverFundsBody {
   withdrawSignature?: string
   withdrawRecipient?: string
+}
+
+interface RemixClaimedFeesBody {
+  denomLamports: string
+  commitment?: string
+  leafIndex?: number
+  txSignature?: string
 }
 
 export interface PositionRoutesOptions extends PositionControllerDeps {
@@ -127,6 +135,31 @@ export async function registerPositionRoutes(app: FastifyInstance, options: Posi
       preHandler: mutatePreHandlers,
     },
     controller.withdrawClosePosition,
+  )
+
+  // close/05 — mid-position fee claim (no close). Builds + relayer-
+  // signs the fee-claim ix and emits an Activity Record. Position
+  // state stays `active`. 409 on non-`active` source state.
+  app.post<{ Params: PositionParams }>(
+    '/positions/:positionId/claim-fees',
+    {
+      schema: { ...positionParamsSchema, tags },
+      preHandler: mutatePreHandlers,
+    },
+    controller.claimMidPositionFees,
+  )
+
+  // close/05 — re-mix claimed SOL. Wraps the Flow 1 `mixer.deposit`
+  // machinery and tags the resulting Activity Record with
+  // `source: "fee-claim"`. Caller drives the actual deposit ix via
+  // /mixer/deposit; this endpoint records the outcome.
+  app.post<{ Params: PositionParams; Body: RemixClaimedFeesBody }>(
+    '/positions/:positionId/claim-fees/remix',
+    {
+      schema: { ...positionParamsSchema, ...remixClaimedFeesSchema, tags },
+      preHandler: mutatePreHandlers,
+    },
+    controller.remixClaimedFees,
   )
 
   // ── Deposit LP Fallback routes (dust/03 + ADR-0004) ────────────────

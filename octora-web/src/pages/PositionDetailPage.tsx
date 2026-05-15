@@ -43,6 +43,7 @@ import { PrivateClaimModal } from "@/components/octora/lp/PrivateClaimModal";
 import { PrivateExitModal } from "@/components/octora/lp/PrivateExitModal";
 import { PrivateRebalanceModal } from "@/components/octora/lp/PrivateRebalanceModal";
 import { StealthAddressDisplay } from "@/components/octora/lp/StealthAddressDisplay";
+import { EarnedFeesCard } from "@/components/octora/lp/EarnedFeesCard";
 
 interface Props {
   positions: PortfolioPosition[];
@@ -201,6 +202,14 @@ export function PositionDetailPage({ positions }: Props) {
       {/* P&L breakdown */}
       <Reveal delay={160}>
         <PnLBreakdownPanel position={position} />
+      </Reveal>
+
+      {/* close/05 — mid-position fee claim. Placed above the action
+          drawer so it stays region-disjoint from ticket 01's Close
+          button (lives inside `ActionDrawer`). Only renders when the
+          Position is `active`; the component self-gates. */}
+      <Reveal delay={200}>
+        <EarnedFeesCard position={position} positionState={position.status} />
       </Reveal>
 
       {/* Action drawer */}

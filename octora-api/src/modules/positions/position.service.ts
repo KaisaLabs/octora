@@ -47,6 +47,16 @@ import {
   type RecoverFundsUserSignedInput,
 } from "./position.recover.service";
 import {
+  claimMidPositionFees,
+  remixClaimedFees,
+  MidPositionFeeClaimStateError,
+  FeeClaimBelowThresholdError,
+  type ClaimMidPositionFeesInput,
+  type ClaimMidPositionFeesResult,
+  type RemixClaimedFeesInput,
+  type RemixClaimedFeesResult,
+} from "./position.fee-claim.service";
+import {
   BetaCapExceededError,
   DEFAULT_BETA_CAPS,
   type PositionResponse,
@@ -58,6 +68,8 @@ export {
   UnsupportedPositionActionError,
   DepositLpStateTransitionError,
   InvalidRecoveryStateError,
+  MidPositionFeeClaimStateError,
+  FeeClaimBelowThresholdError,
 };
 export type { PositionResponse };
 export type {
@@ -67,6 +79,10 @@ export type {
   WithdrawClosePositionInput,
   RecordDepositInput,
   RecoverFundsUserSignedInput,
+  ClaimMidPositionFeesInput,
+  ClaimMidPositionFeesResult,
+  RemixClaimedFeesInput,
+  RemixClaimedFeesResult,
 };
 export type {
   PositionSessionState,
@@ -159,6 +175,24 @@ export function createPositionService(deps: PositionServiceDependencies) {
     },
     withdrawClosePosition(input: WithdrawClosePositionInput): Promise<PositionResponse> {
       return withdrawClosePosition(positionRepo, activityService, privacyAdapter, meteoraExecutor, input);
+    },
+    /**
+     * close/05 — mid-position fee claim. Builds + relayer-signs
+     * `dlmm_claim_fees`, lands fees in the Stealth Wallet, emits an
+     * Activity Record at `active`. Position state does NOT change.
+     */
+    claimMidPositionFees(input: ClaimMidPositionFeesInput): Promise<ClaimMidPositionFeesResult> {
+      return claimMidPositionFees(positionRepo, activityService, meteoraExecutor, input);
+    },
+    /**
+     * close/05 — re-mix the claimed SOL. Wraps the existing Flow 1
+     * `mixer.deposit` machinery and tags the Activity Record with
+     * `source: "fee-claim"`. The deposit ix is built via the existing
+     * /mixer/deposit endpoint; this endpoint records the outcome so
+     * the audit trail links the claim → re-mix → fresh Commitment.
+     */
+    remixClaimedFees(input: RemixClaimedFeesInput): Promise<RemixClaimedFeesResult> {
+      return remixClaimedFees(positionRepo, activityService, input);
     },
     getPosition(positionId: string): Promise<PositionResponse> {
       return getPosition(positionRepo, activityService, positionIndexer, positionId);
