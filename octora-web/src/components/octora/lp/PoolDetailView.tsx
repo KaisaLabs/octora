@@ -10,7 +10,7 @@ import { PrivateDepositModal } from "@/components/octora/lp/PrivateDepositModal"
 import { AnonymityBadge } from "@/components/octora/lp/AnonymityBadge";
 import { StealthRiskDisclosure } from "@/components/octora/lp/StealthRiskDisclosure";
 import { usePoolBins } from "@/hooks/usePoolBins";
-import { getPrices } from "@/lib/api";
+import { usePrices } from "@/hooks/usePrices";
 
 interface Props {
   pool: Pool;
@@ -121,40 +121,25 @@ function DepositPanel({
   selectedDenomLamports: string | null;
   onChangeDenom: (lamports: string, anonymitySet: number) => void;
 }) {
-  const { bins, activeBinId, isLoading: binsLoading, isFallback } = usePoolBins(pool, 61);
+  const { bins, activeBinId, isLoading: binsLoading, isFallback } = usePoolBins(pool, 61, {
+    refetchInterval: 10_000,
+  });
 
   const [shape, setShape] = useState<DistributionShape>(presetShape ?? "curve");
   const [depositOpen, setDepositOpen] = useState(false);
   const [riskAck, setRiskAck] = useState(false);
 
-  // SOL/USD price drives the summary calculations (entry fee, daily est, etc.)
-  // since the user now picks SOL amount instead of USD freetext. Falls back
-  // to a sensible devnet value when /api/prices doesn't know SOL.
-  // `quoteUsdPrice` is the USD price of the pool's quote token (tokenY) —
-  // used to convert the DLMM bin price (tokenY-per-tokenX) into USD-per-X
-  // so the detail page reads in the same denomination as discovery's
-  // LIVE PRICE column.
-  const [solUsdPrice, setSolUsdPrice] = useState<number>(200);
-  const [quoteUsdPrice, setQuoteUsdPrice] = useState<number>(0);
-  useEffect(() => {
-    let cancelled = false;
-    const mints = Array.from(new Set([SOL_MINT, pool.tokenBMint])).filter(Boolean);
-    getPrices(mints)
-      .then((prices) => {
-        if (cancelled) return;
-        const sol = prices[SOL_MINT]?.usdPrice;
-        if (sol && sol > 0) setSolUsdPrice(sol);
-        const quote = prices[pool.tokenBMint]?.usdPrice;
-        if (quote && quote > 0) setQuoteUsdPrice(quote);
-      })
-      .catch(() => {
-        // Keep the $200 fallback — summary numbers are guidance, not
-        // settlement, so a missing oracle quote shouldn't block the flow.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [pool.tokenBMint]);
+  // SOL/USD price drives the summary calculations (entry fee, daily est, etc.).
+  // `quoteUsdPrice` is the USD price of tokenY, used to convert the DLMM bin
+  // price (tokenY-per-tokenX) into USD-per-X. Both polled live so the header
+  // stat cards and the active-price readout track the market in real time.
+  const priceMints = useMemo(
+    () => Array.from(new Set([SOL_MINT, pool.tokenBMint])).filter(Boolean),
+    [pool.tokenBMint],
+  );
+  const pricesQuery = usePrices(priceMints, { refetchInterval: 5_000 });
+  const solUsdPrice = pricesQuery.data?.[SOL_MINT]?.usdPrice ?? 200;
+  const quoteUsdPrice = pricesQuery.data?.[pool.tokenBMint]?.usdPrice ?? 0;
 
   // Derived USD value drives the existing summary / projection block + the
   // PrivateDepositModal's preview UI without us having to refactor that
@@ -203,6 +188,29 @@ function DepositPanel({
   const lowerPct = activePrice ? ((lowerPrice - activePrice) / activePrice) * 100 : 0;
   const upperPct = activePrice ? ((upperPrice - activePrice) / activePrice) * 100 : 0;
   const binsCovered = Math.max(0, range.upper - range.lower + 1);
+
+  // Pre-submit guard mirroring `planSingleSidedSol` on the backend: SOL is
+  // deposited single-sided, so the range must include at least one bin on
+  // the SOL side of active or every bin receives 0 SOL and the relayer
+  // rejects with a 400. Catch it here with an inline hint instead of
+  // letting the user click through and hit the cryptic backend error after
+  // they've already moved past the mixer deposit step.
+  const solIsTokenX = pool.tokenAMint === SOL_MINT;
+  const rangeError: { message: string; fix: () => void } | null = !binsLoading && !isFallback
+    ? solIsTokenX && range.upper < activeBinId
+      ? {
+          message:
+            "Range sits entirely below the active price. SOL bins live at or above active — every bin would receive 0 SOL. Drag the max handle above active.",
+          fix: () => setRangeClamped({ lower: activeBinId - 4, upper: activeBinId + 8 }),
+        }
+      : !solIsTokenX && range.lower > activeBinId
+        ? {
+            message:
+              "Range sits entirely above the active price. SOL bins live at or below active — every bin would receive 0 SOL. Drag the min handle below active.",
+            fix: () => setRangeClamped({ lower: activeBinId - 8, upper: activeBinId + 4 }),
+          }
+        : null
+    : null;
 
   const projection = useMemo(() => {
     const entryFee = depositUsd * (pool.feeBps / 10000);
@@ -264,6 +272,19 @@ function DepositPanel({
           onRangeChange={setRangeClamped}
           height={240}
         />
+
+        {rangeError && (
+          <div className="mt-3 flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-[11px] leading-5 text-amber-200 sm:flex-row sm:items-center sm:justify-between">
+            <span>{rangeError.message}</span>
+            <button
+              type="button"
+              onClick={rangeError.fix}
+              className="self-start rounded border border-amber-400/50 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-100 transition-colors hover:bg-amber-500/20 sm:self-auto"
+            >
+              Snap around active
+            </button>
+          </div>
+        )}
 
         <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
           <RangeReadout
@@ -342,15 +363,18 @@ function DepositPanel({
               !riskAck ||
               range.upper < range.lower ||
               isFallback ||
-              binsLoading
+              binsLoading ||
+              rangeError !== null
             }
           >
             {binsLoading
               ? "Loading bins…"
               : isFallback
                 ? "Live bins unavailable"
-                : "Deposit privately"}
-            {!binsLoading && !isFallback && <ArrowRight />}
+                : rangeError
+                  ? "Adjust range first"
+                  : "Deposit privately"}
+            {!binsLoading && !isFallback && !rangeError && <ArrowRight />}
           </Button>
           <p className="mt-3 text-xs leading-5 text-muted-foreground">
             Routed via Octora's private relayer. Origin wallet stays hidden.
@@ -518,11 +542,22 @@ function OutcomeRow({ label, value, accent }: { label: string; value: string; ac
  */
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "/api";
 
+// Denominations the backend exposes but the deposit path can't honour yet.
+// Render them disabled-with-explanation rather than hiding so the ladder
+// shape ({0.1, 1, 5, 10} SOL) stays legible (per feedback_truthful_ui.md).
+const UNSUPPORTED_DENOM_LAMPORTS = new Set<string>(["5000000000"]);
+const UNSUPPORTED_DENOM_REASON = "5 SOL deposits aren't supported yet — coming soon.";
+
 interface MixerPoolEntry {
   denomination: string;
   initialized?: boolean;
   anonymitySet?: number;
   isPaused?: boolean;
+}
+
+interface PickerPool extends MixerPoolEntry {
+  usable: boolean;
+  disabledReason: string | null;
 }
 
 function SolDenominationPicker({
@@ -532,7 +567,7 @@ function SolDenominationPicker({
   value: string | null;
   onChange: (lamports: string, anonymitySet: number) => void;
 }) {
-  const [pools, setPools] = useState<MixerPoolEntry[] | null>(null);
+  const [pools, setPools] = useState<PickerPool[] | null>(null);
   const [anonymitySetMin, setAnonymitySetMin] = useState(20);
   const [error, setError] = useState<string | null>(null);
 
@@ -547,19 +582,40 @@ function SolDenominationPicker({
         if (cancelled) return;
         const min = data.anonymitySetMin ?? 20;
         setAnonymitySetMin(min);
-        const activePools = (data.pools ?? []).filter(
-          (p) =>
-            p.initialized !== false &&
-            p.isPaused !== true &&
-            (p.anonymitySet ?? 0) >= min,
-        );
-        setPools(activePools);
+        const viewPools: PickerPool[] = (data.pools ?? [])
+          .filter((p) => p.initialized !== false)
+          .map((p) => {
+            if (UNSUPPORTED_DENOM_LAMPORTS.has(p.denomination)) {
+              return { ...p, usable: false, disabledReason: UNSUPPORTED_DENOM_REASON };
+            }
+            if (p.isPaused) {
+              return {
+                ...p,
+                usable: false,
+                disabledReason: "Pool is paused by admin — deposits and withdrawals are disabled.",
+              };
+            }
+            const anonymitySet = p.anonymitySet ?? 0;
+            if (anonymitySet < min) {
+              const need = Math.max(0, min - anonymitySet);
+              return {
+                ...p,
+                usable: false,
+                disabledReason: `Needs ${need} more deposit${need === 1 ? "" : "s"} before it's privacy-safe (current Anonymity Set: ${anonymitySet}, required: ${min}).`,
+              };
+            }
+            return { ...p, usable: true, disabledReason: null };
+          });
+        setPools(viewPools);
         // Auto-select largest "strong" pool when nothing chosen yet, so the
         // header allocation card and the projection numbers populate
-        // without the user having to click first.
-        if (!value && activePools.length > 0) {
-          const chosen = [...activePools].sort((a, b) => Number(b.denomination) - Number(a.denomination))[0]!;
-          onChange(chosen.denomination, chosen.anonymitySet ?? 0);
+        // without the user having to click first. Skip unsupported buckets.
+        if (!value) {
+          const usable = viewPools.filter((p) => p.usable);
+          if (usable.length > 0) {
+            const chosen = [...usable].sort((a, b) => Number(b.denomination) - Number(a.denomination))[0]!;
+            onChange(chosen.denomination, chosen.anonymitySet ?? 0);
+          }
         }
       })
       .catch((err) => {
@@ -598,16 +654,27 @@ function SolDenominationPicker({
     <div className="grid grid-cols-3 gap-2">
       {pools.map((pool) => {
         const selected = pool.denomination === value;
+        const disabled = !pool.usable;
         return (
           <button
             key={pool.denomination}
             type="button"
-            onClick={() => onChange(pool.denomination, pool.anonymitySet ?? 0)}
+            disabled={disabled}
+            aria-disabled={disabled}
+            title={pool.disabledReason ?? undefined}
+            onClick={() => {
+              if (disabled) return;
+              onChange(pool.denomination, pool.anonymitySet ?? 0);
+            }}
+            data-testid={`denom-${pool.denomination}`}
+            data-usable={pool.usable ? "true" : "false"}
             className={[
               "flex flex-col items-stretch gap-1.5 rounded-xl border px-3 py-3 text-left transition-colors",
-              selected
-                ? "border-primary bg-primary/10 text-foreground"
-                : "border-border bg-card/60 text-muted-foreground hover:border-border hover:text-foreground",
+              disabled
+                ? "cursor-not-allowed border-border/40 bg-card/20 text-muted-foreground opacity-60"
+                : selected
+                  ? "border-primary bg-primary/10 text-foreground"
+                  : "border-border bg-card/60 text-muted-foreground hover:border-border hover:text-foreground",
             ].join(" ")}
           >
             <span className="font-mono text-base font-semibold tabular-nums">

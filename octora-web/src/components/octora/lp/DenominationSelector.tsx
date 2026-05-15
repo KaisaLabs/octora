@@ -47,6 +47,12 @@ interface PoolViewEntry extends MixerPoolEntry {
   disabledReason: string | null;
 }
 
+// Denominations the backend exposes but the deposit path can't honour yet.
+// Render disabled-with-explanation rather than hiding so the ladder shape
+// ({0.1, 1, 5, 10} SOL) stays legible (per feedback_truthful_ui.md).
+const UNSUPPORTED_DENOM_LAMPORTS = new Set<string>(["5000000000"]);
+const UNSUPPORTED_DENOM_REASON = "5 SOL deposits aren't supported yet — coming soon.";
+
 export function DenominationSelector({ value, onChange, enabled = true }: Props) {
   const [pools, setPools] = useState<PoolViewEntry[] | null>(null);
   const [anonymitySetMin, setAnonymitySetMin] = useState(20);
@@ -76,6 +82,9 @@ export function DenominationSelector({ value, onChange, enabled = true }: Props)
         const viewPools: PoolViewEntry[] = (data.pools ?? [])
           .filter((p) => p.initialized !== false)
           .map((p) => {
+            if (UNSUPPORTED_DENOM_LAMPORTS.has(p.denomination)) {
+              return { ...p, usable: false, disabledReason: UNSUPPORTED_DENOM_REASON };
+            }
             const anonymitySet = p.anonymitySet ?? 0;
             if (p.isPaused) {
               return {

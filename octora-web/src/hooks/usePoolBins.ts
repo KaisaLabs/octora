@@ -12,11 +12,21 @@ export interface UsePoolBinsResult {
   error: Error | null;
 }
 
+export interface UsePoolBinsOptions {
+  /** Polling interval in ms. Set to `false` (default) to fetch once. */
+  refetchInterval?: number | false;
+}
+
 /**
  * Fetch on-chain bin liquidity for a DLMM pool. While loading or on error,
  * fall back to a deterministic synthetic distribution so the UI never goes blank.
  */
-export function usePoolBins(pool: Pool, count = 61): UsePoolBinsResult {
+export function usePoolBins(
+  pool: Pool,
+  count = 61,
+  opts: UsePoolBinsOptions = {},
+): UsePoolBinsResult {
+  const { refetchInterval = false } = opts;
   const synthetic = useMemo(() => synthesizeBins(pool, { count }), [pool, count]);
   const syntheticActive = synthetic[Math.floor(synthetic.length / 2)]?.binId ?? 0;
 
@@ -24,8 +34,10 @@ export function usePoolBins(pool: Pool, count = 61): UsePoolBinsResult {
     queryKey: ["pool-bins", pool.address, count],
     queryFn: () => getPoolBins(pool.address, { network: NETWORK, count }),
     enabled: Boolean(pool.address),
-    staleTime: 30_000,
-    refetchOnWindowFocus: false,
+    staleTime: refetchInterval === false ? 30_000 : refetchInterval,
+    refetchInterval,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: refetchInterval !== false,
     retry: 1,
   });
 
