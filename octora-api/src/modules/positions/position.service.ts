@@ -49,8 +49,15 @@ import {
 import {
   createCloseService,
   CloseStateTransitionError,
+  DEFAULT_CLOSE_SLIPPAGE_BPS,
   type CloseOrchestrationAdapter,
+  type CloseInitiateOptions,
 } from "./position.close.service";
+import {
+  createCloseQuoteService,
+  type CloseQuoteAdapter,
+  type CloseQuoteResponse,
+} from "./position.close-quote.service";
 import {
   claimMidPositionFees,
   remixClaimedFees,
@@ -76,8 +83,13 @@ export {
   CloseStateTransitionError,
   MidPositionFeeClaimStateError,
   FeeClaimBelowThresholdError,
+  // close/02 — re-exported so the controller's schema/route handlers
+  // (and tests) can reference the canonical slippage default.
+  DEFAULT_CLOSE_SLIPPAGE_BPS,
 };
-export type { CloseOrchestrationAdapter };
+export type { CloseOrchestrationAdapter, CloseInitiateOptions };
+// close/02 — exported so app.ts + tests can wire a CloseQuoteAdapter.
+export type { CloseQuoteAdapter, CloseQuoteResponse };
 export type { PositionResponse };
 export type {
   CreateDraftPositionIntentInput,
@@ -116,6 +128,13 @@ export interface PositionServiceDependencies {
    * supply an in-memory adapter to exercise the orchestrator.
    */
   closeAdapter?: CloseOrchestrationAdapter;
+  /**
+   * close/02 — Adapter for the pre-flight `GET /close-quote` reads.
+   * Same scope-down as `closeAdapter`: optional, so production
+   * deployments without a live wiring reject cleanly while tests
+   * inject an in-memory adapter to exercise the route.
+   */
+  closeQuoteAdapter?: CloseQuoteAdapter;
 }
 
 export function createPositionService(deps: PositionServiceDependencies) {
@@ -133,6 +152,14 @@ export function createPositionService(deps: PositionServiceDependencies) {
     positionRepo,
     activityService,
     adapter: deps.closeAdapter,
+  });
+  // close/02 — quote service. Separate from `closeFlow` because the
+  // quote is read-only + adapter-shaped differently (no state-machine
+  // driver methods). Same scope-down: omitting the adapter makes the
+  // route reject cleanly in production.
+  const closeQuote = createCloseQuoteService({
+    positionRepo,
+    adapter: deps.closeQuoteAdapter,
   });
 
   return {
@@ -199,9 +226,26 @@ export function createPositionService(deps: PositionServiceDependencies) {
      * close/01 entry point — drive an `active` Position through the
      * three-tx Private Position Close mainline. Throws
      * `CloseStateTransitionError` from a non-`active` source state.
+     *
+     * close/02 — `opts.slippageBps` + `opts.expectedSwapOutLamports`
+     * thread the user's slippage tolerance through to the swap leg.
+     * Both are optional so callers that bypass the close-quote
+     * pre-flight (legacy / tests) still work.
      */
-    closePosition(positionId: string): Promise<PositionResponse> {
-      return closeFlow.initiateClose(positionId);
+    closePosition(
+      positionId: string,
+      opts: CloseInitiateOptions = {},
+    ): Promise<PositionResponse> {
+      return closeFlow.initiateClose(positionId, opts);
+    },
+    /**
+     * close/02 — pre-flight `GET /close-quote` entry point. Reads
+     * on-chain DLMM state (via the wired `CloseQuoteAdapter`), runs
+     * the close/04 mint precheck, and returns the structured preview
+     * shape the close confirmation modal renders.
+     */
+    closeQuote(positionId: string): Promise<CloseQuoteResponse> {
+      return closeQuote.quote(positionId);
     },
     /**
      * close/05 — mid-position fee claim. Builds + relayer-signs

@@ -50,6 +50,12 @@ interface RecoverFundsBody {
   withdrawRecipient?: string
 }
 
+// close/02 — body shape for the close-endpoint extension.
+interface ClosePositionBody {
+  slippageBps?: number
+  expectedSwapOutLamports?: string
+}
+
 interface RemixClaimedFeesBody {
   /** Mixer Pool denomination (lamports decimal-string). */
   denomLamports: string
@@ -187,12 +193,34 @@ export function createPositionController(deps: PositionControllerDeps) {
      * in `active` (typed `CloseStateTransitionError`); the orchestrator
      * stamps the matching `*_FAILED` terminal on any leg failure and
      * returns the response with Recovery Guidance baked in.
+     *
+     * close/02 — accepts optional `{ slippageBps, expectedSwapOutLamports }`
+     * body that the orchestrator threads into the swap leg. Schema
+     * (`closePositionBodySchema`) enforces the [10, 500] bps range, so
+     * the controller never sees out-of-range values; the default lives
+     * in `DEFAULT_CLOSE_SLIPPAGE_BPS`.
      */
-    async closePosition(request: FastifyRequest<{ Params: PositionParams }>, reply: FastifyReply) {
+    async closePosition(
+      request: FastifyRequest<{ Params: PositionParams; Body: ClosePositionBody | null }>,
+      reply: FastifyReply,
+    ) {
       const wallet = await requirePositionOwner(request, reply)
       if (!wallet) return
+      const body = request.body ?? {}
+      const opts: { slippageBps?: number; expectedSwapOutLamports?: bigint | null } = {}
+      if (typeof body.slippageBps === 'number') opts.slippageBps = body.slippageBps
+      if (typeof body.expectedSwapOutLamports === 'string') {
+        try {
+          opts.expectedSwapOutLamports = BigInt(body.expectedSwapOutLamports)
+        } catch {
+          return reply.code(422).send({
+            error: 'ValidationError',
+            message: 'expectedSwapOutLamports must be a base-10 lamports integer string.',
+          })
+        }
+      }
       try {
-        const response = await service.closePosition(request.params.positionId)
+        const response = await service.closePosition(request.params.positionId, opts)
         return reply.send(response)
       } catch (error) {
         if (isPositionNotFoundError(error)) {
@@ -200,6 +228,33 @@ export function createPositionController(deps: PositionControllerDeps) {
         }
         if (error instanceof CloseStateTransitionError) {
           return reply.code(409).send({ error: 'StateTransitionRejected', message: error.message })
+        }
+        throw error
+      }
+    },
+
+    // ── close/02 ────────────────────────────────────────────────────
+    /**
+     * close/02 — `GET /positions/:positionId/close-quote`. Returns the
+     * structured preview shape: estimated post-close balances, the
+     * conditional swap preview (omitted when there's no non-SOL
+     * residual above dust), denomination, and sub-denom dust amount.
+     * Reshapes `UnsupportedMintExtensionError` (close/04) into the
+     * documented `closeable: false, reason: "unsupported_mint"` body
+     * so the frontend's `useCanClosePosition` hook can render the
+     * disabled-Close v2 badge without an extra round-trip.
+     */
+    async closeQuote(request: FastifyRequest<{ Params: PositionParams }>, reply: FastifyReply) {
+      // Read-only: no wallet auth required — the close-quote endpoint
+      // is the symmetric pair of `GET /positions/:id`, which is also
+      // public. The actual close (mutating) endpoint stays
+      // wallet-gated.
+      try {
+        const response = await service.closeQuote(request.params.positionId)
+        return reply.send(response)
+      } catch (error) {
+        if (isPositionNotFoundError(error)) {
+          return reply.code(404).send({ message: error.message })
         }
         throw error
       }

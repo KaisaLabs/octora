@@ -62,6 +62,39 @@ import type { FailureStage, ExecutionState } from "#domain";
 export const CLOSE_SWAP_DUST_THRESHOLD_LAMPORTS = 1000n;
 
 /**
+ * close/02 — default slippage tolerance for the conditional `dlmm_swap`
+ * leg of the Private Position Close. 50 bps (0.5 %) mirrors the ticket
+ * default the UI pre-selects. Out-of-range values are rejected at the
+ * schema layer ([{@link MIN_CLOSE_SLIPPAGE_BPS}, {@link MAX_CLOSE_SLIPPAGE_BPS}]).
+ */
+export const DEFAULT_CLOSE_SLIPPAGE_BPS = 50;
+export const MIN_CLOSE_SLIPPAGE_BPS = 10;
+export const MAX_CLOSE_SLIPPAGE_BPS = 500;
+
+/**
+ * close/02 — options threaded into the close orchestrator from
+ * `POST /positions/:id/close`. Both fields are optional so the existing
+ * test harness + the route's request body remain backward-compatible
+ * with callers that omit the pre-flight quote.
+ */
+export interface CloseInitiateOptions {
+  /**
+   * Slippage tolerance for the conditional `dlmm_swap` leg, in bps.
+   * Adapters use this to compute `min_amount_out` on the swap ix.
+   * Defaults to {@link DEFAULT_CLOSE_SLIPPAGE_BPS} when omitted.
+   */
+  slippageBps?: number;
+  /**
+   * Expected SOL output from the swap, in lamports — sourced from the
+   * pre-flight `GET /close-quote`. Pairs with `slippageBps` so the
+   * adapter can compute `min_amount_out = expectedOut * (1 - bps/10000)`.
+   * Optional: when omitted, adapters fall back to legacy behaviour
+   * (no min_out protection or refuse — adapter's choice).
+   */
+  expectedSwapOutLamports?: bigint | null;
+}
+
+/**
  * Adapter that performs the actual on-chain work for the close flow.
  * Pulled out as an interface so the service is unit-testable without
  * the live Executor / Mixer clients — the production wiring lives in
@@ -86,10 +119,22 @@ export interface CloseOrchestrationAdapter {
    * Submit `dlmm_swap` via the Executor for the non-SOL residual.
    * Only invoked when the residual exceeds
    * {@link CLOSE_SWAP_DUST_THRESHOLD_LAMPORTS}.
+   *
+   * close/02: `slippageBps` + `expectedOutLamports` let the adapter
+   * compute `min_amount_out = expectedOutLamports * (1 - bps/10000)` and
+   * thread that into the on-chain `dlmm_swap` ix. When the realized
+   * swap output falls below `min_amount_out`, the on-chain ix reverts
+   * and the orchestrator records `SWAP_FAILED`. `expectedOutLamports`
+   * is `null` when no pre-flight quote was taken (e.g. the production
+   * close path that didn't go through `GET /close-quote`); adapters
+   * may then either skip slippage protection (set min_out = 1, the
+   * historical placeholder) or refuse the swap — implementation choice.
    */
   submitSwap(input: {
     positionId: string;
     residualLamports: bigint;
+    slippageBps: number;
+    expectedOutLamports: bigint | null;
   }): Promise<{ signature: string }>;
 
   /**
@@ -228,8 +273,18 @@ export function createCloseService(deps: CloseServiceDeps) {
    *   - transition via the matching `record*Confirmed` method
    *   - on adapter throw, transition via the matching `record*Failed`
    *     method which records the Activity Record + Recovery Guidance
+   *
+   * close/02 — `opts.slippageBps` + `opts.expectedSwapOutLamports`
+   * thread the user's slippage tolerance through to the swap leg. The
+   * adapter turns them into `min_amount_out` on the on-chain `dlmm_swap`
+   * ix; a realized output below `min_amount_out` lands in `SWAP_FAILED`.
+   * Defaults: 50 bps (0.5 %) slippage, no expected-out (adapter falls
+   * back to historical behaviour). See {@link CloseInitiateOptions}.
    */
-  async function initiateClose(positionId: string): Promise<PositionResponse> {
+  async function initiateClose(
+    positionId: string,
+    opts: CloseInitiateOptions = {},
+  ): Promise<PositionResponse> {
     const adapter = deps.adapter;
     if (!adapter) {
       throw new Error(
@@ -267,6 +322,8 @@ export function createCloseService(deps: CloseServiceDeps) {
         await adapter.submitSwap({
           positionId,
           residualLamports: withdrawClose.otherSideResidualLamports,
+          slippageBps: opts.slippageBps ?? DEFAULT_CLOSE_SLIPPAGE_BPS,
+          expectedOutLamports: opts.expectedSwapOutLamports ?? null,
         });
       } catch (err) {
         return recordSwapFailed(positionId, formatErr(err));

@@ -71,6 +71,14 @@ export interface CreateAppOptions {
    * is observable end-to-end.
    */
   closeAdapter?: import("#modules/positions/position.service").CloseOrchestrationAdapter
+  /**
+   * close/02 — Adapter for the pre-flight `GET /close-quote` reads.
+   * Same scope-down as `closeAdapter`: production deployments leave
+   * this unwired (the live `getSwapQuote` + DLMM bin read wiring is
+   * close/02 follow-up territory once the executor close path is
+   * production-ready), tests inject an in-memory adapter.
+   */
+  closeQuoteAdapter?: import("#modules/positions/position.service").CloseQuoteAdapter
 }
 
 function createPrismaRepositories(): { repos: AppRepositories; client: ReturnType<typeof createPrismaClient> } {
@@ -297,6 +305,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     authPreHandlers,
     rateLimiterFactory,
     closeAdapter: options.closeAdapter,
+    closeQuoteAdapter: options.closeQuoteAdapter,
   })
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)

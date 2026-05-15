@@ -11,6 +11,8 @@ import {
   lpFailedSchema,
   recoverFundsSchema,
   remixClaimedFeesSchema,
+  // close/02 — body schema for POST /close (slippageBps + expected-out).
+  closePositionBodySchema,
 } from './position.schema'
 
 interface CreateIntentBody {
@@ -50,6 +52,12 @@ interface RemixClaimedFeesBody {
   commitment?: string
   leafIndex?: number
   txSignature?: string
+}
+
+// close/02 — body shape posted by the close confirmation modal.
+interface ClosePositionBody {
+  slippageBps?: number
+  expectedSwapOutLamports?: string
 }
 
 export interface PositionRoutesOptions extends PositionControllerDeps {
@@ -143,13 +151,30 @@ export async function registerPositionRoutes(app: FastifyInstance, options: Posi
   // as 409 via `CloseStateTransitionError`; per-leg failures land in
   // the matching `*_FAILED` terminal with Recovery Guidance baked into
   // the response.
-  app.post<{ Params: PositionParams }>(
+  // close/02 — Body extended with optional `{ slippageBps,
+  // expectedSwapOutLamports }`. Schema rejects out-of-range slippage
+  // (≤9 or ≥501 bps) before the handler runs; the orchestrator
+  // defaults to DEFAULT_CLOSE_SLIPPAGE_BPS when the field is absent.
+  app.post<{ Params: PositionParams; Body: ClosePositionBody | null }>(
     '/positions/:positionId/close',
     {
-      schema: { ...positionParamsSchema, tags },
+      schema: { ...positionParamsSchema, ...closePositionBodySchema, tags },
       preHandler: mutatePreHandlers,
     },
     controller.closePosition,
+  )
+
+  // close/02 — pre-flight close-quote read. Public (no wallet auth)
+  // because it mirrors `GET /positions/:positionId` — both read
+  // non-secret Position state. The close confirmation modal calls this
+  // before posting `/close` to populate the slippage selector and the
+  // estimated-balances preview. Returns either the OK shape or
+  // `{ closeable: false, reason }` when the close/04 mint precheck
+  // refuses.
+  app.get<{ Params: PositionParams }>(
+    '/positions/:positionId/close-quote',
+    { schema: { ...positionParamsSchema, tags } },
+    controller.closeQuote,
   )
 
   // close/05 — mid-position fee claim (no close). Builds + relayer-

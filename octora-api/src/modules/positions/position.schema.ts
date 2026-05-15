@@ -89,3 +89,24 @@ export const recoverFundsSchema = {
     },
   },
 } as const
+
+// ── close/02 ──────────────────────────────────────────────────────────
+// Body extension for `POST /positions/:positionId/close`. Adds an
+// optional `slippageBps` field defaulting to 50 (0.5 %) when absent.
+// Out-of-range values are rejected at the schema layer so the
+// controller never sees them — Fastify maps validation failures to 422
+// through `registerErrorHandler` in `common/errors`.
+// `expectedSwapOutLamports` (decimal-string lamports) lets the client
+// echo back the expected swap output captured from `GET /close-quote`;
+// the adapter uses it to compute `min_amount_out` on the swap ix.
+export const closePositionBodySchema = {
+  body: {
+    // null/absent body is accepted so existing callers (and the
+    // close/01 route-test that posts no body) keep working.
+    type: ['object', 'null'],
+    properties: {
+      slippageBps: { type: 'integer', minimum: 10, maximum: 500 },
+      expectedSwapOutLamports: { type: 'string', minLength: 1, pattern: '^[0-9]+$' },
+    },
+  },
+} as const

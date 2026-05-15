@@ -44,6 +44,12 @@ import { PrivateExitModal } from "@/components/octora/lp/PrivateExitModal";
 import { PrivateRebalanceModal } from "@/components/octora/lp/PrivateRebalanceModal";
 import { StealthAddressDisplay } from "@/components/octora/lp/StealthAddressDisplay";
 import { EarnedFeesCard } from "@/components/octora/lp/EarnedFeesCard";
+// close/02 — confirmation modal (slippage selector + quote preview).
+import {
+  CloseConfirmDialog,
+  type CloseQuoteResponse,
+} from "@/components/octora/lp/CloseConfirmDialog";
+import { useCanClosePosition } from "@/hooks/useCanClosePosition";
 
 interface Props {
   positions: PortfolioPosition[];
@@ -984,8 +990,18 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
   const { wallet } = useSolana();
   const [modalOpen, setModalOpen] = useState(false);
   const [closePending, setClosePending] = useState(false);
+  // close/02 — pre-flight quote + confirmation modal state.
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [closeQuote, setCloseQuote] = useState<
+    Extract<CloseQuoteResponse, { closeable: true }> | null
+  >(null);
+  const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
   const queryClient = useQueryClient();
   const isActive = position.status.toLowerCase() === "active";
+  // close/04 — disable the Close button entirely when the backend's
+  // pre-flight gate already refused (e.g. unsupported_mint).
+  const canClose = useCanClosePosition(position.id);
+  const closeBlocked = canClose.closeable === false;
 
   const handleWithdraw = () => {
     if (!wallet.address) {
@@ -999,10 +1015,13 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
     setModalOpen(true);
   };
 
-  // close/01 — relayer-driven Private Position Close. Posts to the
-  // backend orchestrator; the response carries the final cluster state
-  // + Recovery Guidance which the `CloseFlowPanel` renders.
-  const handleClose = async () => {
+  /**
+   * close/02 — intercept the Close button click, fetch the pre-flight
+   * `GET /close-quote`, then open the confirmation modal. The actual
+   * `POST /close` runs from `handleCloseConfirm` once the user accepts
+   * the slippage tolerance.
+   */
+  const handleCloseClick = async () => {
     if (!wallet.address) {
       toast.error("Connect your wallet to close this position.");
       return;
@@ -1011,6 +1030,44 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
       toast.error(`Position must be active to close (current: ${position.status}).`);
       return;
     }
+    setQuoteLoading(true);
+    const t = toast.loading("Fetching close preview…");
+    try {
+      const res = await fetch(`/positions/${position.id}/close-quote`);
+      if (!res.ok) {
+        throw new Error(`close-quote failed: ${res.status}`);
+      }
+      const body = (await res.json()) as CloseQuoteResponse;
+      if (body.closeable === false) {
+        toast.error(
+          `Close blocked: ${body.reason}${
+            body.details?.extension ? ` (${body.details.extension})` : ""
+          }`,
+          { id: t },
+        );
+        return;
+      }
+      setCloseQuote(body);
+      setCloseConfirmOpen(true);
+      toast.dismiss(t);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err), { id: t });
+    } finally {
+      setQuoteLoading(false);
+    }
+  };
+
+  /**
+   * close/02 — fired by the modal once the user confirms slippage.
+   * Posts `{ slippageBps, expectedSwapOutLamports }` to `/close`; the
+   * backend's adapter computes `min_amount_out` and threads it into the
+   * `dlmm_swap` ix.
+   */
+  const handleCloseConfirm = async (input: {
+    slippageBps: number;
+    expectedSwapOutLamports: string | null;
+  }) => {
+    if (!wallet.address) return;
     setClosePending(true);
     const t = toast.loading("Closing position privately…");
     try {
@@ -1020,6 +1077,12 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
           "Content-Type": "application/json",
           "x-wallet-address": wallet.address,
         },
+        body: JSON.stringify({
+          slippageBps: input.slippageBps,
+          ...(input.expectedSwapOutLamports
+            ? { expectedSwapOutLamports: input.expectedSwapOutLamports }
+            : {}),
+        }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { message?: string };
@@ -1027,6 +1090,7 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
       }
       toast.success("Close complete — re-mixed into the anonymity set.", { id: t });
       queryClient.invalidateQueries({ queryKey: ["positions"] });
+      setCloseConfirmOpen(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err), { id: t });
     } finally {
@@ -1072,11 +1136,28 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
           variant="subtle"
           size="lg"
           className="mt-3 w-full justify-center rounded-xl"
-          onClick={handleClose}
-          disabled={!wallet.connected || !isActive || closePending}
+          onClick={handleCloseClick}
+          disabled={
+            !wallet.connected ||
+            !isActive ||
+            closePending ||
+            quoteLoading ||
+            closeBlocked
+          }
+          title={
+            closeBlocked
+              ? `Close is not yet available for pools that include ${
+                  canClose.extension ?? "this"
+                } mints. This is a v2 capability.`
+              : undefined
+          }
         >
-          {closePending ? <Loader2 className="animate-spin" /> : null}
-          {closePending ? "Closing…" : "Close + re-mix"}
+          {closePending || quoteLoading ? <Loader2 className="animate-spin" /> : null}
+          {closePending
+            ? "Closing…"
+            : quoteLoading
+              ? "Loading preview…"
+              : "Close + re-mix"}
         </Button>
         {!isActive && (
           <p className="mt-2 text-[11px] text-muted-foreground">
@@ -1084,7 +1165,23 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
             state: {position.status}.
           </p>
         )}
+        {closeBlocked && (
+          <p className="mt-2 text-[11px] text-amber-300">
+            Close is not yet available for pools that include{" "}
+            {canClose.extension ?? "this"} mints. This is a v2 capability.
+          </p>
+        )}
       </div>
+
+      {closeQuote && (
+        <CloseConfirmDialog
+          open={closeConfirmOpen}
+          onOpenChange={setCloseConfirmOpen}
+          quote={closeQuote}
+          onConfirm={handleCloseConfirm}
+          pending={closePending}
+        />
+      )}
 
       {position.stealthPubkey && (
         <PrivateExitModal

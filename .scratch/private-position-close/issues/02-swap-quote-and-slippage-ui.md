@@ -2,7 +2,7 @@
 
 # Swap quote preview + slippage UI for Private Position Close
 
-**Status:** ready-for-agent
+**Status:** needs-review
 **Type:** enhancement
 **Slice:** AFK
 
@@ -59,3 +59,57 @@ If close-quote returns "no swap needed" (other-side residual at or below dust th
 ## Blocked by
 
 - `.scratch/private-position-close/issues/01-close-orchestrator-and-state-machine.md` (orchestrator + `SWAP_FAILED` state must exist)
+
+## Resolution (close/02)
+
+**Status:** needs-review
+**Branch:** `worktree-agent-a76a22f0`
+
+### Files (backend)
+
+- `octora-api/src/modules/positions/position.close-quote.service.ts` (new) — `createCloseQuoteService` + `CloseQuoteAdapter` interface. Adapter-shaped (same scope-down as close/01: production wires the live DLMM reads, tests inject in-memory). Reshapes `UnsupportedMintExtensionError` (close/04) into `{ closeable: false, reason: "unsupported_mint", details }`. Honest fallback for `null` denomination (close/05 caveat) — UI renders "Unknown (resolved on close)".
+- `octora-api/src/modules/positions/position.close.service.ts` — `CloseOrchestrationAdapter.submitSwap` extended with `slippageBps` + `expectedOutLamports` so the adapter computes `min_amount_out`. `initiateClose` accepts `opts: CloseInitiateOptions = {}` (slippageBps default 50, expectedSwapOutLamports default null). Constants: `DEFAULT_CLOSE_SLIPPAGE_BPS = 50`, `MIN_CLOSE_SLIPPAGE_BPS = 10`, `MAX_CLOSE_SLIPPAGE_BPS = 500`.
+- `octora-api/src/modules/positions/position.service.ts` — composition root wires `createCloseQuoteService`, exports `CloseQuoteAdapter` / `CloseQuoteResponse` / `CloseInitiateOptions`, exposes `closePosition(positionId, opts)` + `closeQuote(positionId)`.
+- `octora-api/src/modules/positions/position.controller.ts` — new `closeQuote` handler (public, mirrors `getPosition` auth surface); `closePosition` extracts + validates `slippageBps` / `expectedSwapOutLamports` from body.
+- `octora-api/src/modules/positions/position.routes.ts` — `GET /positions/:positionId/close-quote` route + body-schema wired on `POST /close`.
+- `octora-api/src/modules/positions/position.schema.ts` — `closePositionBodySchema` enforces `slippageBps ∈ [10, 500]` at the schema layer (out-of-range → 4xx).
+- `octora-api/src/app.ts` — `CreateAppOptions.closeQuoteAdapter` thread-through.
+- `octora-api/CONTEXT.md` — `Close Quote` + `Slippage Tolerance` glossary entries.
+
+### Files (frontend)
+
+- `octora-web/src/components/octora/lp/CloseConfirmDialog.tsx` (new) — pure-props dialog: SOL+other shape, SOL-only shape, slippage selector (10/50/100 bps presets + Custom bps input), live client-side `min_amount_out` recompute via BigInt, gate-on-confirm.
+- `octora-web/src/pages/PositionDetailPage.tsx` — `WithdrawPanel.handleCloseClick` intercepts the Close button to fetch `/close-quote` → open `CloseConfirmDialog` → `handleCloseConfirm` posts to `/close` with `{ slippageBps, expectedSwapOutLamports }`. `useCanClosePosition` (close/04 hook) drives the disabled-button + v2 badge when `closeable: false`.
+
+### Tests
+
+- `octora-api/src/modules/positions/__tests__/close-quote.test.ts` (new) — **7 service tests**: SOL-only (no swap), SOL+other above dust, residual at-threshold (skip), one lamport above (include), mint precheck reshape, null-denomination fallback, no-adapter rejection.
+- `octora-api/src/modules/positions/__tests__/close-quote.routes.test.ts` (new) — **9 route tests**: `GET /close-quote` SOL-only / with-swap / unsupported-mint / 404; `POST /close` accepts slippageBps + expectedSwapOutLamports / defaults to 50 bps / rejects <10 / rejects >500 / SWAP_FAILED when realized < min_amount_out.
+- `octora-web/src/components/octora/lp/__tests__/CloseConfirmDialog.test.tsx` (new) — **6 frontend tests**: no-swap renders + immediate-confirm, with-swap renders slippage selector + min-out preview, default-not-confirmed blocks submit, preset change recomputes min-out without a fetch call, custom out-of-range error, custom-valid threads through.
+- Full suites: **backend 266/266 (was 250 — +16), web 57/57 (was 51 — +6); no regressions; both `tsc --noEmit` clean.**
+
+### Executor-surface gap (continued from close/01)
+
+The Executor client's `buildSwapIx` is still not wired (close/04 territory by the original split — the executor client carries only the four ix that close/01 listed: init/add_liquidity/claim_fees/withdraw_close). The production close-quote adapter and close orchestrator's swap leg remain unwired in production for the same reason close/01 documented: passing `closeAdapter` / `closeQuoteAdapter` is the integrator's job. The test harness exercises every wire path end-to-end via in-memory adapters; the route contracts (request body shape, response shape, status codes) are observable end-to-end today.
+
+### Acceptance criteria status
+
+- [x] `GET /positions/:positionId/close-quote` returns the structured preview (current bin state + accrued fees + DLMM swap quote + Meteora fee, via the adapter)
+- [x] Confirmation modal shows every line item (input amount, output estimate, price impact, post-close total SOL, denomination, residual dust)
+- [x] Slippage presets + Custom input working; out-of-range values rejected client-side
+- [x] `POST /close` accepts `slippageBps`, forwards as `min_amount_out` via the adapter
+- [x] Realized swap output below `min_amount_out` lands in `SWAP_FAILED` (pinned in close-quote.routes.test.ts)
+- [x] No-swap case skips slippage step entirely
+- [x] Backend tests for `close-quote` shape (SOL-only + SOL+other)
+- [x] Integration test for slippage-tighter-than-movement → `SWAP_FAILED`
+- [x] Glossary updates (`Close Quote` + `Slippage Tolerance` in `octora-api/CONTEXT.md`)
+
+### Notes
+
+- The dust-threshold swap-skip rule is shared between the quote service and the orchestrator via `CLOSE_SWAP_DUST_THRESHOLD_LAMPORTS` — single source of truth, so the UI never previews a swap step the orchestrator would skip and vice versa.
+- The `closeQuote` route is intentionally public (no wallet auth) to mirror `GET /positions/:id`; the close-quote endpoint is symmetric to that read. The mutating `POST /close` stays wallet-gated.
+- `CloseConfirmDialog` is pure-props (no router, no fetch) so it's directly unit-testable without mounting a memory router or stubbing fetch.
+
+### Blockers
+
+None for this slice. Once the executor's `buildSwapIx` lands, the production `CloseOrchestrationAdapter.submitSwap` and `CloseQuoteAdapter.computeSwapOut` wiring follow as a one-file change each (delegate to `getSwapQuote` from `#modules/dlmm/dlmm.chain` for the quote; delegate to `OctoraExecutorClient.buildSwapIx` + `sendIx` for the swap).

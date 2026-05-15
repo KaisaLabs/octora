@@ -77,6 +77,14 @@ Permitted transitions: `active -> CLOSING`; `CLOSING -> { SWAPPING | REMIXING | 
 
 The three txs are serial and relayer-signed (not atomic — ADR-0003 blocks atomic compounds). A bot watching the chain sees only relayer-signed activity: the DLMM Position closes, any non-SOL residual swaps to SOL, and one denomination of SOL deposits into the Mixer Pool. The connection between the original deposit and the post-close anonymity-set entry stays inside the Mixer Pool's Merkle Tree.
 
+**Close Quote**:
+The pre-flight read returned by `GET /positions/:positionId/close-quote` (close/02). Computed from current DLMM bin state + accrued fees + a DLMM swap quote, it gives the close confirmation modal enough to render an honest preview before the user kicks the close orchestrator. Shape: `{ closeable: true, estimate, swap?, denomination, dustLamports }` on success — the `swap` field is omitted when the stealth's post-close non-SOL residual is at or below `CLOSE_SWAP_DUST_THRESHOLD_LAMPORTS` (mirrors the orchestrator's swap-skip rule, so the UI never previews a step the backend would skip). On a Token-2022 mint precheck refusal (close/04's `assertExecutorSupportsMint`), the shape switches to `{ closeable: false, reason: "unsupported_mint", details: { mint, extension } }` so the frontend's `useCanClosePosition` hook can disable the Close button with a v2 badge without an extra round-trip.
+_Avoid_: Close estimate, Close preview (close-quote is the canonical noun for this read).
+
+**Slippage Tolerance**:
+The user-set cap on how much the swap leg's realized output may deviate from the pre-flight `Close Quote`. Expressed in basis points, range [10, 500] (0.1 %–5 %), default 50 bps (0.5 %) — bounds rejected at the schema level on `POST /positions/:positionId/close` (close/02). The orchestrator threads the value into `CloseOrchestrationAdapter.submitSwap`; the adapter computes `min_amount_out = expectedOutLamports * (1 - slippageBps/10000)` and threads that into the on-chain `dlmm_swap` ix. A realized output below `min_amount_out` reverts the ix and lands the Position in `SWAP_FAILED` (recovery via close/03). Live recompute of `min_amount_out` is purely client-side as the user changes the selector — no extra network call.
+_Avoid_: Slippage cap, Max slippage (Slippage Tolerance is the canonical name; the wire field is `slippageBps`).
+
 **Persisted Deposit Intent**:
 The off-chain `{commitment, intended_pool, denom_lamports, expires_at}` row keyed by nullifier hash that the backend writes when a Position enters `DEPOSITED`. The user holds the nullifier preimage off-chain (custodial-less by design); the backend only sees the hash. Cleared on `LP_DONE` or `WITHDRAWN`. Without it, a tab close between deposit and add-liquidity would orphan the user's funds — with it, the funds are always discoverable from the user's Encrypted Seed plus their main wallet signature.
 _Avoid_: Stuck Deposit Record, Pending Position State
