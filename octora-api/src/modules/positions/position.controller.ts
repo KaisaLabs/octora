@@ -10,6 +10,7 @@ import {
   MidPositionFeeClaimStateError,
   createPositionService,
   type CloseRecoveryAction,
+  type CloseRecoveryLeg,
   type PositionServiceDependencies,
 } from './position.service'
 import type { PositionRepository } from './position.repository'
@@ -497,6 +498,54 @@ export function createPositionController(deps: PositionControllerDeps) {
         return handleCloseRecoveryError(error, reply)
       }
     },
+
+    // close/06 — return an unsigned tx for one leg of the user-signed
+    // close-recovery flow. The browser stealth-signs + broadcasts
+    // directly to RPC; this route never signs and never touches
+    // `/relayer/*`, preserving close/03's "relayer-offline" contract.
+    async closeBuilder(
+      request: FastifyRequest<{ Params: PositionParams; Body: CloseBuilderBody }>,
+      reply: FastifyReply,
+    ) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      const body = request.body
+      let expectedSwapOutLamports: bigint | undefined
+      if (typeof body.expectedSwapOutLamports === 'string') {
+        try {
+          expectedSwapOutLamports = BigInt(body.expectedSwapOutLamports)
+        } catch {
+          return reply.code(422).send({
+            error: 'ValidationError',
+            message: 'expectedSwapOutLamports must be a base-10 lamports integer string.',
+          })
+        }
+      }
+      try {
+        const result = await service.buildCloseRecoveryTx({
+          positionId: request.params.positionId,
+          leg: body.leg,
+          signer: body.signer,
+          recipient: body.recipient,
+          slippageBps: body.slippageBps,
+          expectedSwapOutLamports,
+        })
+        return reply.send(result)
+      } catch (error) {
+        // close-builder not wired (production startup miss) — surface
+        // as 501 so the browser can fall back to the bail path.
+        if (
+          error instanceof Error &&
+          error.message.startsWith('close-builder is not wired')
+        ) {
+          return reply.code(501).send({
+            error: 'CloseBuilderUnavailable',
+            message: error.message,
+          })
+        }
+        throw error
+      }
+    },
   }
 }
 
@@ -524,6 +573,17 @@ interface RecoverCloseBody {
   recoveryAction: CloseRecoveryAction
   txSignature?: string
   recipient?: string
+}
+
+// close/06 — request body for `POST /positions/:id/close-builder`.
+// One endpoint shared across the three legs of `runCompleteClose`; the
+// route returns a base64 unsigned tx the browser stealth-signs.
+interface CloseBuilderBody {
+  leg: CloseRecoveryLeg
+  signer: string
+  recipient?: string
+  slippageBps?: number
+  expectedSwapOutLamports?: string
 }
 
 function handleDepositLpError(error: unknown, reply: FastifyReply) {

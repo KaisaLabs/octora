@@ -14,6 +14,8 @@ import {
   remixClaimedFeesSchema,
   // close/02 — body schema for POST /close (slippageBps + expected-out).
   closePositionBodySchema,
+  // close/06 — body schema for POST /close-builder.
+  closeBuilderSchema,
 } from './position.schema'
 
 interface CreateIntentBody {
@@ -53,6 +55,15 @@ interface RecoverCloseBody {
   recoveryAction: 'complete-close' | 'bail-to-withdrawn'
   txSignature?: string
   recipient?: string
+}
+
+// close/06 — body for `POST /positions/:id/close-builder`.
+interface CloseBuilderBody {
+  leg: 'withdraw-close' | 'swap' | 'mixer-deposit'
+  signer: string
+  recipient?: string
+  slippageBps?: number
+  expectedSwapOutLamports?: string
 }
 
 interface RemixClaimedFeesBody {
@@ -297,5 +308,19 @@ export async function registerPositionRoutes(app: FastifyInstance, options: Posi
       preHandler: mutatePreHandlers,
     },
     controller.recoverCloseUserSigned,
+  )
+
+  // close/06 — unsigned tx builder for the user-signed close-recovery
+  // legs (withdraw-close, swap, mixer-deposit). Browser stealth-signs +
+  // broadcasts directly to RPC; this route never signs and never hits
+  // `/relayer/*`, preserving close/03's relayer-offline invariant. 501
+  // when the close-builder chain handle isn't wired into the service.
+  app.post<{ Params: PositionParams; Body: CloseBuilderBody }>(
+    '/positions/:positionId/close-builder',
+    {
+      schema: { ...positionParamsSchema, ...closeBuilderSchema, tags },
+      preHandler: mutatePreHandlers,
+    },
+    controller.closeBuilder,
   )
 }

@@ -1342,6 +1342,11 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
           denominationLamports: "1000000000", // MVP single-sided SOL denomination
           expectedSolLamports: undefined,
           expectedOtherSideLamports: undefined,
+          // close/06 — persist the slippage the user accepted so the
+          // user-signed swap recovery can re-apply the same min_amount_out
+          // when the orchestrator-driven leg lands in SWAP_FAILED.
+          slippageBps: input.slippageBps,
+          expectedSwapOutLamports: input.expectedSwapOutLamports ?? undefined,
           ts: Date.now(),
         });
       }

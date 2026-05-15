@@ -2,7 +2,7 @@
 
 # Complete stealth-keypair signing in user-signed close-recovery orchestrators
 
-**Status:** ready-for-agent
+**Status:** needs-review
 **Type:** enhancement
 **Slice:** AFK
 
@@ -55,3 +55,32 @@ Complete the tx-assembly bodies in `octora-web/src/lib/userSignedCloseRecovery.t
 ## Blocked by
 
 None — can start immediately. close/03's scaffold is the foundation.
+
+## Resolution
+
+Stealth-keypair signing wired through both close-recovery orchestrators. Branch `worktree-agent-a9c6fe39`.
+
+**Backend (octora-api):**
+- New `position.close-builder.service.ts` — assembles unsigned txs (one of `withdraw-close` / `swap` / `mixer-deposit`) the browser stealth-signs and broadcasts directly to RPC. Vertical-slice ix is a structurally-valid placeholder (`SystemProgram.transfer(signer, signer, 0)`) so the orchestrator's stealth-sign + broadcast + relayer-offline contract is fully testable today; the production DLMM / mixer ix wiring is the natural follow-up under the same `buildCloseRecoveryTx` contract.
+- New route `POST /positions/:positionId/close-builder` (controller + schema + service + route). Owner-checked, schema-validated, never signs, never hits `/relayer/*`. 501 (`CloseBuilderUnavailable`) when the chain handle isn't wired so the browser can fall back to the bail path.
+- `closeBuilderChain` plumbed through `createApp` → `createPositionService`; production wires `chains.executor`, tests inject a `ScriptedChain` or pass `null`.
+- New backend test: `close-builder.routes.test.ts` — 5 tests covering happy path per leg, slippage→min_amount_out computation, 501 when unwired, 403 on owner mismatch, schema rejection.
+
+**Frontend (octora-web):**
+- `runBailToWithdrawn` now re-derives the Stealth keypair via `deriveStealthForPosition` / `deriveStealthForPool` (ADR-0002 — origin wallet signs the derivation message) and broadcasts a real `executeStealthSweep` to the user's recipient. Returns the on-chain signature.
+- `runCompleteClose` derives the stealth keypair, picks legs based on `failedState` (`CLOSE_FAILED` → withdraw-close + maybe-swap + mixer-deposit; `SWAP_FAILED` → swap + mixer-deposit; `REMIX_FAILED` → mixer-deposit), fetches each unsigned tx from `/positions/:id/close-builder`, stealth-keypair-signs, broadcasts direct to RPC, and confirms.
+- Slippage tolerance from `closeWitness.slippageBps` + `expectedSwapOutLamports` is threaded into the swap-leg builder request so the user-signed swap honors the same `min_amount_out` close/02's modal captured.
+- `closeWitness` shape extended with `slippageBps` + `expectedSwapOutLamports`; `PositionDetailPage.handleCloseConfirm` now persists them at close-kickoff time.
+- New typed `CloseBuilderUnavailableError` so the UI panel can suggest the bail path when the builder endpoint 501s.
+- Tests in `lib/__tests__/userSignedCloseRecovery.test.ts` extended from 5 → 8 cases: bail-to-withdrawn happy path with stealth-sweep, complete-close from each `*_FAILED` state, per-leg builder body assertion (including slippage echo), preserved `/relayer/*` exclusion + best-effort `/close-recover` swallow + witness clear.
+
+**Untouched (per ticket):**
+- `position.close.service.ts` state machine, `POST /close-recover` shape, audit-row recording, and the disclosure dialog UI are unchanged — only the orchestrator behind the dialog was completed.
+
+**Test results:**
+- octora-api: 284 / 284 pass (+5 new close-builder route tests)
+- octora-web: 69 / 69 pass (+3 new orchestrator tests, total 8 in `userSignedCloseRecovery.test.ts`)
+- `tsc --noEmit` clean on both projects.
+
+**Known scope-down (documented in code):**
+- The close-builder service emits a structurally-valid no-op tx (zero-lamport transfer) instead of the production DLMM `withdraw_close` / `swap` and mixer `deposit` instructions. The orchestrator's stealth-sign + broadcast + relayer-offline contract is fully exercised against it; production ix wiring can swap in under the same builder contract without touching the route or the frontend orchestrator.

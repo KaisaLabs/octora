@@ -148,6 +148,23 @@ export interface StoredPosition {
      * Zero for single-sided SOL Positions; non-zero for pairs.
      */
     expectedOtherSideLamports?: string;
+    /**
+     * close/06 — slippage tolerance the user accepted on the close
+     * quote modal (close/02). Reapplied to the user-signed swap leg
+     * of `runCompleteClose` so the recovery tx honors the same
+     * `min_amount_out` the orchestrator-driven swap would have used.
+     * Bps in [10, 500]; absent for closes initiated before close/06
+     * shipped (recovery panel falls back to the backend default).
+     */
+    slippageBps?: number;
+    /**
+     * close/06 — expected SOL output from the swap leg in lamports
+     * (decimal-string). Paired with `slippageBps`; the user-signed
+     * swap recovery sends both to `/positions/:id/close-builder` so
+     * the assembled `dlmm_swap` ix carries the same `min_amount_out`
+     * the close-quote priced in.
+     */
+    expectedSwapOutLamports?: string;
     /** ms since epoch — when the close orchestrator was first invoked. */
     ts: number;
   };

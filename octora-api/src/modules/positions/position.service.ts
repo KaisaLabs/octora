@@ -63,6 +63,13 @@ import {
   type CloseQuoteResponse,
 } from "./position.close-quote.service";
 import {
+  buildCloseRecoveryTx,
+  type CloseBuilderInput,
+  type CloseBuilderResult,
+  type CloseRecoveryLeg,
+} from "./position.close-builder.service";
+import type { SolanaChain } from "#common/solana/chain";
+import {
   claimMidPositionFees,
   remixClaimedFees,
   MidPositionFeeClaimStateError,
@@ -95,6 +102,8 @@ export {
 export type { CloseOrchestrationAdapter, CloseInitiateOptions };
 // close/02 — exported so app.ts + tests can wire a CloseQuoteAdapter.
 export type { CloseQuoteAdapter, CloseQuoteResponse };
+// close/06 — re-exported so the controller + tests can name the leg union.
+export type { CloseRecoveryLeg, CloseBuilderInput, CloseBuilderResult };
 export type { PositionResponse };
 export type {
   CreateDraftPositionIntentInput,
@@ -142,6 +151,14 @@ export interface PositionServiceDependencies {
    * inject an in-memory adapter to exercise the route.
    */
   closeQuoteAdapter?: CloseQuoteAdapter;
+  /**
+   * close/06 — Solana chain handle used by the close-builder service
+   * to fetch a fresh blockhash for the unsigned recovery txs the
+   * browser stealth-signs. Optional: when omitted, the
+   * `closeBuilder` endpoint rejects cleanly so production deployments
+   * must wire a real chain.
+   */
+  closeBuilderChain?: SolanaChain;
 }
 
 export function createPositionService(deps: PositionServiceDependencies) {
@@ -261,6 +278,21 @@ export function createPositionService(deps: PositionServiceDependencies) {
     // a non-`*_FAILED` source state.
     recoverCloseUserSigned(input: RecoverCloseUserSignedInput): Promise<PositionResponse> {
       return recoverCloseUserSigned(positionRepo, activityService, input);
+    },
+    /**
+     * close/06 — assemble an unsigned close-recovery tx for the
+     * requested leg. The browser stealth-keypair signs and broadcasts
+     * directly to RPC; this service never signs and never submits, so
+     * the relayer-offline contract from close/03 still holds. Throws
+     * when no chain is wired (production startup must inject one).
+     */
+    buildCloseRecoveryTx(input: CloseBuilderInput): Promise<CloseBuilderResult> {
+      if (!deps.closeBuilderChain) {
+        throw new Error(
+          "close-builder is not wired: pass a `closeBuilderChain` to createPositionService.",
+        );
+      }
+      return buildCloseRecoveryTx({ chain: deps.closeBuilderChain }, input);
     },
     /**
      * close/05 — mid-position fee claim. Builds + relayer-signs

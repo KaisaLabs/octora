@@ -130,3 +130,33 @@ export const recoverCloseSchema = {
     },
   },
 } as const
+
+// ── close/06 ──────────────────────────────────────────────────────────
+// Body schema for `POST /positions/:id/close-builder`. Returns an
+// unsigned Solana transaction (base64) the browser stealth-keypair
+// signs and broadcasts directly to RPC. One endpoint shared across the
+// three legs of `runCompleteClose` (CLOSE_FAILED → withdraw-close,
+// SWAP_FAILED → swap, REMIX_FAILED → mixer-deposit) so the orchestrator
+// has a single contract to call.
+//
+// `signer` is the stealth pubkey that will sign (and pay fees for) the
+// tx; the route layer uses it as the tx feePayer / first-signer slot.
+// `expectedSwapOutLamports` + `slippageBps` are only honored by the
+// `swap` leg; ignored for others. `recipient` lets the caller pin a
+// destination for the bail-style sweep path, optional otherwise.
+export const closeBuilderSchema = {
+  body: {
+    type: 'object',
+    required: ['leg', 'signer'],
+    properties: {
+      leg: {
+        type: 'string',
+        enum: ['withdraw-close', 'swap', 'mixer-deposit'],
+      },
+      signer: { type: 'string', minLength: 1 },
+      recipient: { type: 'string', minLength: 1 },
+      slippageBps: { type: 'integer', minimum: 10, maximum: 500 },
+      expectedSwapOutLamports: { type: 'string', minLength: 1, pattern: '^[0-9]+$' },
+    },
+  },
+} as const

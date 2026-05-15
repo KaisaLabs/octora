@@ -79,6 +79,13 @@ export interface CreateAppOptions {
    * production-ready), tests inject an in-memory adapter.
    */
   closeQuoteAdapter?: import("#modules/positions/position.service").CloseQuoteAdapter
+  /**
+   * close/06 — override the chain handle used by the close-builder route
+   * for fresh blockhashes. Production deployments fall back to
+   * `chains.executor`; tests inject a `ScriptedChain` for determinism,
+   * or pass `null` to exercise the 501 "unwired" surface explicitly.
+   */
+  closeBuilderChain?: import("#common/solana/chain").SolanaChain | null
 }
 
 function createPrismaRepositories(): { repos: AppRepositories; client: ReturnType<typeof createPrismaClient> } {
@@ -306,6 +313,15 @@ export async function createApp(options: CreateAppOptions = {}) {
     rateLimiterFactory,
     closeAdapter: options.closeAdapter,
     closeQuoteAdapter: options.closeQuoteAdapter,
+    // close/06 — share the executor chain for the close-builder route.
+    // The builder only needs a fresh blockhash + tx serialization, so
+    // we reuse the executor RPC handle (same cluster the DLMM ix would
+    // land on). Tests can swap a scripted chain or pass `null` to
+    // exercise the 501 "unwired" surface explicitly.
+    closeBuilderChain:
+      options.closeBuilderChain === null
+        ? undefined
+        : (options.closeBuilderChain ?? chains.executor),
   })
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)
