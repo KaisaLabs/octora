@@ -144,12 +144,13 @@ pub const COMMITMENT_SEED: &[u8] = b"commitment";
 /// (`Pubkey::find_program_address(&[b"octora-mixer-admin-placeholder"], &program_id)`
 /// equivalent — really just a clearly fake byte pattern). On mainnet, every
 /// `initialize` will fail-closed until this is overwritten. That is intentional.
-// Devnet/localnet dev key: H6NgCenyhumXXspDyKg19ztYj89NcraDQDxrTjbNTrty
-// (octora-mixer-admin.json). Swap to the multisig pubkey before mainnet.
+// Mainnet admin = Squads v4 vault PDA: e8ueJb5qHfbGhCmkdLAyK9n1qfYWD9NpqRmEvr9NDTt
+// Devnet/localnet dev key (compile with `--features permissionless-init` to bypass):
+//   H6NgCenyhumXXspDyKg19ztYj89NcraDQDxrTjbNTrty (octora-mixer-admin.json)
 pub const ADMIN_AUTHORITY: anchor_lang::prelude::Pubkey =
     anchor_lang::prelude::Pubkey::new_from_array([
-        0xef, 0x1b, 0x67, 0x63, 0x59, 0xfc, 0x9f, 0x9f,
-        0x09, 0x4f, 0x1c, 0xe1, 0x83, 0x8b, 0xb1, 0xd5,
-        0x8f, 0x39, 0x5c, 0xb6, 0x65, 0xfe, 0xc5, 0x6f,
-        0x27, 0xe3, 0x12, 0x33, 0x5c, 0xfb, 0x4f, 0xca,
+        0x09, 0x83, 0x6e, 0x5e, 0xc5, 0x6f, 0x94, 0xea,
+        0x10, 0x65, 0xb2, 0xf9, 0x45, 0x69, 0xc0, 0x83,
+        0x4a, 0xce, 0x23, 0x34, 0x3b, 0x49, 0x08, 0xe5,
+        0xa9, 0xe9, 0xd6, 0xaa, 0x63, 0x8e, 0x6c, 0xef,
     ]);
