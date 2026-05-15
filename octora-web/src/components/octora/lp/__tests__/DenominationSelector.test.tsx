@@ -78,11 +78,14 @@ describe("DenominationSelector", () => {
     expect(thinButton.getAttribute("title")).toMatch(/needs 17 more deposits/i);
     expect(thinButton.getAttribute("title")).toMatch(/privacy-safe/i);
 
-    // 5 SOL: disabled with "needs 20 more deposits" tooltip.
+    // 5 SOL: locked at the v1 launch (single-sided SOL only) — disabled with
+    // the "coming soon" explanation rather than the anonymity-set tooltip.
+    // Per `feedback_truthful_ui.md`: render disabled-with-explanation, never
+    // a fictional input the backend would reject.
     const fiveSolButton = screen.getByTestId("denom-5000000000");
     expect(fiveSolButton).toHaveAttribute("data-usable", "false");
     expect(fiveSolButton).toBeDisabled();
-    expect(fiveSolButton.getAttribute("title")).toMatch(/needs 20 more deposits/i);
+    expect(fiveSolButton.getAttribute("title")).toMatch(/aren't supported yet|coming soon/i);
 
     // 10 SOL: uninitialized — hidden entirely (no `denom-10000000000` button).
     expect(screen.queryByTestId("denom-10000000000")).toBeNull();
@@ -117,22 +120,25 @@ describe("DenominationSelector", () => {
   it("clicking an enabled bucket fires onChange with the lamports + anonymitySet", async () => {
     fetchSpy!.mockResolvedValueOnce(
       mockPoolsResponse([
-        { denomination: "1000000000", initialized: true, anonymitySet: 25 },
-        { denomination: "5000000000", initialized: true, anonymitySet: 42 },
+        // Use 0.1 SOL + 1 SOL — both are unlocked v1 tiers. 5 SOL is locked
+        // at launch (`UNSUPPORTED_DENOM_LAMPORTS`) so it can't drive a click
+        // assertion until the v2 multi-denom unlock lands.
+        { denomination: "100000000", initialized: true, anonymitySet: 30 },
+        { denomination: "1000000000", initialized: true, anonymitySet: 42 },
       ]),
     );
 
     const onChange = vi.fn();
     // Provide a non-null `value` so auto-select doesn't fire, keeping the
     // assertion focused on the explicit click.
-    render(<DenominationSelector value="1000000000" onChange={onChange} />);
+    render(<DenominationSelector value="100000000" onChange={onChange} />);
 
-    const fiveSol = await screen.findByTestId("denom-5000000000");
-    expect(fiveSol).not.toBeDisabled();
+    const oneSol = await screen.findByTestId("denom-1000000000");
+    expect(oneSol).not.toBeDisabled();
 
     onChange.mockClear();
-    fireEvent.click(fiveSol);
-    expect(onChange).toHaveBeenCalledWith("5000000000", 42);
+    fireEvent.click(oneSol);
+    expect(onChange).toHaveBeenCalledWith("1000000000", 42);
   });
 
   it("shows the 'no pool reached threshold yet' message when every bucket is thin", async () => {
