@@ -87,6 +87,70 @@ export interface StoredPosition {
     /** Denomination in lamports (decimal string) of the mixer pool. */
     denominationLamports: string;
   };
+  /**
+   * close/03 — close-flow witness captured at the moment the close
+   * orchestrator kicks off (Flow 3). Required by the user-signed
+   * close-recovery fallback to construct the recovery tx(s) without
+   * depending on the backend relayer.
+   *
+   * Mirrors `mixerWithdrawWitness` for dust/04: the witness lives
+   * entirely in the browser, the server never sees the preimage of
+   * the re-mix commitment, and it is cleared once the Position
+   * transitions to CLOSED (clean orchestrator completion) or
+   * WITHDRAWN (user-signed recovery landed). For Positions closed
+   * before this commit shipped, the witness is simply absent — the
+   * recovery panel then falls back to the legacy stealth-sweep UI
+   * (same caveat dust/04 carries).
+   */
+  closeWitness?: {
+    /** Pool address the DLMM Position lives on (needed for the dlmm_withdraw_close ix). */
+    poolAddress: string;
+    /** Stealth wallet that owns the DLMM Position. */
+    stealthPubkey: string;
+    /** On-chain DLMM Position pubkey. */
+    positionPubkey: string;
+    /** Mint of the other-side token in the pair (may equal SOL mint for single-sided). */
+    otherSideMint?: string;
+    /** Denomination in lamports of the Mixer Pool used by the original deposit. */
+    denominationLamports: string;
+    /**
+     * Mixer Pool the re-mix step targets. Same address space as
+     * `mixerWithdrawWitness.commitment` — close/03's re-mix path
+     * mints a fresh Commitment into this pool, so the preimage
+     * below is what the user will need to spend it later.
+     */
+    mixerPool?: string;
+    /**
+     * Pre-image for the fresh re-mix Commitment. Captured at
+     * orchestrator-kickoff so the user-signed recovery can either
+     * (a) complete the close by minting this exact Commitment
+     * themselves, or (b) bail to WITHDRAWN and discard it.
+     */
+    remixPreimage?: {
+      /** Field-element secret (decimal string). */
+      secret: string;
+      /** Field-element nullifier (decimal string). */
+      nullifier: string;
+      /** Public commitment (decimal string) the re-mix will post. */
+      commitment: string;
+      /** Public nullifierHash (decimal string) the future withdraw will spend. */
+      nullifierHash: string;
+    };
+    /**
+     * Estimated post-close SOL balance of the Stealth Wallet
+     * (lamports decimal-string). Drives the recovery panel's
+     * "should I expect SOL here?" copy.
+     */
+    expectedSolLamports?: string;
+    /**
+     * Estimated post-close other-side balance of the Stealth Wallet
+     * (lamports decimal-string of the other-side mint's smallest unit).
+     * Zero for single-sided SOL Positions; non-zero for pairs.
+     */
+    expectedOtherSideLamports?: string;
+    /** ms since epoch — when the close orchestrator was first invoked. */
+    ts: number;
+  };
   /** Position execution-mode metadata mirrored from backend activity when available. */
   mode?: "fast-private" | "standard" | string;
   fallbackMode?: "standard" | "fast-private" | string;
@@ -243,6 +307,63 @@ export function clearMixerWithdrawWitness(
     if (p.positionId !== positionId || !p.mixerWithdrawWitness) return p;
     changed = true;
     const { mixerWithdrawWitness: _drop, ...rest } = p;
+    void _drop;
+    return rest;
+  });
+  if (!changed) return;
+  window.localStorage.setItem(storageKey(walletAddress), JSON.stringify(next));
+  notifyChanged();
+}
+
+/**
+ * close/03 — persist a close-flow witness on a Position. Called by the
+ * close orchestrator client-side wrapper at the moment the user clicks
+ * "Close + re-mix" and the backend confirms the orchestrator started,
+ * so the user-signed recovery path has everything it needs to
+ * reconstruct the recovery tx(s) locally if the relayer disappears
+ * mid-flight.
+ *
+ * Idempotent: a re-record with the same positionId overwrites the
+ * previous witness (e.g. a retry-close that re-derived the re-mix
+ * preimage).
+ */
+export function recordCloseWitness(
+  walletAddress: string,
+  positionId: string,
+  witness: NonNullable<StoredPosition["closeWitness"]>,
+): void {
+  if (!walletAddress || typeof window === "undefined") return;
+  const current = listLocalPositions(walletAddress);
+  let changed = false;
+  const next = current.map((p) => {
+    if (p.positionId !== positionId) return p;
+    changed = true;
+    return { ...p, closeWitness: witness };
+  });
+  if (!changed) return;
+  window.localStorage.setItem(storageKey(walletAddress), JSON.stringify(next));
+  notifyChanged();
+}
+
+/**
+ * close/03 — drop a stored close witness. Called once the close has
+ * either landed CLOSED (clean orchestrator completion or user-signed
+ * complete-close) or WITHDRAWN (user-signed bail). The re-mix
+ * nullifier is single-use, so keeping the witness around after a
+ * terminal would invite a second recovery attempt that can only fail
+ * on-chain.
+ */
+export function clearCloseWitness(
+  walletAddress: string,
+  positionId: string,
+): void {
+  if (!walletAddress || typeof window === "undefined") return;
+  const current = listLocalPositions(walletAddress);
+  let changed = false;
+  const next = current.map((p) => {
+    if (p.positionId !== positionId || !p.closeWitness) return p;
+    changed = true;
+    const { closeWitness: _drop, ...rest } = p;
     void _drop;
     return rest;
   });

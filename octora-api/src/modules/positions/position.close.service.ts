@@ -307,6 +307,50 @@ export function createCloseService(deps: CloseServiceDeps) {
     return PositionAggregate.load(aggregateDeps, positionId).then((p) => p.toResponse());
   }
 
+  // ── close/03 — user-signed close-recovery terminal drivers ────────
+  // Both methods are single-owner: the close cluster owns the
+  // `*_FAILED → {CLOSED, WITHDRAWN}` transitions, the close/03
+  // user-signed recovery service calls these to advance the state
+  // machine after recording its own audit row. Same single-owner
+  // pattern dust/03 uses (`markWithdrawn` lives on the deposit-LP
+  // service even though dust/04 records the recovery audit row).
+
+  /**
+   * User signed the remaining close leg(s) themselves and completed
+   * the orchestration — `{CLOSE_FAILED | SWAP_FAILED | REMIX_FAILED}
+   * → CLOSED`. Records the terminal "Closed privately" activity row;
+   * the recovery audit row is stamped separately by `recoverCloseUserSigned`.
+   */
+  async function markClosed(positionId: string): Promise<PositionResponse> {
+    const position = await PositionAggregate.load(aggregateDeps, positionId);
+    await advance(position, "CLOSED", {
+      headline: "Closed privately",
+      detail:
+        "User-signed close-recovery landed the remaining leg(s). The DLMM Position is closed, any non-SOL residual was handled, and the close completed without the relayer.",
+      safeNextStep: "wait",
+    });
+    return position.toResponse();
+  }
+
+  /**
+   * User opted to bail out of the close mid-flight — `{CLOSE_FAILED |
+   * SWAP_FAILED | REMIX_FAILED} → WITHDRAWN`. The user signed a
+   * direct sweep / mixer.withdraw to a destination they control
+   * rather than completing the re-mix. Same terminal headline as
+   * dust/04's WITHDRAWN row so the audit log stays consistent
+   * across the two recovery clusters.
+   */
+  async function markWithdrawn(positionId: string): Promise<PositionResponse> {
+    const position = await PositionAggregate.load(aggregateDeps, positionId);
+    await advance(position, "WITHDRAWN", {
+      headline: "Recovered",
+      detail:
+        "User-signed close-recovery rolled the close back into a direct withdraw. Origin wallet is now linkable to the recovery destination on-chain; the close was not completed and no fresh Commitment was minted.",
+      safeNextStep: "wait",
+    });
+    return position.toResponse();
+  }
+
   return {
     initiateClose,
     recordCloseSubmitted,
@@ -316,6 +360,9 @@ export function createCloseService(deps: CloseServiceDeps) {
     recordCloseFailed,
     recordSwapFailed,
     recordRemixFailed,
+    // close/03
+    markClosed,
+    markWithdrawn,
   };
 }
 

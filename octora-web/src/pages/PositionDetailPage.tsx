@@ -28,15 +28,23 @@ import {
 } from "@/lib/privateLifecycle";
 import {
   listLocalPositions,
+  markLocalPositionClosed,
   markLocalPositionLifecycleStatus,
   markLocalPositionWithdrawn,
+  recordCloseWitness,
   removeLocalPosition,
 } from "@/lib/localPositions";
 import {
   MissingWithdrawWitnessError,
   runUserSignedRecovery,
 } from "@/lib/userSignedRecovery";
+import {
+  MissingCloseWitnessError,
+  runUserSignedCloseRecovery,
+  type CloseRecoveryAction,
+} from "@/lib/userSignedCloseRecovery";
 import { UserSignedRecoveryDisclosure } from "@/components/octora/lp/UserSignedRecoveryDisclosure";
+import { UserSignedCloseRecoveryDisclosure } from "@/components/octora/lp/UserSignedCloseRecoveryDisclosure";
 import { useSolana } from "@/providers/SolanaProvider";
 import { getPrices } from "@/lib/api";
 import { PrivateClaimModal } from "@/components/octora/lp/PrivateClaimModal";
@@ -415,8 +423,9 @@ function isRecoverablePosition(position: PortfolioPosition): boolean {
 /**
  * close/01 — Private Position Close cluster states. Drives the
  * dedicated close-flow panel rendered by `ActionDrawer`; the
- * `*_FAILED` terminals route to the `CloseRecoveryStub` placeholder
- * until close/03 lands the user-signed close-recovery action button.
+ * `*_FAILED` terminals route to close/03's `CloseRecoveryPanel`
+ * which surfaces the user-signed close-recovery action buttons +
+ * disclosure dialog.
  */
 const CLOSE_FLOW_STATES = new Set([
   "CLOSING",
@@ -558,7 +567,7 @@ function CloseFlowPanel({ position }: { position: PortfolioPosition }) {
           {status === "CLOSED"
             ? "This Position has been closed privately. One denomination of SOL is now a fresh anonymity-set entry — withdraw it later to a new recipient from the mixer."
             : failed
-              ? "A step in the close flow did not land. Recovery is being prepared."
+              ? "A step in the close flow did not land. Pick a recovery path below."
               : "Three relayer-signed transactions, serial: dlmm_withdraw_close → (optional) dlmm_swap → mixer.deposit."}
         </p>
       </div>
@@ -587,7 +596,7 @@ function CloseFlowPanel({ position }: { position: PortfolioPosition }) {
         ))}
       </ol>
 
-      {failed && <CloseRecoveryStub position={position} />}
+      {failed && <CloseRecoveryPanel position={position} />}
     </div>
   );
 }
@@ -606,34 +615,261 @@ function stepState(
 }
 
 /**
- * Honest placeholder for the user-signed close-recovery action. The
- * actual recovery transaction (mirrors dust/04's user-signed recovery
- * for the Deposit LP Fallback cluster) is wired by close/03; this
- * panel exists so the UI doesn't pretend there's a working button
- * before the backend has one.
+ * close/03 — user-signed close-recovery panel rendered on any
+ * `CLOSE_FAILED` / `SWAP_FAILED` / `REMIX_FAILED` terminal. Mirrors
+ * dust/04's `RecoveryPanel` (Flow 1+2) but offers the close-flow's
+ * two distinct recovery paths:
+ *   - "Complete close" — sign the remaining leg(s) and let the
+ *     Position settle at `CLOSED`.
+ *   - "Bail to withdraw" — sign a direct withdraw and roll the close
+ *     back into `WITHDRAWN`.
+ *
+ * Caveat (mirrors dust/04): Positions whose close was kicked off
+ * before this commit shipped have no `closeWitness`. They fall back
+ * to the legacy stealth-sweep `RecoveryPanel` (Flow 1+2's UI) — same
+ * pattern dust/04 used for pre-witness Positions.
  */
-function CloseRecoveryStub({ position }: { position: PortfolioPosition }) {
+function CloseRecoveryPanel({ position }: { position: PortfolioPosition }) {
+  const { wallet } = useSolana();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const status = position.status.toUpperCase();
+
+  const [pending, setPending] = useState(false);
+  const [disclosureOpen, setDisclosureOpen] = useState(false);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [pendingAction, setPendingAction] = useState<CloseRecoveryAction>("bail-to-withdrawn");
+
+  // Caveat — Positions closed before close/03 shipped have no
+  // `closeWitness`. Fall back to the legacy stealth-sweep `SweepPanel`
+  // so funds are never *truly* stuck just because the witness blob is
+  // missing.
+  const stored = wallet.address
+    ? listLocalPositions(wallet.address).find((p) => p.positionId === position.id)
+    : undefined;
+  const hasWitness = !!stored?.closeWitness;
+
+  if (!hasWitness) {
+    return (
+      <div className="space-y-3">
+        <div
+          role="alert"
+          aria-live="polite"
+          className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5"
+        >
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+            <div>
+              <p className="text-sm font-medium text-amber-100">
+                Recovery available via stealth-sweep fallback ({status})
+              </p>
+              <p className="mt-1 text-sm leading-6 text-amber-100/85">
+                This Position's close was kicked off before close/03 shipped, so the
+                in-browser close-recovery witness is missing. The legacy
+                stealth-sweep path below still recovers any funds parked at the
+                Stealth Wallet — same caveat dust/04 carries for pre-witness deposits.
+              </p>
+            </div>
+          </div>
+        </div>
+        <SweepPanel position={position} />
+      </div>
+    );
+  }
+
+  const openDisclosure = (action: CloseRecoveryAction) => {
+    if (!wallet.address) {
+      toast.error("Connect your origin wallet to recover funds.");
+      return;
+    }
+    setPendingAction(action);
+    setAcknowledged(false);
+    setDisclosureOpen(true);
+  };
+
+  const executeRecovery = async () => {
+    if (!wallet.address || !stored) {
+      toast.error("Connect your origin wallet to recover funds.");
+      return;
+    }
+    setDisclosureOpen(false);
+    setPending(true);
+    const t = toast.loading("Broadcasting user-signed close-recovery…");
+    try {
+      const res = await runUserSignedCloseRecovery({
+        mainWalletAddress: wallet.address,
+        position: stored,
+        recoveryAction: pendingAction,
+      });
+
+      // Mirror the local lifecycle state so the UI doesn't need to wait
+      // for the backend's state-machine flip to come back.
+      if (res.finalState === "WITHDRAWN") {
+        markLocalPositionWithdrawn(wallet.address, position.id, {
+          signature: res.signature,
+          recipient: res.recipient,
+        });
+      } else {
+        markLocalPositionClosed(wallet.address, position.id, {
+          signature: res.signature,
+          recipient: res.recipient,
+        });
+      }
+
+      toast.success(
+        res.finalState === "CLOSED"
+          ? "Close completed via user-signed recovery."
+          : "Funds recovered to your destination.",
+        { id: t, description: res.signature ? shorten(res.signature) : undefined },
+      );
+      queryClient.invalidateQueries({ queryKey: ["positions"] });
+    } catch (err) {
+      if (err instanceof MissingCloseWitnessError) {
+        toast.error(err.message, { id: t });
+      } else {
+        toast.error(err instanceof Error ? err.message : String(err), { id: t });
+      }
+    } finally {
+      setPending(false);
+    }
+  };
+
   return (
-    <div
-      role="alert"
-      aria-live="polite"
-      className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5"
-    >
-      <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
-        <div>
-          <p className="text-sm font-medium text-amber-100">
-            Recovery required — coming soon ({status})
-          </p>
-          <p className="mt-1 text-sm leading-6 text-amber-100/85">
-            The close flow stopped at the {status} terminal. A user-signed
-            close-recovery path is being prepared (close/03) — until then,
-            contact support to drive the recovery manually.
-          </p>
+    <div className="space-y-4">
+      <div
+        role="alert"
+        aria-live="polite"
+        className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5"
+      >
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+          <div>
+            <p className="text-sm font-medium text-amber-100">
+              Close flow stopped at {status} — pick a recovery path
+            </p>
+            <p className="mt-1 text-sm leading-6 text-amber-100/85">
+              Funds are not lost. Sign the recovery transaction(s) yourself to
+              either complete the close (a fresh Commitment lands in the Mixer
+              Pool) or bail out to a direct withdraw (funds go to a destination
+              you control). Both paths break unlinkability for this Position —
+              the origin wallet → destination link becomes visible on-chain.
+            </p>
+          </div>
         </div>
       </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <RecoveryAction
+          variant="subtle"
+          title="Complete close"
+          subtitle="Breaks unlinkability"
+          detail="Sign the remaining leg(s) yourself. The close lands at CLOSED — a fresh Commitment goes into the Mixer Pool, ready for a private withdraw later. Origin wallet is the signer for the remaining txs."
+          onClick={() => openDisclosure("complete-close")}
+          disabled={pending || !wallet.connected}
+        />
+        <RecoveryAction
+          variant="hero"
+          icon={pending ? <Loader2 className="animate-spin" /> : undefined}
+          title="Bail to withdraw"
+          subtitle="Breaks unlinkability"
+          detail="Skip the re-mix. Sign a direct withdraw of any stealth-held funds to your origin wallet. Fastest path but no fresh Commitment is created — the close is rolled back."
+          onClick={() => openDisclosure("bail-to-withdrawn")}
+          disabled={pending || !wallet.connected}
+        />
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate("/portfolio")}
+          className="rounded-xl"
+        >
+          <ExternalLink className="h-4 w-4" />
+          Portfolio
+        </Button>
+      </div>
+
+      <UserSignedCloseRecoveryDialog
+        open={disclosureOpen}
+        onOpenChange={setDisclosureOpen}
+        acknowledged={acknowledged}
+        onAcknowledgedChange={setAcknowledged}
+        onConfirm={executeRecovery}
+        recoveryAction={pendingAction}
+        recipient={wallet.address ?? undefined}
+        pending={pending}
+      />
     </div>
+  );
+}
+
+/**
+ * Pre-sign disclosure dialog for the close/03 user-signed
+ * close-recovery path. Mirrors `UserSignedRecoveryDialog` (dust/04)
+ * but the disclosure copy is specific to the Flow 3 close-flow and
+ * carries the `recoveryAction` so the body explains the right
+ * trade-off.
+ */
+function UserSignedCloseRecoveryDialog({
+  open,
+  onOpenChange,
+  acknowledged,
+  onAcknowledgedChange,
+  onConfirm,
+  recoveryAction,
+  recipient,
+  pending,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  acknowledged: boolean;
+  onAcknowledgedChange: (v: boolean) => void;
+  onConfirm: () => void;
+  recoveryAction: CloseRecoveryAction;
+  recipient?: string;
+  pending: boolean;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-amber-300" />
+            {recoveryAction === "complete-close"
+              ? "Complete the close yourself"
+              : "Bail to a direct withdraw"}
+          </DialogTitle>
+          <DialogDescription>
+            This path is the worst-case-but-always-available recovery for a
+            Position whose close did not settle. It works even if Octora's
+            relayer is offline — the origin wallet signs the recovery tx(s)
+            directly and broadcasts to RPC.
+          </DialogDescription>
+        </DialogHeader>
+
+        <UserSignedCloseRecoveryDisclosure
+          acknowledged={acknowledged}
+          onAcknowledgedChange={onAcknowledgedChange}
+          recoveryAction={recoveryAction}
+          recipient={recoveryAction === "bail-to-withdrawn" ? recipient : undefined}
+        />
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
+            Cancel
+          </Button>
+          <Button
+            variant="hero"
+            onClick={onConfirm}
+            disabled={!acknowledged || pending}
+          >
+            {pending ? <Loader2 className="animate-spin" /> : null}
+            Sign and broadcast
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1002,6 +1238,12 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
   // close/01 — relayer-driven Private Position Close. Posts to the
   // backend orchestrator; the response carries the final cluster state
   // + Recovery Guidance which the `CloseFlowPanel` renders.
+  //
+  // close/03 — at kickoff time we also persist a `closeWitness` blob
+  // client-side so the user-signed close-recovery path has the data it
+  // needs (pool refs, expected stealth balances) to construct the
+  // recovery tx(s) locally if the relayer disappears mid-flight. Same
+  // pattern as dust/04's `mixerWithdrawWitness` for Flow 1+2.
   const handleClose = async () => {
     if (!wallet.address) {
       toast.error("Connect your wallet to close this position.");
@@ -1025,6 +1267,24 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
         const body = (await res.json().catch(() => ({}))) as { message?: string };
         throw new Error(body.message ?? `Close failed: ${res.status}`);
       }
+
+      // close/03 — write the close witness only once the backend has
+      // confirmed the orchestrator started. Writing before the POST
+      // would mean a witness blob for a Position that never actually
+      // entered the close cluster (e.g. a 4xx from the backend).
+      if (position.stealthPubkey) {
+        recordCloseWitness(wallet.address, position.id, {
+          poolAddress: position.poolAddress,
+          stealthPubkey: position.stealthPubkey,
+          positionPubkey: position.stealthPubkey, // best available pubkey on PortfolioPosition
+          otherSideMint: position.tokenBMint ?? undefined,
+          denominationLamports: "1000000000", // MVP single-sided SOL denomination
+          expectedSolLamports: undefined,
+          expectedOtherSideLamports: undefined,
+          ts: Date.now(),
+        });
+      }
+
       toast.success("Close complete — re-mixed into the anonymity set.", { id: t });
       queryClient.invalidateQueries({ queryKey: ["positions"] });
     } catch (err) {

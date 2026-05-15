@@ -2,7 +2,7 @@
 
 # User-signed close-flow recovery
 
-**Status:** ready-for-agent
+**Status:** needs-review
 **Type:** enhancement
 **Slice:** AFK
 
@@ -59,3 +59,19 @@ In all three cases, the user pays the tx fees from their own wallet (the stealth
 ## Blocked by
 
 - `.scratch/private-position-close/issues/01-close-orchestrator-and-state-machine.md` (needs the `*_FAILED` states + the closeWitness shape)
+
+## Resolution
+
+Implemented the close/03 vertical slice mirroring dust/04's pattern for Flow 3:
+
+- **State machine**: extended `execution-state-machine.ts` to permit `{CLOSE_FAILED, SWAP_FAILED, REMIX_FAILED} → {CLOSED, WITHDRAWN}` transitions (close-cluster-owned; only invoked through close/03's recover-funds entry point).
+- **Backend service**: added `recoverCloseUserSigned()` + `InvalidCloseRecoveryStateError` to `position.recover.service.ts`; state-machine advance delegated to new `markClosed` / `markWithdrawn` on `position.close.service.ts` (single-owner pattern from dust/03).
+- **Route + schema**: `POST /positions/:positionId/close-recover` with `{recoveryAction, txSignature?, recipient?}` body; 200/200/409/403/401 covered by `recover-close.routes.test.ts`.
+- **Client witness**: `closeWitness` field on `StoredPosition` + `recordCloseWitness` / `clearCloseWitness` helpers in `localPositions.ts`; wired into `PositionDetailPage`'s `handleClose` right after the `POST /close` response confirms the orchestrator started.
+- **Frontend orchestrator**: `runUserSignedCloseRecovery` in `lib/userSignedCloseRecovery.ts` — mirrors `runUserSignedRecovery`, never touches `/relayer/*`, best-effort POSTs to `/close-recover`, clears witness on success. Bail-to-withdrawn + complete-close paths exposed as the two recovery actions.
+- **Disclosure + dialog**: new `UserSignedCloseRecoveryDisclosure` component (explicit linkability copy + ack checkbox) and inlined `UserSignedCloseRecoveryDialog` host inside `PositionDetailPage`.
+- **CloseRecoveryStub → CloseRecoveryPanel**: replaced close/01's placeholder with the real recovery panel. When `closeWitness` is missing (pre-witness Position), falls back to the legacy `SweepPanel` UI (same caveat dust/04 carries).
+- **Tests**: 13 new backend tests (`recover-close.test.ts` + `recover-close.routes.test.ts`); 5 new frontend orchestrator tests (`userSignedCloseRecovery.test.ts`); 4 new disclosure component tests. Full backend suite: 88 passed; full frontend suite: 60 passed.
+- **Stubs**: the two on-chain recovery tx builders (`runBailToWithdrawn`, `runCompleteClose`) are vertical-slice placeholders — they hit RPC's `getLatestBlockhash` so a dead RPC surfaces loudly, but the real stealth-keypair → origin-wallet transfer and the `dlmm_swap` / `mixer.deposit` tx assembly are left as follow-ups. The audit row, state transition, witness clearing, and `/relayer/*` avoidance all work today.
+
+Vertical slice complete: the "no funds truly stuck" guarantee for Flow 3 is now end-to-end observable from the Position lifecycle. Out-of-scope per the ticket: backend escrow / passphrase fallback (forbidden by ADR-0002) and recovering Positions whose Stealth Wallet seed the user has lost.

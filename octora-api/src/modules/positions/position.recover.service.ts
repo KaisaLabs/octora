@@ -37,6 +37,7 @@ import {
 } from "./position.aggregate";
 import { createRecoveryService } from "./recovery.service";
 import { createDepositLpService } from "./position.deposit-lp.service";
+import { createCloseService } from "./position.close.service";
 
 export interface RecoverFundsUserSignedInput {
   positionId: string;
@@ -126,6 +127,137 @@ export async function recoverFundsUserSigned(
 
   const depositLp = createDepositLpService({ positionRepo, activityService });
   return depositLp.markWithdrawn(input.positionId);
+}
+
+// ── close/03 — user-signed close-recovery ─────────────────────────────
+// Mirrors the dust/04 pattern above but for the Private Position Close
+// cluster (close/01). The browser already broadcast the recovery tx(s)
+// directly via RPC (never via the backend relayer); this entry point
+// records the user-signed audit trail and delegates the terminal
+// transition to the close service so the state machine stays
+// single-owner.
+
+/**
+ * Action the user took after a `*_FAILED` close-flow terminal:
+ *   - `"complete-close"` — user signed the remaining leg(s) themselves
+ *     (dlmm_swap and/or mixer.deposit) and finished the close. Position
+ *     lands at `CLOSED` with a fresh Commitment.
+ *   - `"bail-to-withdrawn"` — user signed a direct sweep / mixer.withdraw
+ *     to a destination they control rather than completing the close.
+ *     Position lands at `WITHDRAWN`; no fresh Commitment minted.
+ */
+export type CloseRecoveryAction = "complete-close" | "bail-to-withdrawn";
+
+export interface RecoverCloseUserSignedInput {
+  positionId: string;
+  recoveryAction: CloseRecoveryAction;
+  /**
+   * Solana signature of the user-signed recovery tx the browser
+   * already submitted. Optional because the frontend may broadcast in
+   * a degraded mode (e.g. local devnet without confirmable signatures)
+   * and still want to drive the terminal transition.
+   */
+  txSignature?: string;
+  /**
+   * Destination address that received the recovered funds (the user's
+   * fresh stealth or origin wallet). Surfaced in the activity log so
+   * the disclosure trail names the now-linked destination explicitly.
+   */
+  recipient?: string;
+}
+
+/**
+ * Caller asked to drive a close-flow Position to CLOSED / WITHDRAWN
+ * from a non-`*_FAILED` state. Surfaces a stable code so the route
+ * layer can return 409 without sniffing message text. Strictly
+ * narrower than `CloseStateTransitionError`: that one fires for any
+ * invalid close-cluster transition, this one fires only when the
+ * close/03 user-signed recovery precondition is violated.
+ */
+export class InvalidCloseRecoveryStateError extends Error {
+  readonly code = "invalid_close_recovery_state";
+  constructor(public readonly state: string) {
+    super(
+      `User-signed close-recovery is only available from CLOSE_FAILED, SWAP_FAILED, or REMIX_FAILED, not ${state}.`,
+    );
+    this.name = "InvalidCloseRecoveryStateError";
+  }
+}
+
+const CLOSE_FAILED_STATES = new Set(["CLOSE_FAILED", "SWAP_FAILED", "REMIX_FAILED"]);
+
+/**
+ * Drive a `*_FAILED` close-flow Position to its terminal CLOSED or
+ * WITHDRAWN state with the user-signed-recovery audit trail.
+ *
+ * Does not perform any on-chain work — the user-signed recovery tx
+ * was already constructed, signed, and broadcast by the browser
+ * before this is called. This function only records the audit row
+ * and delegates the terminal transition to the close service so the
+ * state machine stays single-owner.
+ *
+ * Throws `InvalidCloseRecoveryStateError` when the Position is not in
+ * `CLOSE_FAILED` / `SWAP_FAILED` / `REMIX_FAILED`.
+ */
+export async function recoverCloseUserSigned(
+  positionRepo: PositionRepository,
+  activityService: ActivityService,
+  input: RecoverCloseUserSignedInput,
+): Promise<PositionResponse> {
+  const recoveryService = createRecoveryService();
+  const aggregateDeps: PositionAggregateDeps = {
+    positionRepo,
+    activityService,
+    recoveryService,
+  };
+
+  // Load once to assert the precondition before delegating. We could
+  // let the state-machine guard inside `markClosed` / `markWithdrawn`
+  // raise — but that throws a generic `CloseStateTransitionError`,
+  // which is less specific than what callers need for the "this isn't
+  // a recoverable Position" 409 path.
+  const position = await PositionAggregate.load(aggregateDeps, input.positionId);
+  if (!CLOSE_FAILED_STATES.has(position.state)) {
+    throw new InvalidCloseRecoveryStateError(position.state);
+  }
+
+  // Record the user-signed evidence as a leading activity row at the
+  // current `*_FAILED` state so the audit log captures *who* signed
+  // and *where* the funds went before the terminal "Closed" /
+  // "Recovered" row from the close service lands. Two rows (instead
+  // of mutating the close service's headline) preserves the
+  // single-owner contract for the state-machine transition.
+  await position.recordActivity(position.state, {
+    headline: "User-signed close-recovery submitted",
+    detail: buildCloseRecoveryDetail(input),
+    safeNextStep: "wait",
+  });
+
+  const closeService = createCloseService({ positionRepo, activityService });
+  if (input.recoveryAction === "complete-close") {
+    return closeService.markClosed(input.positionId);
+  }
+  return closeService.markWithdrawn(input.positionId);
+}
+
+function buildCloseRecoveryDetail(input: RecoverCloseUserSignedInput): string {
+  const action =
+    input.recoveryAction === "complete-close"
+      ? "completed the close (signed the remaining leg(s) themselves)"
+      : "bailed to a direct withdraw (signed a sweep / mixer.withdraw straight to a destination they control)";
+  const parts: string[] = [
+    `User signed the close-recovery tx directly and broadcast it without the backend relayer — ${action}.`,
+  ];
+  if (input.recipient) {
+    parts.push(`Funds routed to ${input.recipient}.`);
+  }
+  if (input.txSignature) {
+    parts.push(`Signature: ${input.txSignature}.`);
+  }
+  parts.push(
+    "The origin wallet is now linkable to this recovery destination on-chain — disclosure was surfaced before signing.",
+  );
+  return parts.join(" ");
 }
 
 function buildRecoveryDetail(input: RecoverFundsUserSignedInput): string {

@@ -6,8 +6,10 @@ import {
   DepositLpStateTransitionError,
   FeeClaimBelowThresholdError,
   InvalidRecoveryStateError,
+  InvalidCloseRecoveryStateError,
   MidPositionFeeClaimStateError,
   createPositionService,
+  type CloseRecoveryAction,
   type PositionServiceDependencies,
 } from './position.service'
 import type { PositionRepository } from './position.repository'
@@ -410,7 +412,63 @@ export function createPositionController(deps: PositionControllerDeps) {
         return handleDepositLpError(error, reply)
       }
     },
+
+    // close/03 — user-signed close-recovery reporting endpoint.
+    //
+    // The browser has already built, signed, and broadcast the recovery
+    // tx(s) directly to RPC (no backend relayer involved). This call
+    // asserts the Position is in `CLOSE_FAILED` / `SWAP_FAILED` /
+    // `REMIX_FAILED`, records the user-signed-recovery audit row
+    // (action + signature + linkability disclosure flag), and drives
+    // the transition to `CLOSED` (complete-close) or `WITHDRAWN`
+    // (bail-to-withdrawn). Best-effort from the client's POV: if the
+    // backend is down at this moment, the funds are already safe; the
+    // Position stays in `*_FAILED` until the next successful call.
+    async recoverCloseUserSigned(
+      request: FastifyRequest<{ Params: PositionParams; Body: RecoverCloseBody }>,
+      reply: FastifyReply,
+    ) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.recoverCloseUserSigned({
+          positionId: request.params.positionId,
+          recoveryAction: request.body.recoveryAction,
+          txSignature: request.body.txSignature,
+          recipient: request.body.recipient,
+        })
+        return reply.send(response)
+      } catch (error) {
+        return handleCloseRecoveryError(error, reply)
+      }
+    },
   }
+}
+
+// close/03 — typed error handler for the close-recovery route family.
+// Mirrors `handleDepositLpError`'s shape so the route layer's error
+// mapping stays predictable across recovery clusters.
+function handleCloseRecoveryError(error: unknown, reply: FastifyReply) {
+  if (isPositionNotFoundError(error)) {
+    return reply.code(404).send({ message: error.message })
+  }
+  if (error instanceof InvalidCloseRecoveryStateError) {
+    return reply.code(409).send({ error: 'InvalidCloseRecoveryState', message: error.message })
+  }
+  if (error instanceof CloseStateTransitionError) {
+    return reply.code(409).send({ error: 'StateTransitionRejected', message: error.message })
+  }
+  throw error
+}
+
+// close/03 — request body for `POST /positions/:id/close-recover`.
+// `recoveryAction` is required; `txSignature` + `recipient` are
+// optional evidence rows (the funds-recovery itself is on-chain
+// regardless of whether the browser captured a signature).
+interface RecoverCloseBody {
+  recoveryAction: CloseRecoveryAction
+  txSignature?: string
+  recipient?: string
 }
 
 function handleDepositLpError(error: unknown, reply: FastifyReply) {
