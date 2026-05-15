@@ -129,6 +129,21 @@ export async function registerPositionRoutes(app: FastifyInstance, options: Posi
     controller.withdrawClosePosition,
   )
 
+  // close/01 — Private Position Close orchestrator entry point. Drives
+  // an `active` Position through `dlmm_withdraw_close` -> conditional
+  // `dlmm_swap` -> `mixer.deposit`. Non-`active` source state surfaces
+  // as 409 via `CloseStateTransitionError`; per-leg failures land in
+  // the matching `*_FAILED` terminal with Recovery Guidance baked into
+  // the response.
+  app.post<{ Params: PositionParams }>(
+    '/positions/:positionId/close',
+    {
+      schema: { ...positionParamsSchema, tags },
+      preHandler: mutatePreHandlers,
+    },
+    controller.closePosition,
+  )
+
   // ── Deposit LP Fallback routes (dust/03 + ADR-0004) ────────────────
   // Every route drives a single sub-state transition. Sequencing rules
   // live in `transitions[]` (execution-state-machine.ts) — illegal

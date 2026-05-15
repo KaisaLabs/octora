@@ -58,6 +58,32 @@ export const recoveryCatalog = {
     safeNextStep: "contact-support",
     terminal: true,
   },
+  // ── Private Position Close failure stages (close/01) ──────────────
+  // No `fallbackMode` on any of these — the close flow has no
+  // standard-mode escape lane. `safeNextStep: contact-support` is the
+  // honest answer until close/03 lands the user-signed close-recovery
+  // action button on top.
+  "close-submission": {
+    headline: "Closing the position failed",
+    message:
+      "The DLMM close transaction did not land. Funds are still inside the DLMM Position on Meteora — nothing has moved. Recovery is being prepared.",
+    safeNextStep: "contact-support",
+    terminal: true,
+  },
+  "swap-submission": {
+    headline: "Swapping to SOL failed",
+    message:
+      "The DLMM Position closed but the residual non-SOL token did not swap. Funds sit at the Stealth Wallet. Recovery is being prepared.",
+    safeNextStep: "contact-support",
+    terminal: true,
+  },
+  "remix-submission": {
+    headline: "Re-mixing into the anonymity set failed",
+    message:
+      "The Stealth Wallet holds the close proceeds in SOL, but the mixer deposit did not land. Recovery is being prepared.",
+    safeNextStep: "contact-support",
+    terminal: true,
+  },
 } as const satisfies Record<FailureStage, RecoveryGuidance>;
 
 export function getRecoveryGuidance(failureStage: FailureStage | null | undefined): RecoveryGuidance | null {

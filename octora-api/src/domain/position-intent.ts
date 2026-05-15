@@ -20,7 +20,21 @@ export type ExecutionState =
   | "LP_RETRIED"
   | "PARKED"
   | "WITHDRAWN"
-  | "LP_DONE";
+  | "LP_DONE"
+  // ── Private Position Close cluster (close/01) ─────────────────────
+  // Drives an `active` Position through the three-tx close-flow
+  // mainline: `dlmm_withdraw_close` -> conditional `dlmm_swap` ->
+  // `mixer.deposit`. The cluster ships as named variants of the
+  // existing `ExecutionState` union (same option (a) precedent the
+  // Deposit LP Fallback cluster used) so the existing `canTransition`
+  // guard rejects illegal jumps without a second state machine.
+  | "CLOSING"
+  | "CLOSE_FAILED"
+  | "SWAPPING"
+  | "SWAP_FAILED"
+  | "REMIXING"
+  | "REMIX_FAILED"
+  | "CLOSED";
 
 export type FailureStage =
   | "signature"
@@ -29,7 +43,16 @@ export type FailureStage =
   | "venue-submission"
   | "venue-confirmation"
   | "indexing-lag"
-  | "recovery-required";
+  | "recovery-required"
+  // ── Private Position Close failure stages (close/01) ──────────────
+  // One per relayer-signed leg of the close mainline. No Mode Fallback
+  // (the close flow has no fast-private/standard split — Mode Fallback
+  // is a deposit-only concept), no `surfaceDowngradeDisclosure`. The
+  // user-signed close-recovery escape lands in close/03; until then
+  // `safeNextStep: contact-support` is the honest answer.
+  | "close-submission"
+  | "swap-submission"
+  | "remix-submission";
 
 export interface PositionIntent {
   id: string;

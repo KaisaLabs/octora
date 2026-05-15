@@ -62,6 +62,15 @@ export interface CreateAppOptions {
    * header-stamping stub so route owner-checks still run.
    */
   authPreHandlers?: preHandlerHookHandler[]
+  /**
+   * Optional override for the Private Position Close orchestrator
+   * adapter (close/01). Production deployments don't pass this — the
+   * route currently rejects in production because the Executor's
+   * `buildSwapIx` is not wired yet (scoped to close/04). The test
+   * harness passes an in-memory adapter so the route's HTTP contract
+   * is observable end-to-end.
+   */
+  closeAdapter?: import("#modules/positions/position.service").CloseOrchestrationAdapter
 }
 
 function createPrismaRepositories(): { repos: AppRepositories; client: ReturnType<typeof createPrismaClient> } {
@@ -287,6 +296,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     betaCaps: config.betaCaps,
     authPreHandlers,
     rateLimiterFactory,
+    closeAdapter: options.closeAdapter,
   })
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)

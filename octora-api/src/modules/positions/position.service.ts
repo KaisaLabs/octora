@@ -47,6 +47,11 @@ import {
   type RecoverFundsUserSignedInput,
 } from "./position.recover.service";
 import {
+  createCloseService,
+  CloseStateTransitionError,
+  type CloseOrchestrationAdapter,
+} from "./position.close.service";
+import {
   BetaCapExceededError,
   DEFAULT_BETA_CAPS,
   type PositionResponse,
@@ -58,7 +63,9 @@ export {
   UnsupportedPositionActionError,
   DepositLpStateTransitionError,
   InvalidRecoveryStateError,
+  CloseStateTransitionError,
 };
+export type { CloseOrchestrationAdapter };
 export type { PositionResponse };
 export type {
   CreateDraftPositionIntentInput,
@@ -86,6 +93,13 @@ export interface PositionServiceDependencies {
    * tests that don't care about caps don't have to pass a config.
    */
   betaCaps?: BetaCapsConfig;
+  /**
+   * Adapter for the Private Position Close orchestrator (close/01).
+   * Optional — when omitted, `closePosition` rejects with a typed
+   * error so production deployments must wire a real adapter. Tests
+   * supply an in-memory adapter to exercise the orchestrator.
+   */
+  closeAdapter?: CloseOrchestrationAdapter;
 }
 
 export function createPositionService(deps: PositionServiceDependencies) {
@@ -99,6 +113,11 @@ export function createPositionService(deps: PositionServiceDependencies) {
   const recoveryService = deps.recoveryService ?? createRecoveryService();
   const betaCaps = deps.betaCaps ?? DEFAULT_BETA_CAPS;
   const depositLp = createDepositLpService({ positionRepo, activityService });
+  const closeFlow = createCloseService({
+    positionRepo,
+    activityService,
+    adapter: deps.closeAdapter,
+  });
 
   return {
     createDraftPositionIntent(input: CreateDraftPositionIntentInput): Promise<PositionResponse> {
@@ -159,6 +178,14 @@ export function createPositionService(deps: PositionServiceDependencies) {
     },
     withdrawClosePosition(input: WithdrawClosePositionInput): Promise<PositionResponse> {
       return withdrawClosePosition(positionRepo, activityService, privacyAdapter, meteoraExecutor, input);
+    },
+    /**
+     * close/01 entry point — drive an `active` Position through the
+     * three-tx Private Position Close mainline. Throws
+     * `CloseStateTransitionError` from a non-`active` source state.
+     */
+    closePosition(positionId: string): Promise<PositionResponse> {
+      return closeFlow.initiateClose(positionId);
     },
     getPosition(positionId: string): Promise<PositionResponse> {
       return getPosition(positionRepo, activityService, positionIndexer, positionId);

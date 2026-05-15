@@ -381,6 +381,20 @@ function formatStatusLabel(state: ExecutionState, latestHeadline?: string): stri
       return "Recovered";
     case "LP_DONE":
       return "Position active";
+    case "CLOSING":
+      return "Closing position on Meteora";
+    case "CLOSE_FAILED":
+      return "Close failed";
+    case "SWAPPING":
+      return "Swapping to SOL";
+    case "SWAP_FAILED":
+      return "Swap failed";
+    case "REMIXING":
+      return "Re-mixing into anonymity set";
+    case "REMIX_FAILED":
+      return "Re-mix failed";
+    case "CLOSED":
+      return "Closed privately";
   }
 }
 

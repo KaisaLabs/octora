@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 
 import {
   BetaCapExceededError,
+  CloseStateTransitionError,
   DepositLpStateTransitionError,
   InvalidRecoveryStateError,
   createPositionService,
@@ -162,6 +163,30 @@ export function createPositionController(deps: PositionControllerDeps) {
       } catch (error) {
         if (isPositionNotFoundError(error)) {
           return reply.code(404).send({ message: error.message })
+        }
+        throw error
+      }
+    },
+
+    /**
+     * close/01 — drive an `active` Position through the three-tx
+     * Private Position Close mainline. 409 when the Position is not
+     * in `active` (typed `CloseStateTransitionError`); the orchestrator
+     * stamps the matching `*_FAILED` terminal on any leg failure and
+     * returns the response with Recovery Guidance baked in.
+     */
+    async closePosition(request: FastifyRequest<{ Params: PositionParams }>, reply: FastifyReply) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.closePosition(request.params.positionId)
+        return reply.send(response)
+      } catch (error) {
+        if (isPositionNotFoundError(error)) {
+          return reply.code(404).send({ message: error.message })
+        }
+        if (error instanceof CloseStateTransitionError) {
+          return reply.code(409).send({ error: 'StateTransitionRejected', message: error.message })
         }
         throw error
       }

@@ -403,6 +403,35 @@ function isRecoverablePosition(position: PortfolioPosition): boolean {
   return status === "LP_FAILED" || status === "PARKED";
 }
 
+/**
+ * close/01 — Private Position Close cluster states. Drives the
+ * dedicated close-flow panel rendered by `ActionDrawer`; the
+ * `*_FAILED` terminals route to the `CloseRecoveryStub` placeholder
+ * until close/03 lands the user-signed close-recovery action button.
+ */
+const CLOSE_FLOW_STATES = new Set([
+  "CLOSING",
+  "SWAPPING",
+  "REMIXING",
+  "CLOSED",
+  "CLOSE_FAILED",
+  "SWAP_FAILED",
+  "REMIX_FAILED",
+]);
+
+function isCloseFlowPosition(position: PortfolioPosition): boolean {
+  return CLOSE_FLOW_STATES.has(position.status.toUpperCase());
+}
+
+function isCloseFlowFailed(position: PortfolioPosition): boolean {
+  const status = position.status.toUpperCase();
+  return (
+    status === "CLOSE_FAILED" ||
+    status === "SWAP_FAILED" ||
+    status === "REMIX_FAILED"
+  );
+}
+
 function ActionDrawer({
   position,
   bins,
@@ -422,6 +451,18 @@ function ActionDrawer({
     return (
       <section className="panel-shell rounded-2xl p-5 sm:p-6">
         <RecoveryPanel position={position} />
+      </section>
+    );
+  }
+
+  // close/01 — when the Position is in the Private Position Close
+  // cluster (active progress through CLOSING/SWAPPING/REMIXING, the
+  // CLOSED terminal, or any *_FAILED terminal), render the dedicated
+  // close-flow panel instead of the standard withdraw/rebalance tabs.
+  if (isCloseFlowPosition(position)) {
+    return (
+      <section className="panel-shell rounded-2xl p-5 sm:p-6">
+        <CloseFlowPanel position={position} />
       </section>
     );
   }
@@ -462,6 +503,128 @@ function ActionDrawer({
         )}
       </Tabs>
     </section>
+  );
+}
+
+/**
+ * close/01 — progress + recovery panel for a Position inside the
+ * Private Position Close cluster. Reflects each transition with an
+ * honest label; on `*_FAILED` terminals renders the `CloseRecoveryStub`
+ * placeholder until close/03 lands the user-signed action button.
+ */
+function CloseFlowPanel({ position }: { position: PortfolioPosition }) {
+  const status = position.status.toUpperCase();
+  const failed = isCloseFlowFailed(position);
+
+  const steps: Array<{ key: string; label: string; state: "done" | "active" | "pending" }> = [
+    {
+      key: "CLOSING",
+      label: "Closing position on Meteora",
+      state: stepState(status, "CLOSING"),
+    },
+    {
+      key: "SWAPPING",
+      label: "Swapping residual to SOL (skipped when no non-SOL residue)",
+      state: stepState(status, "SWAPPING"),
+    },
+    {
+      key: "REMIXING",
+      label: "Re-mixing into anonymity set",
+      state: stepState(status, "REMIXING"),
+    },
+    {
+      key: "CLOSED",
+      label: "Closed privately — fresh Commitment landed",
+      state: stepState(status, "CLOSED"),
+    },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 sm:p-5">
+        <p className="text-[11px] uppercase tracking-[0.22em] text-primary/80">
+          Private Position Close
+        </p>
+        <p className="mt-2 text-sm leading-6 text-foreground">
+          {status === "CLOSED"
+            ? "This Position has been closed privately. One denomination of SOL is now a fresh anonymity-set entry — withdraw it later to a new recipient from the mixer."
+            : failed
+              ? "A step in the close flow did not land. Recovery is being prepared."
+              : "Three relayer-signed transactions, serial: dlmm_withdraw_close → (optional) dlmm_swap → mixer.deposit."}
+        </p>
+      </div>
+
+      <ol className="space-y-2">
+        {steps.map((step) => (
+          <li
+            key={step.key}
+            className={`flex items-center gap-3 rounded-xl border p-3 ${
+              step.state === "active"
+                ? "border-primary/60 bg-primary/5"
+                : step.state === "done"
+                  ? "border-border bg-card"
+                  : "border-border/60 bg-card/40 opacity-70"
+            }`}
+          >
+            {step.state === "active" ? (
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+            ) : step.state === "done" ? (
+              <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-primary" />
+            ) : (
+              <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-border" />
+            )}
+            <p className="text-sm leading-5">{step.label}</p>
+          </li>
+        ))}
+      </ol>
+
+      {failed && <CloseRecoveryStub position={position} />}
+    </div>
+  );
+}
+
+function stepState(
+  current: string,
+  step: "CLOSING" | "SWAPPING" | "REMIXING" | "CLOSED",
+): "done" | "active" | "pending" {
+  const order = ["CLOSING", "SWAPPING", "REMIXING", "CLOSED"];
+  const idxCurrent = order.indexOf(current);
+  const idxStep = order.indexOf(step);
+  if (idxCurrent === -1) return "pending";
+  if (idxCurrent === idxStep) return "active";
+  if (idxStep < idxCurrent) return "done";
+  return "pending";
+}
+
+/**
+ * Honest placeholder for the user-signed close-recovery action. The
+ * actual recovery transaction (mirrors dust/04's user-signed recovery
+ * for the Deposit LP Fallback cluster) is wired by close/03; this
+ * panel exists so the UI doesn't pretend there's a working button
+ * before the backend has one.
+ */
+function CloseRecoveryStub({ position }: { position: PortfolioPosition }) {
+  const status = position.status.toUpperCase();
+  return (
+    <div
+      role="alert"
+      aria-live="polite"
+      className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5"
+    >
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+        <div>
+          <p className="text-sm font-medium text-amber-100">
+            Recovery required — coming soon ({status})
+          </p>
+          <p className="mt-1 text-sm leading-6 text-amber-100/85">
+            The close flow stopped at the {status} terminal. A user-signed
+            close-recovery path is being prepared (close/03) — until then,
+            contact support to drive the recovery manually.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -811,6 +974,9 @@ function RecoveryAction({
 function WithdrawPanel({ position }: { position: PortfolioPosition }) {
   const { wallet } = useSolana();
   const [modalOpen, setModalOpen] = useState(false);
+  const [closePending, setClosePending] = useState(false);
+  const queryClient = useQueryClient();
+  const isActive = position.status.toLowerCase() === "active";
 
   const handleWithdraw = () => {
     if (!wallet.address) {
@@ -822,6 +988,41 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
       return;
     }
     setModalOpen(true);
+  };
+
+  // close/01 — relayer-driven Private Position Close. Posts to the
+  // backend orchestrator; the response carries the final cluster state
+  // + Recovery Guidance which the `CloseFlowPanel` renders.
+  const handleClose = async () => {
+    if (!wallet.address) {
+      toast.error("Connect your wallet to close this position.");
+      return;
+    }
+    if (!isActive) {
+      toast.error(`Position must be active to close (current: ${position.status}).`);
+      return;
+    }
+    setClosePending(true);
+    const t = toast.loading("Closing position privately…");
+    try {
+      const res = await fetch(`/positions/${position.id}/close`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-wallet-address": wallet.address,
+        },
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        throw new Error(body.message ?? `Close failed: ${res.status}`);
+      }
+      toast.success("Close complete — re-mixed into the anonymity set.", { id: t });
+      queryClient.invalidateQueries({ queryKey: ["positions"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err), { id: t });
+    } finally {
+      setClosePending(false);
+    }
   };
 
   return (
@@ -846,6 +1047,35 @@ function WithdrawPanel({ position }: { position: PortfolioPosition }) {
         your main wallet. ~10 minutes end-to-end; no on-chain link between the
         stealth that held the position and the main wallet that receives the SOL.
       </p>
+
+      {/* close/01 — Private Position Close (relayer-driven mainline) */}
+      <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 sm:p-5">
+        <p className="text-[11px] uppercase tracking-[0.22em] text-primary/80">
+          Private re-mix close
+        </p>
+        <p className="mt-2 text-sm leading-6 text-foreground">
+          Close the DLMM Position, swap any non-SOL residue to SOL, then re-mix
+          one denomination back into the Mixer Pool as a fresh Commitment. The
+          link between this Position's deposit and any future withdraw stays
+          inside the Merkle tree.
+        </p>
+        <Button
+          variant="subtle"
+          size="lg"
+          className="mt-3 w-full justify-center rounded-xl"
+          onClick={handleClose}
+          disabled={!wallet.connected || !isActive || closePending}
+        >
+          {closePending ? <Loader2 className="animate-spin" /> : null}
+          {closePending ? "Closing…" : "Close + re-mix"}
+        </Button>
+        {!isActive && (
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Close button is only available while the Position is `active`. Current
+            state: {position.status}.
+          </p>
+        )}
+      </div>
 
       {position.stealthPubkey && (
         <PrivateExitModal

@@ -64,6 +64,67 @@ describe("execution state machine", () => {
   });
 });
 
+describe("Private Position Close cluster (close/01)", () => {
+  it("allows the close mainline happy path with swap to settle into CLOSED", () => {
+    expect(canTransition("active", "CLOSING")).toBe(true);
+    expect(canTransition("CLOSING", "SWAPPING")).toBe(true);
+    expect(canTransition("SWAPPING", "REMIXING")).toBe(true);
+    expect(canTransition("REMIXING", "CLOSED")).toBe(true);
+  });
+
+  it("allows the close mainline swap-skip path (CLOSING -> REMIXING directly)", () => {
+    expect(canTransition("CLOSING", "REMIXING")).toBe(true);
+  });
+
+  it("allows each leg's failure to its matching *_FAILED terminal", () => {
+    expect(canTransition("CLOSING", "CLOSE_FAILED")).toBe(true);
+    expect(canTransition("SWAPPING", "SWAP_FAILED")).toBe(true);
+    expect(canTransition("REMIXING", "REMIX_FAILED")).toBe(true);
+  });
+
+  it("rejects illegal jumps across the close cluster", () => {
+    // active can only enter the cluster via CLOSING — no direct
+    // shortcut to any later state.
+    expect(canTransition("active", "CLOSED")).toBe(false);
+    expect(canTransition("active", "SWAPPING")).toBe(false);
+    expect(canTransition("active", "REMIXING")).toBe(false);
+
+    // CLOSING can only fan out to SWAPPING, REMIXING, or CLOSE_FAILED.
+    // It must not jump to a terminal success state or a sibling
+    // failure terminal.
+    expect(canTransition("CLOSING", "CLOSED")).toBe(false);
+    expect(canTransition("CLOSING", "SWAP_FAILED")).toBe(false);
+    expect(canTransition("CLOSING", "REMIX_FAILED")).toBe(false);
+
+    // SWAPPING must not skip the REMIXING step.
+    expect(canTransition("SWAPPING", "CLOSED")).toBe(false);
+    // SWAPPING cannot bounce back to CLOSING.
+    expect(canTransition("SWAPPING", "CLOSING")).toBe(false);
+    // SWAPPING cannot land in the wrong terminal failure.
+    expect(canTransition("SWAPPING", "CLOSE_FAILED")).toBe(false);
+    expect(canTransition("SWAPPING", "REMIX_FAILED")).toBe(false);
+
+    // REMIXING cannot rewind or land in the wrong failure terminal.
+    expect(canTransition("REMIXING", "CLOSING")).toBe(false);
+    expect(canTransition("REMIXING", "SWAPPING")).toBe(false);
+    expect(canTransition("REMIXING", "CLOSE_FAILED")).toBe(false);
+    expect(canTransition("REMIXING", "SWAP_FAILED")).toBe(false);
+
+    // Terminal states are terminal.
+    expect(canTransition("CLOSED", "active")).toBe(false);
+    expect(canTransition("CLOSED", "CLOSING")).toBe(false);
+    expect(canTransition("CLOSE_FAILED", "CLOSING")).toBe(false);
+    expect(canTransition("SWAP_FAILED", "SWAPPING")).toBe(false);
+    expect(canTransition("REMIX_FAILED", "REMIXING")).toBe(false);
+
+    // No cross-cluster bleed into the Deposit LP Fallback states or
+    // the legacy `active`/`completed` lanes.
+    expect(canTransition("CLOSING", "active")).toBe(false);
+    expect(canTransition("CLOSED", "completed")).toBe(false);
+    expect(canTransition("CLOSING", "LP_PENDING")).toBe(false);
+  });
+});
+
 describe("mode policy", () => {
   it("exposes the canonical standard and fast private values", () => {
     expect(modePolicy.standard).toEqual({

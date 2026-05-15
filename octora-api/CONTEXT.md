@@ -64,6 +64,19 @@ The two-phase `Private Deposit -> Position Open` path — primary mainline after
 
 Permitted transitions: `DEPOSITED -> LP_PENDING -> { LP_FAILED | LP_DONE }`; `LP_FAILED -> { LP_RETRIED | PARKED | WITHDRAWN }`; `PARKED -> { LP_RETRIED | WITHDRAWN }`; `LP_RETRIED -> { LP_PENDING | LP_FAILED | LP_DONE }`. `LP_DONE` and `WITHDRAWN` are terminal and clear the persisted deposit intent via the `Position` aggregate.
 
+**Private Position Close State**:
+The three-tx Private Position Close mainline (Flow 3 in CONTEXT-MAP.md, close/01) ships as a sub-state cluster of the existing Position state machine — same option (a) precedent the Deposit LP Fallback cluster set: named variants of the `ExecutionState` union so the existing `canTransition` guard rejects illegal jumps without a parallel machine. Mainline: `active -> CLOSING -> (SWAPPING ->)? REMIXING -> CLOSED`. The substates are:
+
+- `CLOSING` — relayer submitted `dlmm_withdraw_close` (Executor CPI to Meteora: claim fees + remove all liquidity + close the DLMM Position account).
+- `SWAPPING` — relayer is swapping the stealth's non-SOL residual to SOL via Meteora (`dlmm_swap`). Skipped when the residual is at or below `CLOSE_SWAP_DUST_THRESHOLD_LAMPORTS` (1000 lamports of the other-side token's smallest unit, a named constant in `position.close.service.ts`) — that residual stays at the Stealth Wallet as documented sub-denom dust per ADR-0003.
+- `REMIXING` — relayer submitted `mixer.deposit` for one denomination of SOL into the same-denomination Mixer Pool the original deposit used.
+- `CLOSED` — terminal; the mixer accepted a fresh Commitment that the user can later withdraw to a new recipient. The connection between the original deposit and the post-close re-mix stays inside the Mixer Pool's Merkle Tree.
+- `CLOSE_FAILED`, `SWAP_FAILED`, `REMIX_FAILED` — terminal failure for each leg. Each carries a matching Failure Stage (`close-submission`, `swap-submission`, `remix-submission`) and `safeNextStep: contact-support` until close/03's user-signed close-recovery escape lands. No Mode Fallback applies — the close flow has no `fast-private`/`standard` split.
+
+Permitted transitions: `active -> CLOSING`; `CLOSING -> { SWAPPING | REMIXING | CLOSE_FAILED }`; `SWAPPING -> { REMIXING | SWAP_FAILED }`; `REMIXING -> { CLOSED | REMIX_FAILED }`. All `*_FAILED` and `CLOSED` are terminal.
+
+The three txs are serial and relayer-signed (not atomic — ADR-0003 blocks atomic compounds). A bot watching the chain sees only relayer-signed activity: the DLMM Position closes, any non-SOL residual swaps to SOL, and one denomination of SOL deposits into the Mixer Pool. The connection between the original deposit and the post-close anonymity-set entry stays inside the Mixer Pool's Merkle Tree.
+
 **Persisted Deposit Intent**:
 The off-chain `{commitment, intended_pool, denom_lamports, expires_at}` row keyed by nullifier hash that the backend writes when a Position enters `DEPOSITED`. The user holds the nullifier preimage off-chain (custodial-less by design); the backend only sees the hash. Cleared on `LP_DONE` or `WITHDRAWN`. Without it, a tab close between deposit and add-liquidity would orphan the user's funds — with it, the funds are always discoverable from the user's Encrypted Seed plus their main wallet signature.
 _Avoid_: Stuck Deposit Record, Pending Position State
