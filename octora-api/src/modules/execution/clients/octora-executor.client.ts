@@ -77,6 +77,32 @@ export interface WithdrawCloseParams {
   remainingAccountsInfo: Buffer;
 }
 
+/**
+ * close/01 — params for the executor's `dlmm_swap` wrapper.
+ *
+ * Source of truth: `programs/octora-executor/src/instructions/dlmm/swap.rs`.
+ * The Anchor account struct is just the 4 outer slots (stealth signer,
+ * dlmm_program, lb_pair, config); everything else — including
+ * `user_token_in`, `user_token_out`, both mints, reserves, oracle, bin
+ * arrays, transfer-hook accounts — flows through
+ * `dlmmRemainingAccounts` (MIN_REMAINING = 17 in swap.rs). The caller
+ * assembles that list from the live pool state and the stealth's ATAs.
+ *
+ * `amountIn` + `minAmountOut` arrive as `BN | bigint`; the IDL coerces
+ * either to u64. `remainingAccountsInfo` is the same Borsh `Vec<u8>`
+ * tail the other DLMM ixs use (empty `[0,0,0,0]` when no Token-2022
+ * transfer hooks).
+ */
+export interface SwapParams {
+  stealth: PublicKey;
+  lbPair: PublicKey;
+  dlmmRemainingAccounts: AccountMeta[];
+  amountIn: BN | bigint;
+  minAmountOut: BN | bigint;
+  /** Borsh-encoded `RemainingAccountsInfo` (empty Vec when no hooks). */
+  remainingAccountsInfo: Buffer;
+}
+
 export class OctoraExecutorClient {
   readonly program: Program;
   readonly programId: PublicKey;
@@ -181,6 +207,37 @@ export class OctoraExecutorClient {
         poolAuthority: pa,
         lbPair: p.lbPair,
         dlmmProgram: DLMM_PROGRAM_ID,
+        config,
+      })
+      .remainingAccounts(p.dlmmRemainingAccounts)
+      .instruction();
+  }
+
+  /**
+   * Build the executor's `dlmm_swap` ix — the pause-gated, slippage-
+   * enforced wrapper around Meteora DLMM `swap2`. The stealth signer
+   * authorizes the inner ix (no PDA signing — see swap.rs trust model).
+   *
+   * `min_amount_out` is enforced both by DLMM's internal slippage check
+   * and by the executor's pre/post `user_token_out.amount` read, so a
+   * realized swap output below the cap reverts the tx and lets the
+   * orchestrator land in `SWAP_FAILED`.
+   *
+   * The caller assembles `dlmmRemainingAccounts` per the layout in
+   * swap.rs (16 fixed slots + ≥1 bin array, plus any transfer-hook tail).
+   */
+  async buildSwapIx(p: SwapParams): Promise<TransactionInstruction> {
+    const [config] = this.deriveConfig();
+    const amountInBn = p.amountIn instanceof BN ? p.amountIn : new BN(p.amountIn.toString());
+    const minOutBn =
+      p.minAmountOut instanceof BN ? p.minAmountOut : new BN(p.minAmountOut.toString());
+
+    return (this.program.methods as any)
+      .dlmmSwap(amountInBn, minOutBn, p.remainingAccountsInfo)
+      .accounts({
+        stealth: p.stealth,
+        dlmmProgram: DLMM_PROGRAM_ID,
+        lbPair: p.lbPair,
         config,
       })
       .remainingAccounts(p.dlmmRemainingAccounts)

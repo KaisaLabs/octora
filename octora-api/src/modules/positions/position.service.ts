@@ -67,6 +67,7 @@ import {
   type CloseBuilderInput,
   type CloseBuilderResult,
   type CloseRecoveryLeg,
+  type CloseRecoveryLegBuilders,
 } from "./position.close-builder.service";
 import type { SolanaChain } from "#common/solana/chain";
 import {
@@ -104,6 +105,9 @@ export type { CloseOrchestrationAdapter, CloseInitiateOptions };
 export type { CloseQuoteAdapter, CloseQuoteResponse };
 // close/06 — re-exported so the controller + tests can name the leg union.
 export type { CloseRecoveryLeg, CloseBuilderInput, CloseBuilderResult };
+// close/06 production wiring — per-leg ix builders that swap in for
+// the placeholder shape when the close-builder route is fully wired.
+export type { CloseRecoveryLegBuilders };
 export type { PositionResponse };
 export type {
   CreateDraftPositionIntentInput,
@@ -159,6 +163,16 @@ export interface PositionServiceDependencies {
    * must wire a real chain.
    */
   closeBuilderChain?: SolanaChain;
+  /**
+   * close/06 production wiring — per-leg ix builders. When wired, each
+   * leg of the close-recovery flow emits real on-chain ixs
+   * (`dlmm_withdraw_close`, `dlmm_swap`, `mixer.deposit`); when
+   * omitted, the placeholder zero-lamport transfer keeps the unsigned
+   * tx structurally valid for the test path. Same scope-down as
+   * `closeAdapter` / `closeQuoteAdapter`: production deployments
+   * wire this; tests opt in per-case.
+   */
+  closeBuilderLegBuilders?: CloseRecoveryLegBuilders;
 }
 
 export function createPositionService(deps: PositionServiceDependencies) {
@@ -292,7 +306,10 @@ export function createPositionService(deps: PositionServiceDependencies) {
           "close-builder is not wired: pass a `closeBuilderChain` to createPositionService.",
         );
       }
-      return buildCloseRecoveryTx({ chain: deps.closeBuilderChain }, input);
+      return buildCloseRecoveryTx(
+        { chain: deps.closeBuilderChain, legBuilders: deps.closeBuilderLegBuilders },
+        input,
+      );
     },
     /**
      * close/05 — mid-position fee claim. Builds + relayer-signs

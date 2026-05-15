@@ -86,6 +86,16 @@ export interface CreateAppOptions {
    * or pass `null` to exercise the 501 "unwired" surface explicitly.
    */
   closeBuilderChain?: import("#common/solana/chain").SolanaChain | null
+  /**
+   * close/06 production wiring — per-leg ix builders. When supplied,
+   * the close-builder route emits real on-chain ixs
+   * (`dlmm_withdraw_close`, `dlmm_swap`, `mixer.deposit`); when
+   * omitted, the placeholder zero-lamport transfer keeps the unsigned
+   * tx well-formed for the test path. Production deployments wire this
+   * via the Executor + Mixer clients; the in-memory route tests omit
+   * it to exercise the placeholder contract.
+   */
+  closeBuilderLegBuilders?: import("#modules/positions/position.service").CloseRecoveryLegBuilders
 }
 
 function createPrismaRepositories(): { repos: AppRepositories; client: ReturnType<typeof createPrismaClient> } {
@@ -322,6 +332,7 @@ export async function createApp(options: CreateAppOptions = {}) {
       options.closeBuilderChain === null
         ? undefined
         : (options.closeBuilderChain ?? chains.executor),
+    closeBuilderLegBuilders: options.closeBuilderLegBuilders,
   })
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)

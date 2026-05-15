@@ -2,7 +2,7 @@
 
 # Wire production executor + mixer ix into close adapters
 
-**Status:** ready-for-agent
+**Status:** needs-review
 **Type:** enhancement
 **Slice:** AFK
 
@@ -49,3 +49,46 @@ Flow 3 (Private Position Close) ships with three adapter interfaces, all current
 ## Blocked by
 
 None — all upstream tickets (close/01–06) are landed. This is the final integration step before Flow 3 ships in production.
+
+## Resolution (2026-05-15)
+
+Production wiring landed as plumbing. Headline deliverables:
+
+1. **`OctoraExecutorClient.buildSwapIx`** — added in `octora-executor.client.ts`. Mirrors `buildWithdrawCloseIx` shape (stealth, lbPair, dlmmRemainingAccounts, amountIn, minAmountOut, remainingAccountsInfo). Sister-test in `octora-executor.client.test.ts` pins the `dlmm_swap` discriminator + dynamic-length `8 disc + 8 u64 + 8 u64 + 4 Borsh-len + tail` data shape + 21-key list (4 outer + 17 remaining). Same precedent as the executor-buildwithdrawclose-mismatch fix.
+
+2. **Production `CloseOrchestrationAdapter`** — `src/modules/positions/adapters/production-close.adapter.ts`. Takes `OctoraExecutorClient` + per-denomination `MixerService` + optional `CloseContextResolver`. `submitWithdrawClose` / `submitSwap` invoke real `build*Ix` + `sendIx`; `submitMixerDeposit` builds the unsigned deposit tx (proving the mixer plumbing is correct) and surfaces `CloseOrchestrationWiringIncompleteError` for the relayer-signer seam. Without a `contextResolver`, every method throws the typed error — production deployments see a 503-equivalent rather than fabricated success. Same precedent `OnchainMeteoraExecutor.requireOnchainCtx` set for the deposit-LP cluster.
+
+3. **Production `CloseQuoteAdapter`** — `src/modules/positions/adapters/production-close-quote.adapter.ts`. `computeSwapOut` delegates to the live `dlmm.chain.getSwapQuote` (real on-chain read, same code path as `/dlmm/swap-quote`). `assertMintSupported` re-throws an `UnsupportedMintExtensionError`-shaped error the close-quote service already pattern-matches on. Other methods reject via `CloseQuoteWiringIncompleteError` until the per-position resolver lands.
+
+4. **Production `closeBuilderChain`** — `position.close-builder.service.ts` extended with optional `legBuilders` per-leg ix-builder hook. When wired, each leg (`withdraw-close`, `swap`, `mixer-deposit`) emits real `TransactionInstruction[]` from the supplied builder; when omitted (test path + unwired-production path), the zero-lamport placeholder keeps the unsigned tx structurally valid. `minAmountOutLamports` math runs in one place and threads into both the swap builder and the response. Threaded through `createApp` via `CreateAppOptions.closeBuilderLegBuilders`.
+
+5. **Tests (structural mocks, per ticket fall-back)** — 19 net new tests, all green:
+   - `octora-executor.client.test.ts` +1 (buildSwapIx data shape + key count)
+   - `close-builder.production-wiring.test.ts` +5 (legBuilders dispatch + min-out threading + per-leg fallback)
+   - `adapters/__tests__/production-close.adapter.test.ts` +6 (wiring-incomplete error + wired ix-builder delegation + min-out math)
+   - `adapters/__tests__/production-close-quote.adapter.test.ts` +7 (getSwapQuote delegation + mint-precheck reshape + null-denomination caveat)
+   
+   Backend suite: 284 → 303 passing. No regressions. Surfpool deferred — structural mocks proved real signal in <2 hours; surfpool would have eaten the budget without adding novel coverage given the in-memory-adapter tests in `close-flow.test.ts` already pin the orchestrator's state-machine sequencing.
+
+6. **Glossary** — `octora-api/CONTEXT.md` updated under **Private Position Close State** with a "Production wiring status" paragraph documenting the resolver migration seam and the ADR-0003 / ADR-0004 invariants that still apply.
+
+### What's NOT landed (next ticket)
+
+- **Per-position context resolver**: the stealth keypair + lb_pair + position pubkey + bin range + DLMM remaining-accounts + denomination + remix-commitment need to land on `PositionRow` or via a sibling resolver service. Until then, every production-adapter call surfaces `*WiringIncompleteError`. Same gap that blocks `OnchainMeteoraExecutor` from real production use.
+- **Relayer-signed `mixer.deposit` submission** inside `submitMixerDeposit` — the adapter builds the unsigned tx but the relayer signer seam isn't threaded through.
+- **ATA-read for `otherSideResidualLamports`** — currently returns `0n` (orchestrator interprets as "single-sided SOL, skip swap"); needs the stealth ATA pubkey on the context.
+
+### Files touched
+
+- `src/modules/execution/clients/octora-executor.client.ts` — `+buildSwapIx`, `+SwapParams`
+- `src/modules/execution/__tests__/octora-executor.client.test.ts` — `+buildSwapIx` sister-test
+- `src/modules/positions/adapters/production-close.adapter.ts` — new
+- `src/modules/positions/adapters/production-close-quote.adapter.ts` — new
+- `src/modules/positions/adapters/index.ts` — new (re-exports)
+- `src/modules/positions/adapters/__tests__/production-close.adapter.test.ts` — new
+- `src/modules/positions/adapters/__tests__/production-close-quote.adapter.test.ts` — new
+- `src/modules/positions/__tests__/close-builder.production-wiring.test.ts` — new
+- `src/modules/positions/position.close-builder.service.ts` — `+CloseRecoveryLegBuilders` + real-ix dispatch
+- `src/modules/positions/position.service.ts` — `+closeBuilderLegBuilders` dep + re-export
+- `src/app.ts` — `+closeBuilderLegBuilders` thread-through
+- `octora-api/CONTEXT.md` — production-wiring status note

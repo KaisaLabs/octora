@@ -121,6 +121,44 @@ describe("OctoraExecutorClient", () => {
     expect(ix.keys.length).toBe(19);
   });
 
+  it("buildSwapIx serialises (u64, u64, Vec<u8>) args after the dlmm_swap discriminator", async () => {
+    // close/01 — sister-test of buildWithdrawCloseIx that pins the
+    // dynamic-length data shape so a future arg-order regression on
+    // dlmm_swap surfaces at the unit level (same precedent as the
+    // executor-buildwithdrawclose-mismatch fix).
+    const client = makeClient();
+    const stealth = Keypair.generate().publicKey;
+    const lbPair = Keypair.generate().publicKey;
+    // swap.rs MIN_REMAINING = 16 fixed + ≥1 bin array = 17.
+    const remaining = Array.from({ length: 17 }, () => ({
+      pubkey: Keypair.generate().publicKey,
+      isSigner: false,
+      isWritable: false,
+    }));
+
+    const remainingAccountsInfo = Buffer.from([0, 0, 0, 0]);
+    const ix = await client.buildSwapIx({
+      stealth,
+      lbPair,
+      dlmmRemainingAccounts: remaining,
+      amountIn: 1_000_000n,
+      minAmountOut: 990_000n,
+      remainingAccountsInfo,
+    });
+
+    const expectedDisc = anchorDiscriminator("dlmm_swap");
+    expect(ix.data.subarray(0, 8).equals(expectedDisc)).toBe(true);
+
+    // 8 disc + 8 (u64 amount_in) + 8 (u64 min_amount_out)
+    // + 4 (Borsh u32 length prefix for Vec<u8>) + remainingAccountsInfo.length.
+    expect(ix.data.length).toBe(8 + 8 + 8 + 4 + remainingAccountsInfo.length);
+    expect(ix.data.readBigUInt64LE(8)).toBe(1_000_000n);
+    expect(ix.data.readBigUInt64LE(16)).toBe(990_000n);
+
+    // 4 outer (stealth, dlmmProgram, lbPair, config) + 17 remaining = 21.
+    expect(ix.keys.length).toBe(21);
+  });
+
   it("buildWithdrawCloseIx serialises (i32, i32, u16, Vec<u8>) args after the dlmm_withdraw_close discriminator", async () => {
     const client = makeClient();
     const stealth = Keypair.generate().publicKey;
