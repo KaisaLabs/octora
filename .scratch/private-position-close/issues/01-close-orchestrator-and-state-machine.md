@@ -2,7 +2,7 @@
 
 # Private Position Close orchestrator + state machine
 
-**Status:** ready-for-agent
+**Status:** needs-review
 **Type:** enhancement
 **Slice:** AFK
 
@@ -84,3 +84,54 @@ Out of scope here; ticket 04 handles the precheck. This ticket may assume the st
 ## Blocked by
 
 None — can start immediately.
+
+## Resolution (close/01)
+
+**Status:** needs-review
+**Branch:** `ticket/close-orchestrator-and-state-machine` (commit `1a0cb4c`)
+
+### Files
+
+- `octora-api/src/domain/position-intent.ts` — `CLOSING`, `CLOSE_FAILED`, `SWAPPING`, `SWAP_FAILED`, `REMIXING`, `REMIX_FAILED`, `CLOSED` added to `ExecutionState`; `close-submission`, `swap-submission`, `remix-submission` added to `FailureStage`.
+- `octora-api/src/domain/execution-state-machine.ts` — transitions table extended with the close cluster (mainline + failure terminals + swap-skip path).
+- `octora-api/src/domain/recovery.ts` — new catalog entries for each close Failure Stage (no `fallbackMode`, `safeNextStep: contact-support` until close/03).
+- `octora-api/src/modules/positions/position.close.service.ts` — new service. Exposes `initiateClose` orchestrator + `record*Submitted/Confirmed/Failed` state-machine driver methods. Defines `CLOSE_SWAP_DUST_THRESHOLD_LAMPORTS = 1000n` and the `CloseOrchestrationAdapter` interface.
+- `octora-api/src/modules/positions/position.aggregate.ts` — `formatStatusLabel` cases for the seven new states.
+- `octora-api/src/modules/positions/position.service.ts` — wires `createCloseService` and exposes `closePosition(positionId)` + `CloseStateTransitionError` + `CloseOrchestrationAdapter` types.
+- `octora-api/src/modules/positions/position.controller.ts` — `closePosition` handler (404/409 typed errors).
+- `octora-api/src/modules/positions/position.routes.ts` — `POST /positions/:positionId/close` route.
+- `octora-api/src/app.ts` — `CreateAppOptions.closeAdapter` thread-through so the test harness can inject an in-memory adapter.
+- `octora-api/CONTEXT.md` — new "Private Position Close State" glossary entry covering the cluster, transitions, dust threshold, and the privacy invariant.
+- `octora-web/src/pages/PositionDetailPage.tsx` — Close button on `WithdrawPanel` when state is `active`; `CloseFlowPanel` (progress steps + state-driven labels) + `CloseRecoveryStub` (honest "Recovery required — coming soon" placeholder) when state is in the close cluster.
+
+### Tests
+
+- `octora-api/src/domain/__tests__/execution-state-machine.test.ts` — +3 describe blocks for the close cluster: legal mainline (with/without swap), each leg's failure transitions, and an "illegal jumps" block with **17 illegal-transition cases** (well above the 8 minimum: shortcuts from `active`, skipping REMIXING, wrong-failure terminals, terminal-state lockdown, no cross-cluster bleed).
+- `octora-api/src/modules/positions/__tests__/close-flow.test.ts` — **13 tests**: state-machine driver routing through SWAPPING vs REMIXING based on dust threshold, swap-skip activity-log assertions, `record*` rejection from wrong source states, **orchestrator happy-paths SOL-only & with-swap**, **each `*_FAILED` transition** with Recovery Guidance assertions, dust-threshold boundary (exact-at-threshold = skip), non-`active` source rejection.
+- `octora-api/src/modules/positions/__tests__/close-flow.routes.test.ts` — **2 tests**: `POST /close` 200 from `active` (state becomes `CLOSED`, statusLabel `Closed privately`) + 409 from `draft` (`StateTransitionRejected`).
+- Full suite (excluding other-ticket files): **38 tests passing** across the 5 close-related files; **0 regressions** in `deposit-lp.test.ts` (10 tests) or `recover-funds.test.ts` (4 tests).
+
+### Executor-surface gap (scoped down)
+
+The Executor client (`octora-executor.client.ts`) does not yet expose `buildSwapIx` or any swap CPI wiring (close/04 territory). Rather than block this slice, the close service talks through a typed `CloseOrchestrationAdapter` interface:
+
+```ts
+interface CloseOrchestrationAdapter {
+  submitWithdrawClose(...): Promise<{ signature; otherSideResidualLamports }>
+  submitSwap(...): Promise<{ signature }>
+  submitMixerDeposit(...): Promise<{ signature }>
+}
+```
+
+Production deployments don't pass `closeAdapter` into `createApp`, so `POST /positions/:id/close` rejects with a clear "createCloseService was constructed without an adapter" error. The test harness injects an in-memory adapter to exercise every leg end-to-end. **Wiring this adapter to the real Executor + Mixer clients is explicitly close/04's territory** (the ticket already flags `dlmm_swap` as out-of-scope for close/01 in its "Token-2022 / TransferHook gating" + "Blocked by" sections, though scope-down to the adapter shape is the concrete consequence).
+
+### Other notes
+
+- The close cluster's Recovery Guidance currently surfaces `safeNextStep: contact-support` on all three `*_FAILED` terminals — close/03 will land the user-signed close-recovery action button + drive a permitted transition out of those terminals.
+- The dust threshold (`CLOSE_SWAP_DUST_THRESHOLD_LAMPORTS = 1000n`) is a hardcoded named constant in `position.close.service.ts` so future tuning is a one-line change.
+- `mixer.deposit` denomination logic (denominate against the original Mixer Pool denomination, remainder stays in stealth) is intentionally pushed down into the `submitMixerDeposit` adapter method — the orchestrator never sees lamport math, only "did the deposit confirm?". The actual denomination resolution lives where mixer wiring lives, not here.
+
+### Blockers
+
+None for this slice. The adapter scope-down means close/04 has a clean typed interface to fulfil; until then the route is wired but not callable in production.
+
