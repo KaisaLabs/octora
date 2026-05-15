@@ -231,6 +231,76 @@ export async function getPositionState(args: {
   return res.json()
 }
 
+// ── Mid-position fee claim (close/05) ────────────────────────────────
+// POST /positions/:positionId/claim-fees + /claim-fees/remix.
+// Position state stays `active` throughout — these endpoints emit
+// Activity Records only, no state-machine transition.
+
+export interface MidPositionClaimReceipt {
+  position: { id: string; state: string; statusLabel: string }
+  session: { state: string }
+  claimedSolLamports: string
+  claimedOtherLamports: string
+  claimedOtherMintSymbol: string | null
+  signature: string
+  activity: Array<{
+    state: string
+    headline: string
+    detail: string
+    createdAtIso: string
+  }>
+}
+
+export interface MidPositionRemixReceipt {
+  source: 'fee-claim'
+  remixedLamports: string
+  commitment: string | null
+  leafIndex: number | null
+  signature: string | null
+  position: { id: string; state: string }
+  activity: Array<{ headline: string; detail: string; createdAtIso: string }>
+}
+
+export async function claimMidPositionFees(
+  positionId: string,
+  opts: { walletAddress: string },
+): Promise<MidPositionClaimReceipt> {
+  const res = await fetch(`${API_BASE}/positions/${positionId}/claim-fees`, {
+    method: 'POST',
+    headers: { 'x-wallet-address': opts.walletAddress },
+  })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string; code?: string }
+    throw new Error(body.message ?? `claim-fees failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function remixClaimedFees(
+  positionId: string,
+  args: {
+    denomLamports: string
+    commitment?: string
+    leafIndex?: number
+    txSignature?: string
+  },
+  opts: { walletAddress: string },
+): Promise<MidPositionRemixReceipt> {
+  const res = await fetch(`${API_BASE}/positions/${positionId}/claim-fees/remix`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-wallet-address': opts.walletAddress,
+    },
+    body: JSON.stringify(args),
+  })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string; code?: string }
+    throw new Error(body.message ?? `claim-fees/remix failed: ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function getPoolDetail(
   address: string,
   network: 'mainnet' | 'devnet' | 'localnet' = 'devnet'

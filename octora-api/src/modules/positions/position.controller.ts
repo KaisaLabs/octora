@@ -4,7 +4,9 @@ import {
   BetaCapExceededError,
   CloseStateTransitionError,
   DepositLpStateTransitionError,
+  FeeClaimBelowThresholdError,
   InvalidRecoveryStateError,
+  MidPositionFeeClaimStateError,
   createPositionService,
   type PositionServiceDependencies,
 } from './position.service'
@@ -46,6 +48,17 @@ interface RecoverFundsBody {
   withdrawSignature?: string
   /** Address the funds went to (a fresh stealth or the origin wallet). */
   withdrawRecipient?: string
+}
+
+interface RemixClaimedFeesBody {
+  /** Mixer Pool denomination (lamports decimal-string). */
+  denomLamports: string
+  /** Optional client-supplied commitment for the fresh deposit. */
+  commitment?: string
+  /** Leaf index returned by the on-chain DepositEvent. */
+  leafIndex?: number
+  /** On-chain signature of the resulting mixer.deposit. */
+  txSignature?: string
 }
 
 export interface PositionControllerDeps extends PositionServiceDependencies {
@@ -187,6 +200,82 @@ export function createPositionController(deps: PositionControllerDeps) {
         }
         if (error instanceof CloseStateTransitionError) {
           return reply.code(409).send({ error: 'StateTransitionRejected', message: error.message })
+        }
+        throw error
+      }
+    },
+
+    /**
+     * close/05 — mid-position fee claim. Builds + relayer-signs the
+     * fee-claim ix, lands fees in the Stealth Wallet, emits an
+     * Activity Record. Position state stays `active`. Throws
+     * `MidPositionFeeClaimStateError` (409) when the Position is not
+     * in `active`.
+     */
+    async claimMidPositionFees(
+      request: FastifyRequest<{ Params: PositionParams }>,
+      reply: FastifyReply,
+    ) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.claimMidPositionFees({
+          positionId: request.params.positionId,
+        })
+        return reply.send(response)
+      } catch (error) {
+        if (isPositionNotFoundError(error)) {
+          return reply.code(404).send({ message: error.message })
+        }
+        if (error instanceof MidPositionFeeClaimStateError) {
+          return reply.code(409).send({
+            error: 'StateTransitionRejected',
+            code: 'fee_claim_invalid_state',
+            message: error.message,
+          })
+        }
+        throw error
+      }
+    },
+
+    /**
+     * close/05 — re-mix the claimed SOL. Wraps the existing Flow 1
+     * `mixer.deposit` deposit machinery (the caller drives the deposit
+     * ix via /mixer/deposit; this endpoint records the outcome and
+     * tags the Activity Record with `source: "fee-claim"`).
+     */
+    async remixClaimedFees(
+      request: FastifyRequest<{ Params: PositionParams; Body: RemixClaimedFeesBody }>,
+      reply: FastifyReply,
+    ) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.remixClaimedFees({
+          positionId: request.params.positionId,
+          denomLamports: request.body.denomLamports,
+          commitment: request.body.commitment,
+          leafIndex: request.body.leafIndex,
+          txSignature: request.body.txSignature,
+        })
+        return reply.send(response)
+      } catch (error) {
+        if (isPositionNotFoundError(error)) {
+          return reply.code(404).send({ message: error.message })
+        }
+        if (error instanceof MidPositionFeeClaimStateError) {
+          return reply.code(409).send({
+            error: 'StateTransitionRejected',
+            code: 'fee_claim_invalid_state',
+            message: error.message,
+          })
+        }
+        if (error instanceof FeeClaimBelowThresholdError) {
+          return reply.code(422).send({
+            error: 'ValidationError',
+            code: 'fee_claim_remix_below_denom',
+            message: error.message,
+          })
         }
         throw error
       }

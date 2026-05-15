@@ -55,6 +55,25 @@ export const lpFailedSchema = {
 } as const
 
 /**
+ * close/05 — body for `/claim-fees/remix`. denomLamports is the only
+ * required field. The on-chain commitment / leaf-index / signature are
+ * optional because the caller may report them in a follow-up call once
+ * the on-chain `DepositEvent` lands.
+ */
+export const remixClaimedFeesSchema = {
+  body: {
+    type: 'object',
+    required: ['denomLamports'],
+    properties: {
+      denomLamports: { type: 'string', minLength: 1 },
+      commitment: { type: 'string', minLength: 1 },
+      leafIndex: { type: 'integer', minimum: 0 },
+      txSignature: { type: 'string', minLength: 1 },
+    },
+  },
+} as const
+
+/**
  * Body is fully optional — the caller may report just the state
  * transition, with no signature evidence (e.g. broadcast-and-forget on
  * local devnet). `nullable: true` lets fastify accept an absent body

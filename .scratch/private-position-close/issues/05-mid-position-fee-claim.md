@@ -2,7 +2,7 @@
 
 # Mid-position fee claim (no close)
 
-**Status:** ready-for-agent
+**Status:** needs-review
 **Type:** enhancement
 **Slice:** AFK
 
@@ -60,3 +60,66 @@ Ticket 04 covers this for close. The same rule applies to fee-claim: if the othe
 ## Blocked by
 
 None — can start immediately. Reuses the existing Flow 1 deposit machinery.
+
+## Resolution
+
+**Branch:** `feat/position-mid-fee-claim`
+**Source:** `refactor/octora-api` @ 7ed436a
+
+### Re-mix path chosen: (a) — new endpoint `POST /positions/:positionId/claim-fees/remix`
+
+Justification: wrapping endpoint keeps re-mix discoverable per-Position, lets us tag the Activity Record with `source: "fee-claim"` without polluting `/mixer/deposit`'s contract, and reuses the same ownership / wallet-auth pre-handler chain the rest of the Position routes share.
+
+### Backend
+
+- **New service** `position.fee-claim.service.ts` — `claimMidPositionFees` + `remixClaimedFees`. Loads via `Position.load`, asserts `state === "active"` on row + session, calls `meteoraExecutor.claim`, records Activity at `active` (no state transition). `remixClaimedFees` validates denom + records `source: "fee-claim"` Activity. Display threshold constant `MID_POSITION_FEE_CLAIM_DISPLAY_THRESHOLD_LAMPORTS = 10_000_000n` (0.01 SOL).
+- **Errors:** `MidPositionFeeClaimStateError extends ConflictError` (409, code `fee_claim_invalid_state`), `FeeClaimBelowThresholdError extends ValidationError` (422, code `fee_claim_remix_below_denom`).
+- **Composition root** `position.service.ts` exposes `claimMidPositionFees` + `remixClaimedFees`.
+- **Routes** `position.routes.ts` — `POST /positions/:positionId/claim-fees`, `POST /positions/:positionId/claim-fees/remix`. Wired to `mutatePreHandlers` (same rate-limit + auth chain as other Position mutations). `remixClaimedFeesSchema` requires `denomLamports`; commitment / leafIndex / txSignature optional.
+- **No new `ExecutionState` variants** — Position stays `active` end-to-end (verified by tests).
+
+### UI
+
+- **New component** `EarnedFeesCard.tsx`. Self-gating: renders only when `positionState` (or `position.status`) is `"active"`. Shows accrued fees preview, threshold guard (0.01 USD default — `EARNED_FEES_DISPLAY_THRESHOLD_USD`), Claim button. Post-claim panel surfaces SOL + non-SOL residual + signature, Re-mix offer (gated on SOL ≥ denom, default 0.1 SOL `DEFAULT_REMIX_DENOM_LAMPORTS`), Leave-it action with disclosure copy.
+- **API helpers** added to `lib/api.ts`: `claimMidPositionFees`, `remixClaimedFees`, typed `MidPositionClaimReceipt` / `MidPositionRemixReceipt`.
+- **Wired into** `PositionDetailPage.tsx` between `PnLBreakdownPanel` and `ActionDrawer`. Region-disjoint from ticket 01's Close button (lives inside `ActionDrawer`).
+
+### Token-2022 / TransferHook gating
+
+Per ticket 04: claim never blocks; only the Re-mix offer surfaces a tooltip when there's a non-SOL residual. Component carries `TODO(close/04)` pointing at `assertExecutorSupportsMint` so the precheck can be threaded in once ticket 04 lands.
+
+### Activity Records
+
+- Claim: headline `"Fees claimed to Stealth Wallet"`, detail records SOL + other lamports + mint symbol + signature.
+- Re-mix: headline `"Fees re-mixed"`, detail prefixed `Source: fee-claim. Re-mixed N SOL.` and stamped with commitment / leaf-index / signature.
+
+### Tests
+
+- **Backend unit** `__tests__/fee-claim.test.ts` — 4 tests: happy claim, 409 from non-active state, re-mix offer threshold + source tagging, re-mix 409 from non-active state.
+- **Backend route** `__tests__/fee-claim.routes.test.ts` — 5 tests: 200 happy path, 409 + typed code on bad state, 403 wrong-wallet, 200 happy re-mix, 409 re-mix from non-active.
+- **Frontend** `EarnedFeesCard.test.tsx` — 7 tests: gate-on-active, claim enabled/disabled rules, Re-mix offer activation by SOL portion vs denom (above + below), Leave-it disclosure copy, Re-mix API wiring.
+- Full backend suite: **222 tests pass**. Full web suite: **41 tests pass**.
+
+### Files touched
+
+```
+octora-api/src/modules/positions/position.fee-claim.service.ts        (new)
+octora-api/src/modules/positions/position.service.ts                  (compose + exports)
+octora-api/src/modules/positions/position.controller.ts               (handlers + error mapping)
+octora-api/src/modules/positions/position.routes.ts                   (2 new POST routes)
+octora-api/src/modules/positions/position.schema.ts                   (remixClaimedFeesSchema)
+octora-api/src/modules/positions/__tests__/fee-claim.test.ts          (new)
+octora-api/src/modules/positions/__tests__/fee-claim.routes.test.ts   (new)
+octora-web/src/components/octora/lp/EarnedFeesCard.tsx                (new)
+octora-web/src/components/octora/lp/__tests__/EarnedFeesCard.test.tsx (new)
+octora-web/src/lib/api.ts                                             (2 helpers + types)
+octora-web/src/pages/PositionDetailPage.tsx                           (wire EarnedFeesCard)
+.scratch/private-position-close/issues/05-mid-position-fee-claim.md   (status + resolution)
+```
+
+### Blockers / follow-ups
+
+- The mock executor returns a stub `claimedSolLamports = 0.25 SOL`. The on-chain path falls back to the same stub until `OnchainMeteoraExecutor.claim` surfaces post-claim balance detail — same MAINNET_BLOCKER as `position.claim.service`. Wire when that gap closes.
+- TransferHook precheck on the Re-mix offer is a tooltip-only until ticket 04 lands `assertExecutorSupportsMint`. Marked with `TODO(close/04)` in the component.
+- The original Position's Mixer Pool denomination is hard-coded to 0.1 SOL on the client (`DEFAULT_REMIX_DENOM_LAMPORTS`). When `Position` persists the original deposit's denom, thread it into the `EarnedFeesCard` prop instead of the default.
+
