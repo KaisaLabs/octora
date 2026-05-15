@@ -1,0 +1,28 @@
+[package]
+name = "octora-executor"
+version = "0.1.0"
+description = "On-chain executor that wraps Meteora DLMM via CPI on behalf of stealth wallets"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "octora_executor"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# Devnet/local-only: bypasses the EXECUTOR_ADMIN_AUTHORITY address check on
+# `init_config`, letting any signer initialize the global Config for testing.
+# **Never enable on mainnet builds.** Production deploy must use the default
+# feature set so the address constraint stays active.
+permissionless-init = []
+
+[dependencies]
+anchor-lang = "0.32.1"
+anchor-spl = "0.32.1"
+solana-sha256-hasher = "2"
+

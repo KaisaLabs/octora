@@ -1,0 +1,59 @@
+{
+  "name": "octora",
+  "version": "1.0.0",
+  "description": "<p align=\"center\">   <h1 align=\"center\">Octora</h1>   <p align=\"center\"><em>Private execution layer for Meteora LP actions on Solana</em></p> </p>",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "validator:reset": "rm -rf .anchor/test-ledger",
+    "validator": "pkill -f solana-test-validator >/dev/null 2>&1 ; sleep 1 ; npm run validator:reset && solana-test-validator --reset --quiet --ledger .anchor/test-ledger --bind-address 127.0.0.1 --rpc-port 8899 --bpf-program BHxT3jyWJ1mRLyMjywQoiSXBqo7YpTiGWC1oVr2Ppnzx target/deploy/octora_mixer.so --bpf-program 4n47TYP2hQ2bwS8GiU3a1EVyF9mgeSbKWBvAVmUjaUtK target/deploy/octora_executor.so --bpf-program LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo tests/fixtures/meteora_dlmm.so --url https://api.mainnet-beta.solana.com --clone D1ZN9Wj1fRSUQfCjhvnu1hqDMT7hzjzBBpi12nVniYD6 --clone BYQtcDyv2BoFuf5ghsYDGPA8iX5F4WquK7zCzUsDwJ63",
+    "validator:stop": "pkill -f solana-test-validator || true",
+    "test:executor-cpi": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/id.json npx ts-mocha -p ./tsconfig.json -t 1000000 tests/octora-executor-happy-path.ts",
+    "test:executor-init": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/id.json npx ts-mocha -p ./tsconfig.json -t 1000000 tests/octora-executor-init-position.ts",
+    "test:executor-lifecycle": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/id.json npx ts-mocha -p ./tsconfig.json -t 1000000 tests/octora-executor-lifecycle.ts",
+    "test:executor-compound-fail-closed": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/id.json npx ts-mocha -p ./tsconfig.json -t 1000000 tests/octora-executor-compound-fail-closed.ts",
+    "test:coverage-gaps": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/id.json npx ts-mocha -p ./tsconfig.json -t 1000000 tests/octora-coverage-gaps.ts",
+    "test:executor-cpi:devnet": "ANCHOR_PROVIDER_URL=https://api.devnet.solana.com ANCHOR_WALLET=$HOME/.config/solana/id.json npx ts-mocha -p ./tsconfig.json -t 1000000 tests/octora-executor-happy-path.ts",
+    "deploy:mixer:devnet": "solana program deploy --url devnet --program-id target/deploy/octora_mixer-keypair.json target/deploy/octora_mixer.so",
+    "deploy:executor:devnet": "solana program deploy --url devnet --program-id target/deploy/octora_executor-keypair.json target/deploy/octora_executor.so",
+    "deploy:devnet": "npm run deploy:mixer:devnet && npm run deploy:executor:devnet",
+    "balance:devnet": "solana balance -u devnet"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KaisaLabs/octora.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/KaisaLabs/octora/issues"
+  },
+  "homepage": "https://github.com/KaisaLabs/octora#readme",
+  "devDependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@meteora-ag/dlmm": "^1.9.7",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
+    "@types/chai": "^4.3.20",
+    "@types/mocha": "^10.0.10",
+    "bn.js": "^5.2.3",
+    "chai": "^4.5.0",
+    "circomlibjs": "^0.1.7",
+    "mocha": "^10.8.2",
+    "snarkjs": "^0.7.6",
+    "ts-mocha": "^11.1.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "underscore@<1.13.8": "^1.13.8",
+      "serialize-javascript@<7.0.5": "^7.0.5"
+    }
+  }
+}
