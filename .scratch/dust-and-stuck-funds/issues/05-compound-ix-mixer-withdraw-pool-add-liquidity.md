@@ -2,7 +2,7 @@
 
 # Atomic compound ix: mixer.withdraw → pool.add_liquidity
 
-**Status:** ready-for-agent
+**Status:** needs-review
 **Type:** enhancement
 **Slice:** AFK
 
@@ -62,3 +62,36 @@ Validator (`cavecrew-reviewer`) confirms the fail-closed scaffold is correctly b
 Original acceptance criteria for the real CPI implementation stay open in this ticket — the rescoped criteria above are the *near-term* deliverable. Real implementation reopens when ADR-0003 is superseded.
 
 Status: ready-for-agent.
+
+### Resolution — 2026-05-15 (Worker, rescoped phase)
+
+Both rescoped acceptance criteria delivered. Original AC for the live CPI implementation remains open until ADR-0003 is superseded.
+
+**1. Tests**
+
+- TS integration test: `tests/octora-executor-compound-fail-closed.ts`
+  - Single `describe` block, one test that bundles three assertions (test plan IDs `EXEC-COMPOUND-001/002/003`):
+    - `001`: calls `compound_withdraw_add_liquidity` with canonical Mixer + DLMM program IDs and the live `config` PDA; asserts the Anchor error name in program logs equals `CompoundCpiUnsupported` (matched by name, not numeric code, to stay robust against enum reordering).
+    - `002`: relayer lamport balance delta after the failed tx is `>= 0` and `<= 1_000_000` lamports — only the tx fee, no compound side-effect spend.
+    - `003`: stealth pubkey returns `null` from `getAccountInfo` both before and after the ix — handler never wrote any account state.
+  - Runs via the new `npm run test:executor-compound-fail-closed` script (mirrors the existing `test:executor-*` patterns).
+  - **Not executed against a live validator in this run** — the standard `npm run validator` harness is the same one the other negative suites require; runner is unchanged.
+
+- Backend vitest unit test: `octora-api/src/modules/mixer/__tests__/compound-withdraw-add-liquidity.builder.test.ts`
+  - `MIXER-COMPOUND-001/002/003`: asserts the guard throws `CompoundCpiNotImplementedError`, that the error carries a stable `code = compound_cpi_not_implemented`, and that it extends `ApiError` with HTTP 422.
+  - **Run result:** 3/3 passing (`npx vitest run src/modules/mixer/__tests__/compound-withdraw-add-liquidity.builder.test.ts`). Full mixer suite: 19/19 passing.
+
+**2. Backend guard**
+
+- Path: `octora-api/src/modules/mixer/builders/compound-withdraw-add-liquidity.builder.ts`
+  - Lives alongside the other mixer tx builders (`deposit.builder.ts`, `withdraw.builder.ts`, `initialize.builder.ts`) per the structure established in commit `4aff469`.
+  - Exports `CompoundCpiNotImplementedError extends ValidationError` with stable code `compound_cpi_not_implemented` (HTTP 422).
+  - Exports `buildCompoundWithdrawAddLiquidityTransaction(ctx, args)` whose body unconditionally throws the typed error — actual code, not a comment.
+  - References ADR-0003 inline so anyone reaching this file at the moment they wire it up is pointed at the architectural blocker.
+  - Argument shape is typed (`BuildCompoundWithdrawAddLiquidityArgs`) so the eventual real implementation drops in as a body swap with no caller-side churn.
+
+**Out of scope / not done (intentional)**
+
+- Did not modify the on-chain handler — validator confirmed it is already correct.
+- Did not wire the guard into `MixerService` or any route — there is no caller yet; wiring it now would create a dead production code path. The guard is reachable via direct import, which is what its test exercises.
+- Original AC (live CPI, position NFT owner = stealth, CU budget measured, no dust trail) remains open. That work reopens when ADR-0003 is superseded.
