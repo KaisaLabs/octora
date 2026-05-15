@@ -121,7 +121,7 @@ describe("OctoraExecutorClient", () => {
     expect(ix.keys.length).toBe(19);
   });
 
-  it("buildWithdrawCloseIx serialises (i32, i32, u16) args after the dlmm_withdraw_close discriminator", async () => {
+  it("buildWithdrawCloseIx serialises (i32, i32, u16, Vec<u8>) args after the dlmm_withdraw_close discriminator", async () => {
     const client = makeClient();
     const stealth = Keypair.generate().publicKey;
     const lbPair = Keypair.generate().publicKey;
@@ -131,6 +131,7 @@ describe("OctoraExecutorClient", () => {
       isWritable: false,
     }));
 
+    const remainingAccountsInfo = Buffer.from([0, 0, 0, 0]);
     const ix = await client.buildWithdrawCloseIx({
       stealth,
       lbPair,
@@ -138,14 +139,15 @@ describe("OctoraExecutorClient", () => {
       fromBinId: -5,
       toBinId: 5,
       bpsToRemove: 10000,
-      remainingAccountsInfo: Buffer.from([0, 0, 0, 0]),
+      remainingAccountsInfo,
     });
 
     const expectedDisc = anchorDiscriminator("dlmm_withdraw_close");
     expect(ix.data.subarray(0, 8).equals(expectedDisc)).toBe(true);
 
-    // 8 disc + 4 (i32 fromBinId) + 4 (i32 toBinId) + 2 (u16 bps) = 18.
-    expect(ix.data.length).toBe(8 + 4 + 4 + 2);
+    // 8 disc + 4 (i32 fromBinId) + 4 (i32 toBinId) + 2 (u16 bps)
+    // + 4 (Borsh u32 length prefix for Vec<u8>) + remainingAccountsInfo.length.
+    expect(ix.data.length).toBe(8 + 4 + 4 + 2 + 4 + remainingAccountsInfo.length);
     expect(ix.data.readInt32LE(8)).toBe(-5);
     expect(ix.data.readInt32LE(12)).toBe(5);
     expect(ix.data.readUInt16LE(16)).toBe(10000);
