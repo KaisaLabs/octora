@@ -2,7 +2,7 @@
 
 # Drop dust-sweeper from roadmap (cleanup)
 
-**Status:** ready-for-agent
+**Status:** needs-review
 **Type:** enhancement
 **Slice:** AFK
 
@@ -52,8 +52,41 @@ Worker C also claimed `tests/octora-executor-happy-path.ts.bak` contained one hi
 
 **Rescoped acceptance criteria (choose path (b)):**
 
-- [ ] `.out-of-scope/sweeper.md` updated with a "Current status" section: scaffolds exist (5, 6); dust at protocol level is deferred per ADR-0003; sweeper is still rejected as a fix because the band-aid argument stands regardless of whether the canonical fix has landed
-- [ ] Verify or drop the `.ts.bak` claim. If verified, cite the line number; if not, remove from the prior comment
-- [ ] Run grep one more time across the codebase post-codex-commits; report all hits in a final comment
+- [x] `.out-of-scope/sweeper.md` updated with a "Current status" section: scaffolds exist (5, 6); dust at protocol level is deferred per ADR-0003; sweeper is still rejected as a fix because the band-aid argument stands regardless of whether the canonical fix has landed
+- [x] Verify or drop the `.ts.bak` claim. If verified, cite the line number; if not, remove from the prior comment
+- [x] Run grep one more time across the codebase post-codex-commits; report all hits in a final comment
 
-Status: ready-for-agent.
+Status: needs-review.
+
+### Resolution — 2026-05-15 (worker, rescoped path (b))
+
+**1. `.out-of-scope/sweeper.md` updated.** New "Current status (2026-05-15)" section added:
+- States plainly that Issues 05 + 06 are currently fail-closed scaffolds and cites ADR-0003 by path (`octora-api/docs/adr/0003-compound-mixer-dlmm-cpi-remains-fail-closed.md`).
+- Names protocol-level dust as a deferred, accepted outcome — not fixed.
+- Restates the band-aid argument: the four objections to a sweeper (off-chain service to run, treasury siphon to disclose, new account taxonomy, linkage surface) are all independent of whether the canonical fix has landed.
+- Cross-references Issues 05 and 06 by path.
+- Distinguishes the user-driven opt-in link-revealing manual sweep in `octora-web` from a protocol-run sweeper service.
+
+**2. `.ts.bak` verification.** Worker C's prior claim is **unverified**. My `grep -ni "sweep" tests/octora-executor-happy-path.ts.bak` returned exit 1 with zero matches. The earlier comment should be treated as incorrect — there is no historical `sweeps` reference in that backup fixture. (Per ticket constraint, the prior comment is left in place; this resolution comment is the correction of record.)
+
+**3. Final grep sweep results.** Excluded `node_modules/`, `target/`, `.git/`, `dist/`, `.claude/`.
+
+`grep -rni "sweep\|sweeper"` — total hits: 79. Categorized:
+
+(a) **Expected — tracker / out-of-scope / design doc:**
+- `.scratch/dust-and-stuck-funds/issues/08-sweeper-removal-cleanup.md` — this ticket (8 hits).
+- `.scratch/dust-and-stuck-funds/issues/05-compound-ix-mixer-withdraw-pool-add-liquidity.md` — 1 hit cross-referencing the rejection.
+- `.scratch/dust-and-stuck-funds/issues/06-compound-ix-claim-fee-mixer-deposit.md` — 2 hits noting dust is accepted protocol-level outcome.
+- `.out-of-scope/sweeper.md` — the rejection record itself (multiple hits, expected).
+- `docs/dust-and-stuck-funds-design.md` + `.html` — the design doc that authored the rejection (4 + 4 hits).
+
+(b) **Suspect — needs human review before any action:**
+- `CORE_FEATURES_MVP_PLAN.md` lines 388, 425 — describes a user-facing manual "sweep" of residual dust with privacy warning. This is the documented UX, not a protocol sweeper, but the wording could mislead a future reader. Flagging.
+- `MVP_LAUNCH_PLAN.md` line 187 — same user-facing manual sweep UX as above. Flagging.
+- `runbooks/deployment/key-rotation.md` line 103 and `runbooks/deployment/secrets.md` line 121 — "sweep the old key" in a key-rotation context. **Unrelated to dust sweeper** (operational key cleanup). Flagging for review only because the grep matched; recommend leaving as-is.
+- `runbooks/incident/mixer-pause.md` line 9 — phrase "treasury sweep" used as a counterexample lever the runbook explicitly does *not* take. Unrelated, but flagging.
+- `octora-web/src/components/octora/lp/PrivateExitModal.tsx`, `octora-web/src/components/octora/lp/StealthAddressDisplay.tsx`, `octora-web/src/lib/privateLifecycle.ts`, `octora-web/src/lib/privateExit.ts`, `octora-web/src/hooks/usePortfolioPositions.ts`, `octora-web/src/lib/localPositions.ts`, `octora-web/src/pages/PositionDetailPage.tsx`, `octora-web/src/components/octora/types.ts` — frontend implementation of the user-driven, opt-in, link-revealing manual stealth-→-main sweep (`runSweepStealthToMain`, `executeStealthSweep`, `dust-sweep` step, `SweepPanel`, `SweepStealthInput/Result`). **Not a protocol sweeper service**, but uses overlapping terminology. The updated `.out-of-scope/sweeper.md` now names this distinction explicitly. Flagging for human review per ticket instructions; recommend leaving the code as-is.
+
+`grep -rni "dust-collect\|residual-collect"` — total hits: 2. Both inside this ticket file itself (lines 13 and 22, where the term appears in the acceptance criteria). No code or doc references elsewhere.
+
+**Net:** no code changes required. Documentation update (`.out-of-scope/sweeper.md`) is the only deliverable; all other grep hits are either expected tracker context or the orthogonal user-facing manual sweep UX. Flagged the user-facing UX matches in (b) so a human can confirm whether the terminology in `CORE_FEATURES_MVP_PLAN.md` / `MVP_LAUNCH_PLAN.md` / `octora-web` should be renamed to make the distinction from a protocol sweeper service more obvious; not auto-modified.
