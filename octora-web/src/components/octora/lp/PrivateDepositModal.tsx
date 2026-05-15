@@ -27,6 +27,7 @@ import { StealthExplainerModal } from "./StealthExplainerModal";
 import { DenominationSelector } from "./DenominationSelector";
 import { tierForAnonymity } from "./AnonymityBadge";
 import { StealthAddressDisplay } from "./StealthAddressDisplay";
+import { StealthRiskDisclosure } from "./StealthRiskDisclosure";
 
 interface Props {
   open: boolean;
@@ -430,6 +431,7 @@ export function PrivateDepositModal({
           shape,
           ts: Date.now(),
           network: NETWORK,
+          mode: "fast-private",
           signatures: {
             mixerDeposit: res.mixerDepositSignature,
             relayerWithdraw: res.relayerWithdrawSignature,
@@ -736,6 +738,8 @@ function PreviewBody({
         on-chain. Your main wallet never appears as the LP owner.
       </div>
 
+      <StealthRiskDisclosure compact />
+
       {IS_DEVNET && (breakdown.poolTokensMissingPrice || breakdown.usedDevnetFallback || testTarget) && (
         <div className="space-y-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-xs leading-5 text-amber-200">
           <div className="flex items-center gap-1.5 font-medium text-amber-300">
@@ -1009,4 +1013,3 @@ function formatTokens(n: number): string {
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
-

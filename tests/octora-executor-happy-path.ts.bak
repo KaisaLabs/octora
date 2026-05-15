@@ -168,7 +168,7 @@ describe("octora-executor :: happy path lifecycle (fresh local LB pair)", () => 
   // and the SPL Token program requires the authority on a transfer to also
   // own the source account — so the source ATA must be PDA-owned. Funds
   // get transferred here from the user before add_liquidity, and DLMM
-  // sweeps them into the LB pair reserves from inside the CPI.
+  // transfers them into the LB pair reserves from inside the CPI.
   let pdaAtaX: PublicKey;
   let pdaAtaY: PublicKey;
 

@@ -54,6 +54,14 @@ export interface StoredPosition {
    *  keyed by (wallet, pool, positionId). The orchestrators read this on
    *  recovery to pick which derivation to call. New positions = "v2". */
   derivationVersion?: "v1" | "v2";
+  /** Local terminal/failure marker used by the web fallback panels while the
+   *  backend state machine catches up. */
+  lifecycleStatus?: "LP_FAILED" | "PARKED" | "WITHDRAWN";
+  /** Position execution-mode metadata mirrored from backend activity when available. */
+  mode?: "fast-private" | "standard" | string;
+  fallbackMode?: "standard" | "fast-private" | string;
+  surfaceDowngradeDisclosure?: boolean;
+  safeNextStep?: "wait" | "recover" | "retry" | string;
 }
 
 const KEY_PREFIX = "octora.positions.v1.";
@@ -128,6 +136,52 @@ export function markLocalPositionClosed(
       closedAt: meta.ts ?? Date.now(),
       withdrawSignature: meta.signature,
       withdrawRecipient: meta.recipient,
+    };
+  });
+  if (!changed) return;
+  window.localStorage.setItem(storageKey(walletAddress), JSON.stringify(next));
+  notifyChanged();
+}
+
+export function markLocalPositionWithdrawn(
+  walletAddress: string,
+  positionId: string,
+  meta: CloseMetadata = {},
+): void {
+  if (!walletAddress || typeof window === "undefined") return;
+  const current = listLocalPositions(walletAddress);
+  let changed = false;
+  const next = current.map((p) => {
+    if (p.positionId !== positionId) return p;
+    changed = true;
+    return {
+      ...p,
+      closed: true,
+      lifecycleStatus: "WITHDRAWN" as const,
+      closedAt: meta.ts ?? Date.now(),
+      withdrawSignature: meta.signature,
+      withdrawRecipient: meta.recipient,
+    };
+  });
+  if (!changed) return;
+  window.localStorage.setItem(storageKey(walletAddress), JSON.stringify(next));
+  notifyChanged();
+}
+
+export function markLocalPositionLifecycleStatus(
+  walletAddress: string,
+  positionId: string,
+  lifecycleStatus: NonNullable<StoredPosition["lifecycleStatus"]>,
+): void {
+  if (!walletAddress || typeof window === "undefined") return;
+  const current = listLocalPositions(walletAddress);
+  let changed = false;
+  const next = current.map((p) => {
+    if (p.positionId !== positionId) return p;
+    changed = true;
+    return {
+      ...p,
+      lifecycleStatus,
     };
   });
   if (!changed) return;

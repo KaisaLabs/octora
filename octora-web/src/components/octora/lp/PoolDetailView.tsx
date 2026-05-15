@@ -8,6 +8,7 @@ import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
 import { PositionStatusPill } from "@/components/octora/lp/PositionStatusPill";
 import { PrivateDepositModal } from "@/components/octora/lp/PrivateDepositModal";
 import { AnonymityBadge } from "@/components/octora/lp/AnonymityBadge";
+import { StealthRiskDisclosure } from "@/components/octora/lp/StealthRiskDisclosure";
 import { usePoolBins } from "@/hooks/usePoolBins";
 import { getPrices } from "@/lib/api";
 
@@ -124,6 +125,7 @@ function DepositPanel({
 
   const [shape, setShape] = useState<DistributionShape>(presetShape ?? "curve");
   const [depositOpen, setDepositOpen] = useState(false);
+  const [riskAck, setRiskAck] = useState(false);
 
   // SOL/USD price drives the summary calculations (entry fee, daily est, etc.)
   // since the user now picks SOL amount instead of USD freetext. Falls back
@@ -304,6 +306,11 @@ function DepositPanel({
               withdrawal from the same pool.
             </p>
           </div>
+
+          <StealthRiskDisclosure
+            acknowledged={riskAck}
+            onAcknowledgedChange={setRiskAck}
+          />
         </div>
 
         <div className="rounded-2xl border border-border bg-card p-4 sm:p-5">
@@ -332,6 +339,7 @@ function DepositPanel({
             onClick={() => setDepositOpen(true)}
             disabled={
               !selectedDenomLamports ||
+              !riskAck ||
               range.upper < range.lower ||
               isFallback ||
               binsLoading
@@ -525,6 +533,7 @@ function SolDenominationPicker({
   onChange: (lamports: string, anonymitySet: number) => void;
 }) {
   const [pools, setPools] = useState<MixerPoolEntry[] | null>(null);
+  const [anonymitySetMin, setAnonymitySetMin] = useState(20);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -536,17 +545,20 @@ function SolDenominationPicker({
       })
       .then((data) => {
         if (cancelled) return;
-        setPools(data.pools ?? []);
+        const min = data.anonymitySetMin ?? 20;
+        setAnonymitySetMin(min);
+        const activePools = (data.pools ?? []).filter(
+          (p) =>
+            p.initialized !== false &&
+            p.isPaused !== true &&
+            (p.anonymitySet ?? 0) >= min,
+        );
+        setPools(activePools);
         // Auto-select largest "strong" pool when nothing chosen yet, so the
         // header allocation card and the projection numbers populate
         // without the user having to click first.
-        if (!value && data.pools && data.pools.length > 0) {
-          const min = data.anonymitySetMin ?? 20;
-          const strong = [...data.pools]
-            .filter((p) => (p.anonymitySet ?? 0) >= min)
-            .sort((a, b) => Number(b.denomination) - Number(a.denomination))[0];
-          const fallback = data.pools[0]!;
-          const chosen = strong ?? fallback;
+        if (!value && activePools.length > 0) {
+          const chosen = [...activePools].sort((a, b) => Number(b.denomination) - Number(a.denomination))[0]!;
           onChange(chosen.denomination, chosen.anonymitySet ?? 0);
         }
       })
@@ -577,7 +589,7 @@ function SolDenominationPicker({
   if (pools.length === 0) {
     return (
       <div className="rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
-        No mixer pools configured on this network.
+        No mixer pool has reached the {anonymitySetMin}-deposit privacy threshold yet.
       </div>
     );
   }
@@ -586,16 +598,13 @@ function SolDenominationPicker({
     <div className="grid grid-cols-3 gap-2">
       {pools.map((pool) => {
         const selected = pool.denomination === value;
-        const usable = pool.initialized !== false && pool.isPaused !== true;
         return (
           <button
             key={pool.denomination}
             type="button"
-            disabled={!usable}
             onClick={() => onChange(pool.denomination, pool.anonymitySet ?? 0)}
             className={[
               "flex flex-col items-stretch gap-1.5 rounded-xl border px-3 py-3 text-left transition-colors",
-              "disabled:cursor-not-allowed disabled:opacity-50",
               selected
                 ? "border-primary bg-primary/10 text-foreground"
                 : "border-border bg-card/60 text-muted-foreground hover:border-border hover:text-foreground",

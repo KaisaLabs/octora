@@ -42,6 +42,7 @@ interface Props {
 
 export function DenominationSelector({ value, onChange, enabled = true }: Props) {
   const [pools, setPools] = useState<MixerPoolEntry[] | null>(null);
+  const [anonymitySetMin, setAnonymitySetMin] = useState(20);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -56,17 +57,21 @@ export function DenominationSelector({ value, onChange, enabled = true }: Props)
       })
       .then((data) => {
         if (cancelled) return;
-        setPools(data.pools ?? []);
+        const min = data.anonymitySetMin ?? 20;
+        setAnonymitySetMin(min);
+        const activePools = (data.pools ?? []).filter(
+          (p) =>
+            p.initialized !== false &&
+            p.isPaused !== true &&
+            (p.anonymitySet ?? 0) >= min,
+        );
+        setPools(activePools);
         setError(null);
         // Auto-select the largest strong pool if none chosen yet — the user
         // can override, but the default should favour the highest-privacy
         // option that's actually usable.
-        if (!value && data.pools && data.pools.length > 0) {
-          const strong = data.pools
-            .filter((p) => (p.anonymitySet ?? 0) >= (data.anonymitySetMin ?? 20))
-            .sort((a, b) => Number(b.denomination) - Number(a.denomination))[0];
-          const fallback = data.pools[0]!;
-          const chosen = strong ?? fallback;
+        if (!value && activePools.length > 0) {
+          const chosen = [...activePools].sort((a, b) => Number(b.denomination) - Number(a.denomination))[0]!;
           onChange(chosen.denomination, chosen.anonymitySet ?? 0);
         }
       })
@@ -104,7 +109,7 @@ export function DenominationSelector({ value, onChange, enabled = true }: Props)
   if (!pools || pools.length === 0) {
     return (
       <div className="rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
-        No mixer pools configured on this network.
+        No mixer pool has reached the {anonymitySetMin}-deposit privacy threshold yet.
       </div>
     );
   }
@@ -115,16 +120,13 @@ export function DenominationSelector({ value, onChange, enabled = true }: Props)
         {pools.map((pool) => {
           const selected = pool.denomination === value;
           const sol = formatSol(pool.denomination);
-          const usable = pool.initialized !== false && pool.isPaused !== true;
           return (
             <button
               key={pool.denomination}
               type="button"
-              disabled={!usable}
               onClick={() => onChange(pool.denomination, pool.anonymitySet ?? 0)}
               className={[
                 "flex flex-col items-stretch gap-1.5 rounded-md border px-3 py-2.5 text-left transition-colors",
-                "disabled:cursor-not-allowed disabled:opacity-50",
                 selected
                   ? "border-primary bg-primary/10 text-foreground"
                   : "border-border/60 bg-card/40 text-muted-foreground hover:border-border hover:text-foreground",

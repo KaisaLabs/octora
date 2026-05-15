@@ -63,4 +63,16 @@ pub enum ExecutorError {
 
     #[msg("Swap source pool must differ from LP target pool")]
     SwapSourceEqualsTarget,
+
+    #[msg("Mixer program account does not match the configured program ID")]
+    MixerProgramMismatch,
+
+    #[msg("Compound mixer/DLMM CPI is not implemented for this program boundary")]
+    CompoundCpiUnsupported,
+
+    #[msg("Denomination must be non-zero")]
+    InvalidDenomination,
+
+    #[msg("Requested mixer deposit amount does not match floor(claimed_fee / denomination) * denomination")]
+    CompoundDepositAmountMismatch,
 }

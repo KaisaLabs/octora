@@ -67,10 +67,11 @@ export function StealthExplainerModal({ open, onContinue, onCancel }: StealthExp
           <li className="flex gap-3 rounded-md border border-border bg-muted/30 p-3">
             <ShieldOff className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
             <div>
-              <p className="font-medium">Losing the main wallet strands the stealth balance.</p>
+              <p className="font-medium">Lose origin wallet = lose Position funds.</p>
               <p className="text-muted-foreground">
-                If you can no longer sign with your main wallet, you cannot recover the stealth
-                wallet either — including the rent it holds and any un-withdrawn dust.
+                If you can no longer sign with the origin wallet, you cannot recover the
+                stealth wallet either. The SOL in any Position owned by that stealth wallet
+                becomes unrecoverable.
               </p>
             </div>
           </li>
@@ -78,11 +79,11 @@ export function StealthExplainerModal({ open, onContinue, onCancel }: StealthExp
           <li className="flex gap-3 rounded-md border border-border bg-muted/30 p-3">
             <Eye className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
             <div>
-              <p className="font-medium">Privacy depends on the anonymity set.</p>
+              <p className="font-medium">Privacy comes from unlinkability.</p>
               <p className="text-muted-foreground">
-                Octora keeps the on-chain link broken, but a withdrawal that lands moments after
-                your deposit is statistically linkable. The longer you wait and the more
-                deposits queue up, the stronger the privacy.
+                Octora cannot escrow or recover your stealth wallet because that would give the
+                backend a recovery path and weaken unlinkability. The origin wallet is the only
+                recovery key.
               </p>
             </div>
           </li>

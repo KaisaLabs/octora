@@ -80,6 +80,11 @@ export type PortfolioPosition = {
   feesUsd?: number;
   apr: string;
   status: string;
+  /** Lifecycle mode emitted by orchestration/activity APIs when available. */
+  mode?: "fast-private" | "standard" | string;
+  fallbackMode?: "standard" | "fast-private" | string;
+  surfaceDowngradeDisclosure?: boolean;
+  safeNextStep?: "wait" | "recover" | "retry" | string;
   /** Bin id boundaries of the LP range. */
   rangeLowerBin?: number;
   rangeUpperBin?: number;

@@ -1,5 +1,6 @@
 pub mod add_liquidity;
 pub mod claim_fees;
+pub mod compound;
 pub mod init_position;
 pub mod swap;
 pub mod withdraw_close;
@@ -8,6 +9,8 @@ pub mod withdraw_close;
 pub use add_liquidity::*;
 #[allow(ambiguous_glob_reexports)]
 pub use claim_fees::*;
+#[allow(ambiguous_glob_reexports)]
+pub use compound::*;
 #[allow(ambiguous_glob_reexports)]
 pub use init_position::*;
 #[allow(ambiguous_glob_reexports)]

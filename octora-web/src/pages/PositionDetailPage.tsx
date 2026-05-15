@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Coins, Copy, Loader2, Minus, Repeat } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Coins, Copy, ExternalLink, Loader2, Minus, Repeat } from "lucide-react";
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Connection, PublicKey } from "@solana/web3.js";
@@ -18,7 +18,11 @@ import {
   runPrivateExitToMain,
   runSweepStealthToMain,
 } from "@/lib/privateLifecycle";
-import { markLocalPositionClosed, removeLocalPosition } from "@/lib/localPositions";
+import {
+  markLocalPositionLifecycleStatus,
+  markLocalPositionWithdrawn,
+  removeLocalPosition,
+} from "@/lib/localPositions";
 import { useSolana } from "@/providers/SolanaProvider";
 import { getPrices } from "@/lib/api";
 import { PrivateClaimModal } from "@/components/octora/lp/PrivateClaimModal";
@@ -139,6 +143,12 @@ export function PositionDetailPage({ positions }: Props) {
         </div>
       </section>
       </Reveal>
+
+      {shouldShowDowngradeDisclosure(position) && (
+        <Reveal delay={40}>
+          <DowngradeDisclosureBanner />
+        </Reveal>
+      )}
 
       {/* Bin chart + claim summary */}
       <Reveal delay={80}>
@@ -343,6 +353,42 @@ function shorten(s: string): string {
   return `${s.slice(0, 6)}…${s.slice(-4)}`;
 }
 
+function shouldShowDowngradeDisclosure(position: PortfolioPosition): boolean {
+  if (position.mode === "standard" && !position.surfaceDowngradeDisclosure) return false;
+  return (
+    position.surfaceDowngradeDisclosure === true ||
+    (position.mode === "fast-private" && position.fallbackMode === "standard")
+  );
+}
+
+function DowngradeDisclosureBanner() {
+  return (
+    <section
+      role="status"
+      aria-live="polite"
+      className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5"
+    >
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+        <div>
+          <p className="text-sm font-medium text-amber-100">Position downgraded to standard mode</p>
+          <p className="mt-1 text-sm leading-6 text-amber-100/85">
+            Octora downgraded this Position to standard mode to keep the trade window open.
+            Your origin wallet is now linked to this Position. Privacy and unlinkability are
+            weaker from this point forward, but no extra approval was required to keep the
+            execution moving.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function isRecoverablePosition(position: PortfolioPosition): boolean {
+  const status = position.status.toUpperCase();
+  return status === "LP_FAILED" || status === "PARKED";
+}
+
 function ActionDrawer({
   position,
   bins,
@@ -357,6 +403,14 @@ function ActionDrawer({
   center: number;
 }) {
   const [tab, setTab] = useState("withdraw");
+
+  if (isRecoverablePosition(position)) {
+    return (
+      <section className="panel-shell rounded-2xl p-5 sm:p-6">
+        <RecoveryPanel position={position} />
+      </section>
+    );
+  }
 
   return (
     <section className="panel-shell rounded-2xl p-5 sm:p-6">
@@ -394,6 +448,146 @@ function ActionDrawer({
         )}
       </Tabs>
     </section>
+  );
+}
+
+function RecoveryPanel({ position }: { position: PortfolioPosition }) {
+  const { wallet } = useSolana();
+  const navigate = useNavigate();
+  const [pending, setPending] = useState(false);
+
+  const handleRetry = () => {
+    if (wallet.address) {
+      markLocalPositionLifecycleStatus(wallet.address, position.id, "LP_FAILED");
+    }
+    navigate(`/pool/${position.poolAddress}`);
+  };
+
+  const handlePark = () => {
+    if (!wallet.address) {
+      toast.error("Connect your origin wallet to park this Position.");
+      return;
+    }
+    markLocalPositionLifecycleStatus(wallet.address, position.id, "PARKED");
+    toast.message("Position parked", {
+      description: "Funds stay recoverable from this Position. Resume from the pool when ready.",
+    });
+  };
+
+  const handleRecover = async () => {
+    if (!wallet.address) {
+      toast.error("Connect your origin wallet to recover funds.");
+      return;
+    }
+    if (!position.stealthPubkey) {
+      toast.error("Stealth wallet missing on this Position. Recovery needs the original stealth receipt.");
+      return;
+    }
+
+    setPending(true);
+    const t = toast.loading("Building user-signed recovery transaction...");
+    try {
+      const res = await runSweepStealthToMain({
+        mainWalletAddress: wallet.address,
+        poolAddress: position.poolAddress,
+        positionId: position.derivationVersion === "v2" ? position.id : undefined,
+      });
+      markLocalPositionWithdrawn(wallet.address, position.id, {
+        signature: res.signature ?? undefined,
+        recipient: res.recipient,
+      });
+      toast.success("Recovery submitted", {
+        id: t,
+        description: res.signature ? shorten(res.signature) : "Nothing transferable remained at the stealth wallet.",
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err), { id: t });
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const copyStealth = () => {
+    if (!position.stealthPubkey) return;
+    navigator.clipboard?.writeText(position.stealthPubkey);
+    toast.success("Stealth address copied.");
+  };
+
+  return (
+    <div className="space-y-5">
+      <div
+        role="alert"
+        aria-live="polite"
+        className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5"
+      >
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+          <div>
+            <p className="text-sm font-medium text-amber-100">
+              {position.status} recovery available
+            </p>
+            <p className="mt-1 text-sm leading-6 text-amber-100/85">
+              The private add-liquidity leg did not finish. Retry keeps the private route alive;
+              park leaves the denomination claim idle for later; recover funds is user signed and
+              can make the origin wallet to withdraw destination relationship linkable on-chain.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Button
+          variant="subtle"
+          size="lg"
+          onClick={handleRetry}
+          className="justify-center rounded-xl"
+        >
+          <Repeat className="h-4 w-4" />
+          {position.status.toUpperCase() === "PARKED" ? "Resume in pool" : "Retry private LP"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="lg"
+          onClick={handlePark}
+          disabled={!wallet.connected || position.status.toUpperCase() === "PARKED"}
+          className="justify-center rounded-xl"
+        >
+          Park for later
+        </Button>
+        <Button
+          variant="hero"
+          size="lg"
+          onClick={handleRecover}
+          disabled={pending || !wallet.connected || !position.stealthPubkey}
+          className="justify-center rounded-xl"
+        >
+          {pending ? <Loader2 className="animate-spin" /> : null}
+          Recover funds
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={copyStealth}
+          disabled={!position.stealthPubkey}
+          className="rounded-xl"
+        >
+          <Copy className="h-4 w-4" />
+          Copy stealth
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate("/portfolio")}
+          className="rounded-xl"
+        >
+          <ExternalLink className="h-4 w-4" />
+          Portfolio
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -836,4 +1030,3 @@ function Row({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-

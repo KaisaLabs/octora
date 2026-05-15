@@ -23,9 +23,13 @@ Net effect:
 
 The right fixes are tracked elsewhere:
 
-- Atomic compound ix prototype (Issue 1)
-- Denom ladder `{0.1, 1, 5, 10}` + floor-round fee-claim (Issue 2)
-- `LP_FAILED` state machine + user-signed recover path (Issue 3)
+- Atomic compound ix prototype (Issue 01)
+- Position-open compound primitive (Issue 05)
+- Fee-claim compound primitive with floor-rounding (Issue 06)
+- Denom ladder `{0.1, 1, 5, 10}` readiness (Issue 07)
+- `LP_FAILED` state machine + user-signed recover path (Issues 03 and 04)
+
+Current implementation note: `octora-executor` exports fail-closed scaffold entrypoints for Issues 05 and 06, but ADR `octora-api/docs/adr/0003-compound-mixer-dlmm-cpi-remains-fail-closed.md` records why the real fund-moving CPI is not live yet. This file remains the rejection record for any off-chain sweeper workaround while the compound primitive is unresolved.
 
 ## Prior requests
 

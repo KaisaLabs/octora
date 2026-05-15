@@ -48,7 +48,7 @@ export function loadConfig(): AppConfig {
     parseBigIntList(process.env.MIXER_DENOMINATIONS, {
       fieldName: 'MIXER_DENOMINATIONS',
       positive: true,
-    }) ?? [100_000_000n, 1_000_000_000n, 10_000_000_000n]
+    }) ?? [100_000_000n, 1_000_000_000n, 5_000_000_000n, 10_000_000_000n]
 
   const config = {
     port: parseInteger(process.env.PORT) ?? 8787,

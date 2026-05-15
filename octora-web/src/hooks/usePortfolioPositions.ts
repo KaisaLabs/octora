@@ -188,6 +188,7 @@ function mapStoredToPortfolio(
   // After close: position no longer exists on-chain, so everything zeros out
   // and the user is funnelled toward the Sweep flow.
   const closed = s.closed === true;
+  const withdrawn = s.lifecycleStatus === "WITHDRAWN";
   const valueFmt = closed ? "$0.00" : state ? formatUsd(state.valueUsd) : depositedFmt;
   const feesFmt = closed ? "$0.00" : state ? formatUsd(state.feeUsd) : "$0.00";
   // Raw-lamports gate: enables Claim even when Jupiter has no devnet prices
@@ -199,11 +200,16 @@ function mapStoredToPortfolio(
   const pnlDirection: PortfolioPosition["pnlDirection"] =
     pnlAmount > 0.005 ? "up" : pnlAmount < -0.005 ? "down" : "flat";
 
-  const status = closed
-    ? "Closed · awaiting sweep"
-    : inRange === false
-      ? "Out of range"
-      : "Active";
+  let status = "Active";
+  if (withdrawn) {
+    status = "WITHDRAWN";
+  } else if (s.lifecycleStatus === "LP_FAILED" || s.lifecycleStatus === "PARKED") {
+    status = s.lifecycleStatus;
+  } else if (closed) {
+    status = "Closed · awaiting sweep";
+  } else if (inRange === false) {
+    status = "Out of range";
+  }
 
   return {
     id: s.positionId,
@@ -225,6 +231,10 @@ function mapStoredToPortfolio(
     feesUsd: closed ? 0 : state?.feeUsd ?? 0,
     apr,
     status,
+    mode: s.mode,
+    fallbackMode: s.fallbackMode,
+    surfaceDowngradeDisclosure: s.surfaceDowngradeDisclosure,
+    safeNextStep: s.safeNextStep,
     rangeLowerBin: lowerBinId,
     rangeUpperBin: upperBinId,
     activeBinId,

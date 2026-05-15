@@ -45,7 +45,7 @@ mixer.withdraw -> pool.add_liquidity
 >
 > Heavier crypto. Only if atomic CPI blocked by program size / CU.
 
-**Recommendation:** atomic compound ix + denom ladder + floor-round on fee-claim. Kills dust without sweeper.
+**Recommendation:** atomic compound ix + denom ladder + floor-round on fee-claim. Kills dust without sweeper. As of ADR `octora-api/docs/adr/0003-compound-mixer-dlmm-cpi-remains-fail-closed.md`, the on-chain compound entrypoints are exported as fail-closed scaffolding only; production traffic must stay on the existing orchestration path until the Mixer/DLMM CPI boundary is redesigned.
 
 ## Problem 2 — Mixer deposit success → add-LP fail
 
@@ -101,7 +101,7 @@ user.sign:
 
 ## Order of work
 
-1. Prototype atomic `deposit + addLiquidity` — measure CU. Decide single-tx vs two-tx.
+1. Prototype atomic `deposit + addLiquidity` once a faithful Mixer/DLMM CPI interface exists — measure CU. Decide single-tx vs two-tx.
 2. Add denom ladder + floor-round fee-claim path.
 3. Build `LP_FAILED` state machine + "Recover funds" user-signed fallback.
 4. Drop sweeper from roadmap — replaced by atomic compounding.

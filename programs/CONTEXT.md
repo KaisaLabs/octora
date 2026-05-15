@@ -1,6 +1,6 @@
 # On-Chain Privacy & Execution
 
-Two Anchor programs on Solana that provide Octora's on-chain primitives. They never CPI each other — orchestration happens off-chain in the Backend.
+Two Anchor programs on Solana that provide Octora's on-chain primitives. Production fund-moving flows do not CPI between Mixer and Executor — orchestration happens off-chain in the Backend. Compound Mixer/DLMM entrypoints exist only as fail-closed scaffolding until ADR-0003 under `octora-api/docs/adr/` is superseded.
 
 ## Language
 
@@ -56,7 +56,7 @@ A single-use, freshly generated ephemeral keypair with no derivation from the us
 
 - A **Mixer Pool** is one-per-**Denomination**.
 - A **Commitment** lives in exactly one **Mixer Pool** and corresponds to at most one **Nullifier Hash** (after withdrawal).
-- The **Executor** is independent of the **Mixer**: they share no CPI calls and no shared state. The Backend bridges them via a **Stealth Wallet**.
+- The **Executor** is independent of the **Mixer** for live fund-moving flows: they share no CPI calls and no shared state. The Backend bridges them via a **Stealth Wallet**. Fail-closed compound scaffolds validate program IDs but return `CompoundCpiUnsupported`.
 - A **DLMM Position** is owned by a Stealth Wallet, opened via an Executor CPI; the Executor is *not* the position owner.
 
 ## Example dialogue

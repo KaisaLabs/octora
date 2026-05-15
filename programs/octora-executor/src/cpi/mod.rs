@@ -9,6 +9,7 @@ pub mod dlmm;
 
 pub use dlmm::*;
 
+use crate::constants::MIXER_PROGRAM_ID;
 use crate::errors::ExecutorError;
 
 // ── Token program IDs ──
@@ -43,6 +44,15 @@ pub fn require_rent_sysvar(ai: &AccountInfo) -> Result<()> {
     // the key check is somehow weakened in the future.
     require!(!ai.is_signer, ExecutorError::InvalidSysAccount);
     require!(!ai.executable, ExecutorError::InvalidSysAccount);
+    Ok(())
+}
+
+pub fn require_mixer_program(ai: &AccountInfo) -> Result<()> {
+    require_keys_eq!(
+        ai.key(),
+        MIXER_PROGRAM_ID,
+        ExecutorError::MixerProgramMismatch,
+    );
     Ok(())
 }
 
