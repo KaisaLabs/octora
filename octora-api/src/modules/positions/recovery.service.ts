@@ -17,24 +17,33 @@ export interface ResolvedMode {
   surfacedFallback: boolean;
 }
 
-export class SilentDowngradeError extends Error {
-  constructor() {
-    super("Fast Private fallback must be surfaced before execution starts");
-    this.name = "SilentDowngradeError";
-  }
-}
-
 export function createRecoveryService() {
   return {
     getRecoveryGuidance(input: RecoveryServiceInput): RecoveryGuidance | null {
-      return getRecoveryGuidance(input.failureStage);
+      const guidance = getRecoveryGuidance(input.failureStage);
+      if (!guidance?.surfaceDowngradeDisclosure || input.mode === "fast-private") {
+        return guidance;
+      }
+      if (input.failureStage === "pre-funding") {
+        return {
+          headline: "Funding could not start",
+          message: "Octora stopped before any funds moved. Check the balance, then retry from the beginning.",
+          safeNextStep: "retry",
+          terminal: true,
+        };
+      }
+      if (input.failureStage === "funding-partial") {
+        return {
+          headline: "Funding started, but did not finish cleanly",
+          message: "Octora moved into funding, but the flow did not complete. Check the wallet activity, then contact support before retrying.",
+          safeNextStep: "contact-support",
+          terminal: true,
+        };
+      }
+      return guidance;
     },
     resolveExecutionMode(input: ResolveModeInput): ResolvedMode {
       const fallbackMode = input.fallbackMode ?? input.selectedMode;
-
-      if (input.selectedMode === "fast-private" && fallbackMode !== input.selectedMode && !input.surfacedFallback) {
-        throw new SilentDowngradeError();
-      }
 
       return {
         mode: fallbackMode,

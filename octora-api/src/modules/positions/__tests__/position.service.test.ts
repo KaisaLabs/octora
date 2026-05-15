@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createMockMeteoraExecutor } from "#modules/execution/clients";
+import { createMockMeteoraExecutor, type MeteoraExecutor } from "#modules/execution/clients";
 import { MockPrivacyAdapter } from "#modules/execution/adapters";
+import type { PrepareFundingInput, PrivacyReceipt } from "#modules/execution/adapters";
 import { createIndexerService } from "#modules/indexer";
 import { createMemoryRepositories, createMemoryReconciliationRepository } from "#test-kit/memory-db";
 
@@ -174,4 +175,121 @@ describe("orchestrator service", () => {
     expect(reconciled.session.state).toBe("active");
     expect(reconciled.position.statusLabel).toBe("Position active");
   });
+
+  it("auto-downgrades fast-private pre-funding failures to standard with disclosure", async () => {
+    const positionId = "pos_downgrade_pre";
+    await seedAwaitingSignaturePosition(repos, positionId, "fast-private");
+
+    const service = createPositionService({
+      ...repos,
+      privacyAdapter: new ThrowingFundingAdapter(),
+      meteoraExecutor: createMockMeteoraExecutor(),
+    });
+
+    const result = await service.executeSignedIntent({
+      positionId,
+      signedMessage: "base64sig",
+    });
+
+    expect(result.position.mode).toBe("standard");
+    expect(result.position.state).toBe("failed");
+    expect(result.recovery).toMatchObject({
+      fallbackMode: "standard",
+      surfaceDowngradeDisclosure: true,
+      safeNextStep: "wait",
+    });
+    expect(result.activity.at(-1)).toMatchObject({
+      state: "failed",
+      headline: "Position downgraded to standard mode",
+      safeNextStep: "wait",
+    });
+    expect(result.activity.at(-1)?.detail).toContain("Your origin wallet is now linked to this Position");
+  });
+
+  it("auto-downgrades fast-private funding-partial failures to standard with disclosure", async () => {
+    const positionId = "pos_downgrade_partial";
+    await seedAwaitingSignaturePosition(repos, positionId, "fast-private");
+
+    const failingMeteora: MeteoraExecutor = {
+      ...createMockMeteoraExecutor(),
+      async addLiquidity() {
+        throw new Error("Meteora timeout");
+      },
+    };
+
+    const service = createPositionService({
+      ...repos,
+      privacyAdapter: new MockPrivacyAdapter(),
+      meteoraExecutor: failingMeteora,
+    });
+
+    const result = await service.executeSignedIntent({
+      positionId,
+      signedMessage: "base64sig",
+    });
+
+    expect(result.position.mode).toBe("standard");
+    expect(result.session.failureStage).toBe("funding-partial");
+    expect(result.recovery?.surfaceDowngradeDisclosure).toBe(true);
+    expect(result.recovery?.safeNextStep).toBe("wait");
+  });
+
+  it("does not surface downgrade disclosure for standard pre-funding failures", async () => {
+    const positionId = "pos_standard_pre";
+    await seedAwaitingSignaturePosition(repos, positionId, "standard");
+
+    const service = createPositionService({
+      ...repos,
+      privacyAdapter: new ThrowingFundingAdapter(),
+      meteoraExecutor: createMockMeteoraExecutor(),
+    });
+
+    const result = await service.executeSignedIntent({
+      positionId,
+      signedMessage: "base64sig",
+    });
+
+    expect(result.position.mode).toBe("standard");
+    expect(result.recovery?.surfaceDowngradeDisclosure).toBeUndefined();
+    expect(result.recovery?.safeNextStep).toBe("retry");
+    expect(result.activity.at(-1)?.detail).not.toContain("origin wallet is now linked");
+  });
 });
+
+async function seedAwaitingSignaturePosition(
+  repos: ReturnType<typeof createMemoryRepositories>,
+  positionId: string,
+  mode: "standard" | "fast-private",
+) {
+  await repos.positionRepo.createPosition({
+    id: positionId,
+    intentId: `intent_${positionId}`,
+    walletAddress: "TestWallet111111111111111111111111111111111",
+    action: "add-liquidity",
+    mode,
+    state: "awaiting_signature",
+    poolSlug: "sol-usdc",
+    amount: "1.25",
+  });
+  await repos.positionRepo.createExecutionSession({
+    id: `session_${positionId}`,
+    positionId,
+    state: "awaiting_signature",
+    failureStage: null,
+  });
+  await repos.activityRepo.createActivity({
+    id: `activity_${positionId}`,
+    positionId,
+    action: "add-liquidity",
+    state: "awaiting_signature",
+    headline: "Intent received",
+    detail: "Queued a draft SOL / USDC position for signature review.",
+    safeNextStep: "wait",
+  });
+}
+
+class ThrowingFundingAdapter extends MockPrivacyAdapter {
+  override async prepareFunding(_input: PrepareFundingInput): Promise<PrivacyReceipt> {
+    throw new Error("Anonymity set guard timed out");
+  }
+}

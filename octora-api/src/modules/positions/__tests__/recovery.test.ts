@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createRecoveryService } from "../recovery.service";
 
 describe("recovery service", () => {
-  it("maps pre-funding failures to plain-language guidance", () => {
+  it("maps pre-funding fallback to post-hoc downgrade disclosure", () => {
     const service = createRecoveryService();
 
     const guidance = service.getRecoveryGuidance({
@@ -12,12 +12,12 @@ describe("recovery service", () => {
     });
 
     expect(guidance).toEqual({
-      headline: "Funding could not start",
-      message: "Octora stopped before any funds moved. Check the balance, then retry from the beginning.",
-      safeNextStep: "retry",
+      headline: "Position downgraded to standard mode",
+      message: "Octora downgraded this Position to standard mode to keep the trade window open. Your origin wallet is now linked to this Position.",
+      safeNextStep: "wait",
       terminal: true,
       fallbackMode: "standard",
-      downgradeRequiresDisclosure: true,
+      surfaceDowngradeDisclosure: true,
     });
   });
 
@@ -29,8 +29,8 @@ describe("recovery service", () => {
       mode: "fast-private",
     });
 
-    expect(guidance?.headline).toBe("Funding started, but did not finish cleanly");
-    expect(guidance?.safeNextStep).toBe("contact-support");
+    expect(guidance?.headline).toBe("Position downgraded to standard mode");
+    expect(guidance?.safeNextStep).toBe("wait");
     expect(guidance?.terminal).toBe(true);
   });
 
@@ -47,27 +47,19 @@ describe("recovery service", () => {
     expect(guidance?.terminal).toBe(false);
   });
 
-  it("blocks silent downgrades unless the fallback was surfaced first", () => {
+  it("allows post-hoc fallback without requiring a pre-execution disclosure gate", () => {
     const service = createRecoveryService();
-
-    expect(() =>
-      service.resolveExecutionMode({
-        selectedMode: "fast-private",
-        fallbackMode: "standard",
-        surfacedFallback: false,
-      }),
-    ).toThrow(/must be surfaced before execution starts/i);
 
     expect(
       service.resolveExecutionMode({
         selectedMode: "fast-private",
         fallbackMode: "standard",
-        surfacedFallback: true,
+        surfacedFallback: false,
       }),
     ).toEqual({
       mode: "standard",
       downgradedFrom: "fast-private",
-      surfacedFallback: true,
+      surfacedFallback: false,
     });
   });
 });

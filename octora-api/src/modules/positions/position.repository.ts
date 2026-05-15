@@ -14,6 +14,17 @@ export interface PositionRow {
   updatedAt: Date;
 }
 
+export interface PersistedDepositIntentRow {
+  nullifierHash: string;
+  positionId: string;
+  commitment: string;
+  intendedPool: string;
+  denom: string;
+  expiresAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface ExecutionSessionRow {
   id: string;
   positionId: string;
@@ -39,7 +50,7 @@ export interface CreatePositionInput {
  * (draft, funding, indexing, active, withdrawing, ...) is still holding
  * or about to hold capital and counts toward the beta caps.
  */
-export const TERMINAL_POSITION_STATES = ["completed", "failed"] as const;
+export const TERMINAL_POSITION_STATES = ["completed", "failed", "WITHDRAWN"] as const;
 
 export interface CreateSessionInput {
   id: string;
@@ -51,6 +62,7 @@ export interface CreateSessionInput {
 export interface PositionRepository {
   createPosition(input: CreatePositionInput): Promise<PositionRow>;
   updatePositionState(positionId: string, state: string): Promise<PositionRow>;
+  updatePositionMode(positionId: string, mode: string): Promise<PositionRow>;
   getPositionById(positionId: string): Promise<PositionRow | null>;
   createExecutionSession(input: CreateSessionInput): Promise<ExecutionSessionRow>;
   updateExecutionSession(positionId: string, state: string, failureStage?: string | null): Promise<ExecutionSessionRow>;
@@ -83,6 +95,10 @@ export interface PositionRepository {
    * lifetime distribution, not just live load.
    */
   countByState(): Promise<Record<string, number>>;
+  persistDepositIntent(input: Omit<PersistedDepositIntentRow, "createdAt" | "updatedAt">): Promise<PersistedDepositIntentRow>;
+  getDepositIntent(nullifierHash: string): Promise<PersistedDepositIntentRow | null>;
+  clearDepositIntent(nullifierHash: string): Promise<void>;
+  clearDepositIntentForPosition(positionId: string): Promise<void>;
 }
 
 export function createPrismaPositionRepository(client: PrismaClient): PositionRepository {
@@ -91,6 +107,8 @@ export function createPrismaPositionRepository(client: PrismaClient): PositionRe
     createPosition: (input) => client.position.create({ data: input }),
     updatePositionState: (positionId, state) =>
       client.position.update({ where: { id: positionId }, data: { state } }),
+    updatePositionMode: (positionId, mode) =>
+      client.position.update({ where: { id: positionId }, data: { mode } }),
     getPositionById: (positionId) =>
       client.position.findUnique({ where: { id: positionId } }),
     createExecutionSession: (input) =>
@@ -157,5 +175,11 @@ export function createPrismaPositionRepository(client: PrismaClient): PositionRe
       for (const row of grouped) out[row.state] = row._count._all;
       return out;
     },
+    persistDepositIntent: async () => {
+      throw new Error("Persisted deposit intent storage is not configured for Prisma yet");
+    },
+    getDepositIntent: async () => null,
+    clearDepositIntent: async () => undefined,
+    clearDepositIntentForPosition: async () => undefined,
   };
 }

@@ -17,6 +17,21 @@ describe("execution state machine", () => {
     expect(canTransition("completed", "active")).toBe(false);
     expect(canTransition("completed", "indexing")).toBe(false);
   });
+
+  it("validates the two-phase deposit to LP fallback substates", () => {
+    expect(canTransition("DEPOSITED", "LP_PENDING")).toBe(true);
+    expect(canTransition("LP_PENDING", "LP_FAILED")).toBe(true);
+    expect(canTransition("LP_PENDING", "LP_DONE")).toBe(true);
+    expect(canTransition("LP_FAILED", "LP_RETRIED")).toBe(true);
+    expect(canTransition("LP_FAILED", "PARKED")).toBe(true);
+    expect(canTransition("LP_FAILED", "WITHDRAWN")).toBe(true);
+    expect(canTransition("PARKED", "LP_RETRIED")).toBe(true);
+    expect(canTransition("LP_RETRIED", "LP_DONE")).toBe(true);
+
+    expect(canTransition("DEPOSITED", "LP_DONE")).toBe(false);
+    expect(canTransition("PARKED", "LP_DONE")).toBe(false);
+    expect(canTransition("WITHDRAWN", "LP_RETRIED")).toBe(false);
+  });
 });
 
 describe("mode policy", () => {

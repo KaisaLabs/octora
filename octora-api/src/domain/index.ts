@@ -4,7 +4,9 @@ export type {
   ExecutionState,
   FailureStage,
   PositionIntent,
+  PersistedDepositIntent,
 } from "./position-intent";
+export { isTerminalDepositLpState } from "./position-intent";
 export type { ActivityRecord } from "./activity";
 export type { RecoveryGuidance, RecoverySafeNextStep } from "./recovery";
 export { getRecoveryGuidance, recoveryCatalog } from "./recovery";

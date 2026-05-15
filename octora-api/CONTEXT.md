@@ -30,7 +30,7 @@ The privacy/speed choice for a Position. Two variants:
 - **fast-private** — full mixer path. Slower in practice (longer funding TTL, anonymity-set wait). May fall back to **standard** mid-flight when recovery requires it.
 
 **Mode Fallback**:
-A mid-flight downgrade from **fast-private** to **standard**. Runs automatically when a recovery catalog entry sets `downgradeRequiresDisclosure` — the downgrade is *not* gated on user ACK. Disclosure is surfaced **after** the fact via an Activity Record and a UI banner. See ADR-0001.
+A mid-flight downgrade from **fast-private** to **standard**. Runs automatically when a recovery catalog entry sets `surfaceDowngradeDisclosure` — the downgrade is *not* gated on user ACK. Disclosure is surfaced **after** the fact via an Activity Record and a UI banner. See ADR-0001.
 _Avoid_: Mode downgrade (unless paired with "Fallback")
 
 **Pod**:
@@ -50,6 +50,9 @@ The **boundary between `pre-funding` and `funding-partial`** is whether any user
 
 **Recovery Guidance**:
 The catalog entry for a Failure Stage — user-facing headline + message, a terminal flag, an optional **Mode Fallback** target, and a **Safe Next Step**.
+
+**Deposit LP Fallback State**:
+The private deposit -> add-liquidity fallback path uses the existing Position execution state machine, not a parallel machine. The fallback substates are `DEPOSITED -> LP_PENDING -> LP_FAILED -> { LP_RETRIED | PARKED | WITHDRAWN }`, with `LP_PENDING -> LP_DONE` and retry paths back through `LP_RETRIED`. `LP_DONE` and `WITHDRAWN` clear the persisted deposit intent.
 
 **Safe Next Step**:
 Enum of safe user actions: `wait | retry | refresh | contact-support`. Always shown alongside guidance.
@@ -84,4 +87,4 @@ _Avoid_: Indexing (verb form is fine, but "the Indexer does Reconciliation" is t
 - **Execution Mode** names suggest a speed/privacy axis but the field values reverse that reading: `fast-private` has the *longer* funding TTL and may fall back to `standard`. Canonical meaning is recorded above (**standard** = direct, no privacy; **fast-private** = full privacy path). Worth renaming if a clean refactor window opens.
 - "Position" historically meant both the orchestration entity and the on-chain DLMM account. Resolved: on-chain is always **DLMM Position**.
 - "Venue" appears in `recoveryCatalog` (e.g. `venue-submission`) — refers to Meteora. Not promoted to a glossary term; use "Meteora" or "DLMM" explicitly elsewhere.
-- `downgradeRequiresDisclosure` field name reads like a pre-gate but its semantics (per ADR-0001) are "surface disclosure post-hoc". Rename candidate: `surfaceDowngradeDisclosure`.
+- `surfaceDowngradeDisclosure` means "surface disclosure post-hoc" after the fallback has already run; it is not a user ACK gate.

@@ -8,7 +8,7 @@ export interface RecoveryGuidance {
   safeNextStep: RecoverySafeNextStep;
   terminal: boolean;
   fallbackMode?: ExecutionMode;
-  downgradeRequiresDisclosure?: boolean;
+  surfaceDowngradeDisclosure?: boolean;
 }
 
 export const recoveryCatalog = {
@@ -19,20 +19,20 @@ export const recoveryCatalog = {
     terminal: false,
   },
   "pre-funding": {
-    headline: "Funding could not start",
-    message: "Octora stopped before any funds moved. Check the balance, then retry from the beginning.",
-    safeNextStep: "retry",
+    headline: "Position downgraded to standard mode",
+    message: "Octora downgraded this Position to standard mode to keep the trade window open. Your origin wallet is now linked to this Position.",
+    safeNextStep: "wait",
     terminal: true,
     fallbackMode: "standard",
-    downgradeRequiresDisclosure: true,
+    surfaceDowngradeDisclosure: true,
   },
   "funding-partial": {
-    headline: "Funding started, but did not finish cleanly",
-    message: "Octora moved into funding, but the flow did not complete. Check the wallet activity, then retry once the balance is ready.",
-    safeNextStep: "contact-support",
+    headline: "Position downgraded to standard mode",
+    message: "Octora downgraded this Position to standard mode to keep the trade window open. Your origin wallet is now linked to this Position.",
+    safeNextStep: "wait",
     terminal: true,
     fallbackMode: "standard",
-    downgradeRequiresDisclosure: true,
+    surfaceDowngradeDisclosure: true,
   },
   "venue-submission": {
     headline: "Meteora rejected the submission",

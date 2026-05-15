@@ -13,7 +13,14 @@ export type ExecutionState =
   | "withdrawing"
   | "closing"
   | "completed"
-  | "failed";
+  | "failed"
+  | "DEPOSITED"
+  | "LP_PENDING"
+  | "LP_FAILED"
+  | "LP_RETRIED"
+  | "PARKED"
+  | "WITHDRAWN"
+  | "LP_DONE";
 
 export type FailureStage =
   | "signature"
@@ -32,4 +39,16 @@ export interface PositionIntent {
   state: ExecutionState;
   failureStage?: FailureStage;
   createdAtIso: string;
+}
+
+export interface PersistedDepositIntent {
+  nullifierHash: string;
+  commitment: string;
+  intendedPool: string;
+  denom: string;
+  expiresAtIso: string;
+}
+
+export function isTerminalDepositLpState(state: ExecutionState): boolean {
+  return state === "LP_DONE" || state === "WITHDRAWN";
 }

@@ -4,6 +4,7 @@ import type {
   ExecutionSessionRow,
   CreatePositionInput,
   CreateSessionInput,
+  PersistedDepositIntentRow,
 } from "#modules/positions/position.repository";
 import { TERMINAL_POSITION_STATES } from "#modules/positions/position.repository";
 import type {
@@ -22,6 +23,7 @@ const FIXED_DATE = new Date("2026-04-29T09:00:00.000Z");
 export function createMemoryPositionRepository(): PositionRepository {
   const positions = new Map<string, PositionRow>();
   const sessions = new Map<string, ExecutionSessionRow[]>();
+  const depositIntents = new Map<string, PersistedDepositIntentRow>();
 
   return {
     async createPosition(input: CreatePositionInput) {
@@ -39,6 +41,15 @@ export function createMemoryPositionRepository(): PositionRepository {
         throw new Error(`Position ${positionId} not found`);
       }
       const row: PositionRow = { ...current, state, updatedAt: FIXED_DATE };
+      positions.set(positionId, row);
+      return row;
+    },
+    async updatePositionMode(positionId: string, mode: string) {
+      const current = positions.get(positionId);
+      if (!current) {
+        throw new Error(`Position ${positionId} not found`);
+      }
+      const row: PositionRow = { ...current, mode, updatedAt: FIXED_DATE };
       positions.set(positionId, row);
       return row;
     },
@@ -111,6 +122,26 @@ export function createMemoryPositionRepository(): PositionRepository {
         out[row.state] = (out[row.state] ?? 0) + 1;
       }
       return out;
+    },
+    async persistDepositIntent(input) {
+      const row = {
+        ...input,
+        createdAt: FIXED_DATE,
+        updatedAt: FIXED_DATE,
+      };
+      depositIntents.set(row.nullifierHash, row);
+      return row;
+    },
+    async getDepositIntent(nullifierHash) {
+      return depositIntents.get(nullifierHash) ?? null;
+    },
+    async clearDepositIntent(nullifierHash) {
+      depositIntents.delete(nullifierHash);
+    },
+    async clearDepositIntentForPosition(positionId) {
+      for (const [nullifierHash, row] of depositIntents.entries()) {
+        if (row.positionId === positionId) depositIntents.delete(nullifierHash);
+      }
     },
   };
 }

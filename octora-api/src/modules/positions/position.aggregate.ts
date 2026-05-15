@@ -29,6 +29,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   canTransition,
+  isTerminalDepositLpState,
   modePolicy,
   type ActivityRecord,
   type ExecutionMode,
@@ -239,6 +240,9 @@ export class Position {
     }
     this.positionRow = await this.deps.positionRepo.updatePositionState(this.positionRow.id, target);
     this.sessionRow = await this.deps.positionRepo.updateExecutionSession(this.positionRow.id, target);
+    if (isTerminalDepositLpState(target)) {
+      await this.deps.positionRepo.clearDepositIntentForPosition(this.positionRow.id);
+    }
     await this.recordActivity(target, activity);
   }
 
@@ -287,6 +291,14 @@ export class Position {
         failureStage: "recovery-required",
         mode: this.mode,
       });
+
+    if (
+      this.mode === "fast-private" &&
+      guidance?.fallbackMode === "standard" &&
+      guidance.surfaceDowngradeDisclosure
+    ) {
+      this.positionRow = await this.deps.positionRepo.updatePositionMode(this.positionRow.id, "standard");
+    }
 
     this.positionRow = await this.deps.positionRepo.updatePositionState(this.positionRow.id, "failed");
     this.sessionRow = await this.deps.positionRepo.updateExecutionSession(
@@ -355,6 +367,20 @@ function formatStatusLabel(state: ExecutionState, latestHeadline?: string): stri
       return "Completed";
     case "failed":
       return latestHeadline ?? "Needs attention";
+    case "DEPOSITED":
+      return "Deposit confirmed";
+    case "LP_PENDING":
+      return "Adding liquidity";
+    case "LP_FAILED":
+      return "Add liquidity failed";
+    case "LP_RETRIED":
+      return "Retrying add liquidity";
+    case "PARKED":
+      return "Parked for later";
+    case "WITHDRAWN":
+      return "Recovered";
+    case "LP_DONE":
+      return "Position active";
   }
 }
 
@@ -430,6 +456,12 @@ function resolveRecovery(
   recoveryService: RecoveryService,
 ): RecoveryGuidance | null {
   if (failureStage) {
+    if (latestActivity?.headline === "Position downgraded to standard mode") {
+      return recoveryService.getRecoveryGuidance({
+        failureStage: failureStage as RecoveryServiceInput["failureStage"],
+        mode: "fast-private",
+      });
+    }
     return recoveryService.getRecoveryGuidance({
       failureStage: failureStage as RecoveryServiceInput["failureStage"],
       mode,
@@ -446,6 +478,12 @@ function resolveActivityRecovery(
   isLatestActivity: boolean,
 ): RecoveryGuidance | null {
   if (failureStage && isLatestActivity) {
+    if (activity?.headline === "Position downgraded to standard mode") {
+      return recoveryService.getRecoveryGuidance({
+        failureStage: failureStage as RecoveryServiceInput["failureStage"],
+        mode: "fast-private",
+      });
+    }
     return recoveryService.getRecoveryGuidance({
       failureStage: failureStage as RecoveryServiceInput["failureStage"],
       mode,
