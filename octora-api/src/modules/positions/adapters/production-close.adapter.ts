@@ -31,8 +31,11 @@
  * so `createApp` can instantiate it at boot. Per-call context plugs in
  * through the `contextResolver` injection point once that lands.
  */
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import type { AccountMeta } from "@solana/web3.js";
+
+/** SPL token account `amount` field offset (mint:32 + owner:32 = 64). */
+const TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
 
 import { UpstreamError } from "#common/errors";
 import type { SolanaChain } from "#common/solana/chain";
@@ -69,6 +72,13 @@ export interface CloseOrchestrationPositionContext {
   denomination: bigint;
   /** Fresh commitment for the re-mix deposit (browser-generated). */
   remixCommitment: bigint;
+  /**
+   * Stealth wallet's ATA for the *other-side* (non-SOL) mint of the
+   * pool. `null` when the pool is single-sided SOL — the adapter then
+   * reports `otherSideResidualLamports = 0n` without an RPC read.
+   * production-ix-wiring/02.
+   */
+  stealthOtherAta?: PublicKey | null;
 }
 
 export type CloseContextResolver = (positionId: string) => Promise<CloseOrchestrationPositionContext>;
@@ -148,13 +158,15 @@ export function createProductionCloseAdapter(
       const signature = await deps.executorClient.sendIx(ix, [ctx.stealthKeypair], {
         computeUnits: 1_400_000,
       });
-      // Other-side residual is read from the post-close token-account
-      // amount. Reading it here would require the ATA pubkey threaded
-      // through the context; until that lands the adapter returns 0n
-      // (the orchestrator interprets 0n as "single-sided SOL — skip
-      // swap"). Realized residual reads land in a follow-up once the
-      // context resolver grows the ATA pubkey field.
-      return { signature, otherSideResidualLamports: 0n };
+      // production-ix-wiring/02 — read the stealth's other-side ATA
+      // balance via the chain seam. `null` ATA = single-sided SOL pool
+      // → 0n short-circuits the orchestrator's swap leg via its
+      // existing dust-threshold gate.
+      const otherSideResidualLamports = await readOtherSideResidual(
+        deps.chain,
+        ctx.stealthOtherAta ?? null,
+      );
+      return { signature, otherSideResidualLamports };
     },
 
     async submitSwap(input) {
@@ -196,21 +208,58 @@ export function createProductionCloseAdapter(
         depositorPubkey: ctx.stealthKeypair.publicKey.toBase58(),
         commitment: ctx.remixCommitment,
       });
-      // Until a relayer-side signer is wired through this adapter, we
-      // return the unsigned tx's hash-like marker as the signature.
-      // The orchestrator treats a returned signature as success; the
-      // close-recovery path picks up via close/03 if the on-chain tx
-      // actually fails to land.
-      // NOTE: this branch is honest about its limitations — the
-      // relayer-signed submission is the missing piece. Tests use the
-      // in-memory adapter; production deployments hit
-      // `CloseOrchestrationWiringIncompleteError` until the resolver
-      // ships.
-      throw new CloseOrchestrationWiringIncompleteError(
-        "submitMixerDeposit",
-        "relayer-signed mixer.deposit submission. " +
-          `Unsigned tx is ready (${unsigned.transaction.length} chars) but the relayer signer + submission seam is not threaded yet.`,
+      // production-ix-wiring/02 — sign + submit with the stealth keypair.
+      // The mixer service produced a base64 legacy Transaction with
+      // feePayer = stealth + compute-budget + deposit ix + a recent
+      // blockhash. We refresh blockhash, partial-sign, and broadcast via
+      // the chain seam (so ScriptedChain can drive tests).
+      const signature = await submitStealthSignedDeposit(
+        deps,
+        unsigned.transaction,
+        ctx.stealthKeypair,
       );
+      return { signature };
     },
   };
+}
+
+/**
+ * Deserialize the unsigned base64 deposit transaction, sign with the
+ * stealth keypair, and submit-and-confirm via the chain.
+ */
+async function submitStealthSignedDeposit(
+  deps: ProductionCloseAdapterDeps,
+  unsignedBase64: string,
+  stealth: Keypair,
+): Promise<string> {
+  const tx = Transaction.from(Buffer.from(unsignedBase64, "base64"));
+  const { blockhash, lastValidBlockHeight } = await deps.chain.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = stealth.publicKey;
+  tx.partialSign(stealth);
+  const raw = tx.serialize();
+  const conn = deps.chain.rawConnection();
+  const signature = await conn.sendRawTransaction(raw, {
+    skipPreflight: false,
+    preflightCommitment: "confirmed",
+  });
+  await conn.confirmTransaction(
+    { signature, blockhash, lastValidBlockHeight },
+    "confirmed",
+  );
+  return signature;
+}
+
+/**
+ * Read the SPL token amount on `ata` via the chain seam. Returns 0n
+ * for a null ATA (single-sided SOL pool) or a non-existent account.
+ */
+async function readOtherSideResidual(
+  chain: SolanaChain,
+  ata: PublicKey | null,
+): Promise<bigint> {
+  if (!ata) return 0n;
+  const acct = await chain.getAccountInfo(ata, "confirmed");
+  if (!acct || acct.data.length < TOKEN_ACCOUNT_AMOUNT_OFFSET + 8) return 0n;
+  return acct.data.readBigUInt64LE(TOKEN_ACCOUNT_AMOUNT_OFFSET);
 }

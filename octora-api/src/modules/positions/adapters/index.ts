@@ -18,3 +18,17 @@ export {
   type CloseQuoteContextResolver,
   type ProductionCloseQuoteAdapterDeps,
 } from "./production-close-quote.adapter";
+
+// production-ix-wiring/02 — per-position context resolver (Option B).
+export {
+  createInMemoryCloseContextResolver,
+  MissingPositionContextError,
+  type CloseContextEntry,
+  type CloseContextResolverService,
+} from "./close-context-resolver";
+
+// production-ix-wiring/02 — per-leg builders for close/06.
+export {
+  createCloseBuilderLegBuilders,
+  type CloseBuilderLegBuildersDeps,
+} from "./close-builder-leg-builders";

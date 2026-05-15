@@ -33,7 +33,19 @@ import { createPrismaRootSeenRepository } from '#modules/relayer/root-seen.repos
 import { registerAuthRoutes } from '#modules/auth/auth.routes'
 import { createPrismaAuthRepository } from '#modules/auth/auth.repository'
 import { registerAdminRoutes } from '#modules/admin/admin.routes'
-import { createMeteoraExecutorFromConfig } from '#modules/execution/clients'
+import {
+  createMeteoraExecutorFromConfig,
+  OnchainMeteoraExecutor,
+  OctoraExecutorClient,
+  type MeteoraExecutor,
+} from '#modules/execution/clients'
+import {
+  createInMemoryCloseContextResolver,
+  createProductionCloseAdapter,
+  createProductionCloseQuoteAdapter,
+  createCloseBuilderLegBuilders,
+  type CloseContextResolverService,
+} from '#modules/positions/adapters'
 import { configureDlmmChain } from '#modules/dlmm/dlmm.chain'
 import { createActivityService } from '#modules/positions/activity.service'
 import { createIndexerService } from '#modules/indexer'
@@ -96,6 +108,25 @@ export interface CreateAppOptions {
    * it to exercise the placeholder contract.
    */
   closeBuilderLegBuilders?: import("#modules/positions/position.service").CloseRecoveryLegBuilders
+  /**
+   * production-ix-wiring/02 — per-position close-context resolver
+   * (Option B). When omitted, `createApp` instantiates a fresh
+   * in-memory registry shared across the close orchestration adapter,
+   * the close-quote adapter, and the close-builder leg builders.
+   * Tests pass their own pre-populated registry so close routes can
+   * exercise the wired path.
+   */
+  closeContextResolver?: CloseContextResolverService
+}
+
+/**
+ * Pull the `OctoraExecutorClient` off a `MeteoraExecutor` if it's the
+ * onchain variant; return null otherwise. Used by production-ix-wiring/02
+ * to compose default production close adapters only when the onchain
+ * client is available.
+ */
+function extractOctoraExecutorClient(executor: MeteoraExecutor): OctoraExecutorClient | null {
+  return executor instanceof OnchainMeteoraExecutor ? executor.raw : null
 }
 
 function createPrismaRepositories(): { repos: AppRepositories; client: ReturnType<typeof createPrismaClient> } {
@@ -315,14 +346,70 @@ export async function createApp(options: CreateAppOptions = {}) {
     })
   }
 
+  // Build the MixerRegistry once and share it across routes so the
+  // anonymity-set tracker (spent-nullifier set + deposit count) stays
+  // consistent: the mixer routes hydrate it from chain at startup, and
+  // the relayer route bumps it on every successful withdrawal.
+  // Hoisted ahead of `registerPositionRoutes` (vs. its prior location
+  // below) so the production close adapter can borrow the per-denom
+  // MixerService resolver — production-ix-wiring/02.
+  const mixerRegistry = new MixerRegistry({
+    chain: chains.cluster,
+    programId: new PublicKey(config.mixerProgramId),
+    denominations: config.mixerDenominations,
+  })
+
+  // production-ix-wiring/02 — per-position close-context resolver.
+  // One instance shared across the close orchestration adapter, the
+  // close-quote adapter, and the close-builder leg builders so that
+  // the user-signed recovery path and the relayer-driven mainline see
+  // identical context for the same position. Tests inject their own
+  // pre-populated resolver; production runs hydrate this instance from
+  // the indexer (out of scope for this ticket — the seam is the
+  // deliverable).
+  const closeContextResolver: CloseContextResolverService =
+    options.closeContextResolver ?? createInMemoryCloseContextResolver()
+
+  // Compose the production close adapters when the onchain executor is
+  // wired AND the caller didn't supply explicit overrides. Mock-executor
+  // deployments leave `closeAdapter` undefined; the route falls back to
+  // the service-level "no adapter" rejection — same precedent as before.
+  const onchainExecutorClient = extractOctoraExecutorClient(meteoraExecutor)
+  const defaultCloseAdapter =
+    options.closeAdapter ??
+    (onchainExecutorClient
+      ? createProductionCloseAdapter({
+          executorClient: onchainExecutorClient,
+          mixerServiceFor: (denomination) => mixerRegistry.get(denomination),
+          chain: chains.executor,
+          contextResolver: (positionId) =>
+            closeContextResolver.resolveOrchestration(positionId),
+        })
+      : undefined)
+  const defaultCloseLegBuilders =
+    options.closeBuilderLegBuilders ??
+    (onchainExecutorClient
+      ? createCloseBuilderLegBuilders({
+          executorClient: onchainExecutorClient,
+          mixerServiceFor: (denomination) => mixerRegistry.get(denomination),
+          resolver: closeContextResolver,
+        })
+      : undefined)
+  const defaultCloseQuoteAdapter =
+    options.closeQuoteAdapter ??
+    createProductionCloseQuoteAdapter({
+      positionRepo: repos.positionRepo,
+      contextResolver: (positionId) => closeContextResolver.resolveQuote(positionId),
+    })
+
   app.register(registerPositionRoutes, {
     ...repos,
     meteoraExecutor,
     betaCaps: config.betaCaps,
     authPreHandlers,
     rateLimiterFactory,
-    closeAdapter: options.closeAdapter,
-    closeQuoteAdapter: options.closeQuoteAdapter,
+    closeAdapter: defaultCloseAdapter,
+    closeQuoteAdapter: defaultCloseQuoteAdapter,
     // close/06 — share the executor chain for the close-builder route.
     // The builder only needs a fresh blockhash + tx serialization, so
     // we reuse the executor RPC handle (same cluster the DLMM ix would
@@ -332,21 +419,12 @@ export async function createApp(options: CreateAppOptions = {}) {
       options.closeBuilderChain === null
         ? undefined
         : (options.closeBuilderChain ?? chains.executor),
-    closeBuilderLegBuilders: options.closeBuilderLegBuilders,
+    closeBuilderLegBuilders: defaultCloseLegBuilders,
   })
   app.register(registerDlmmRoutes)
   app.register(registerPricesRoutes)
   app.register(registerTokensRoutes)
   app.register(registerWaitlistRoutes, { waitlistRepo: repos.waitlistRepo })
-  // Build the MixerRegistry once and share it across routes so the
-  // anonymity-set tracker (spent-nullifier set + deposit count) stays
-  // consistent: the mixer routes hydrate it from chain at startup, and
-  // the relayer route bumps it on every successful withdrawal.
-  const mixerRegistry = new MixerRegistry({
-    chain: chains.cluster,
-    programId: new PublicKey(config.mixerProgramId),
-    denominations: config.mixerDenominations,
-  })
 
   app.register(registerMixerRoutes, {
     mixerProgramId: config.mixerProgramId,

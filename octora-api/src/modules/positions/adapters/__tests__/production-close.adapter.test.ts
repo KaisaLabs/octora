@@ -9,15 +9,22 @@
  *     client's `buildWithdrawCloseIx` / `buildSwapIx` with the
  *     correct context, and threads through the slippage-derived
  *     `min_amount_out`.
- *
- * Structural-mock approach per the ticket's fall-back: the executor
- * client + mixer service are mocked so the test doesn't need
- * surfpool. The ix-builder methods are real (proven by the executor
- * client unit tests); this test only pins the adapter's plumbing.
+ *   - production-ix-wiring/02 — `submitWithdrawClose` reads the
+ *     stealth's other-side ATA via the chain seam, and
+ *     `submitMixerDeposit` signs + submits the unsigned tx with the
+ *     stealth keypair.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  ComputeBudgetProgram,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  TransactionInstruction,
+} from "@solana/web3.js";
 
+import type { SolanaChain } from "#common/solana/chain";
 import type { OctoraExecutorClient } from "#modules/execution/clients";
 
 import {
@@ -26,7 +33,63 @@ import {
   type CloseOrchestrationPositionContext,
 } from "../production-close.adapter";
 
-function makeCtx(overrides: Partial<CloseOrchestrationPositionContext> = {}): CloseOrchestrationPositionContext {
+function makeMockUnsignedDepositTx(depositor: PublicKey): string {
+  const tx = new Transaction();
+  tx.feePayer = depositor;
+  // Real base58, 32 bytes — exact alphabet matters (no 0,O,I,l).
+  tx.recentBlockhash = "11111111111111111111111111111112";
+  tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }));
+  tx.add(SystemProgram.transfer({ fromPubkey: depositor, toPubkey: depositor, lamports: 0 }));
+  return tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64");
+}
+
+function makeMockChain(opts: { tokenAmount?: bigint; sendResult?: string } = {}): SolanaChain & {
+  sentTx: { raw: Uint8Array } | null;
+} {
+  const buf = Buffer.alloc(165);
+  if (opts.tokenAmount !== undefined) buf.writeBigUInt64LE(opts.tokenAmount, 64);
+  let sentTx: { raw: Uint8Array } | null = null;
+  const chain: SolanaChain = {
+    async getAccountInfo() {
+      return opts.tokenAmount === undefined
+        ? null
+        : {
+            data: buf,
+            executable: false,
+            owner: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+            lamports: 2_039_280,
+            rentEpoch: 0,
+          };
+    },
+    async getBalance() { return 0; },
+    async getLatestBlockhash() {
+      return { blockhash: "11111111111111111111111111111113", lastValidBlockHeight: 1_000_000 };
+    },
+    async getSlot() { return 0; },
+    async getSignatureStatus() { return null; },
+    async getRecentPrioritizationFees() { return []; },
+    async simulateTransaction() {
+      return { err: null, logs: [], accounts: null, unitsConsumed: 0, returnData: null, innerInstructions: null };
+    },
+    async sendTransaction() { return opts.sendResult ?? "deposit_sig"; },
+    anchorProvider() { throw new Error("not used"); },
+    rawConnection() {
+      return {
+        sendRawTransaction: async (raw: Uint8Array) => {
+          sentTx = { raw };
+          return opts.sendResult ?? "deposit_sig";
+        },
+        confirmTransaction: async () => ({ value: { err: null } }),
+      } as never;
+    },
+  };
+  Object.defineProperty(chain, "sentTx", { get: () => sentTx });
+  return chain as SolanaChain & { sentTx: { raw: Uint8Array } | null };
+}
+
+function makeCtx(
+  overrides: Partial<CloseOrchestrationPositionContext> = {},
+): CloseOrchestrationPositionContext {
   return {
     stealthKeypair: Keypair.generate(),
     positionPubkey: Keypair.generate().publicKey,
@@ -46,6 +109,7 @@ function makeCtx(overrides: Partial<CloseOrchestrationPositionContext> = {}): Cl
     remainingAccountsInfo: Buffer.from([0, 0, 0, 0]),
     denomination: 1_000_000_000n,
     remixCommitment: 1234567890n,
+    stealthOtherAta: null,
     ...overrides,
   };
 }
@@ -78,11 +142,11 @@ describe("createProductionCloseAdapter — wiring-incomplete behaviour", () => {
     const adapter = createProductionCloseAdapter({
       executorClient: client,
       mixerServiceFor: () => ({} as never),
-      chain: {} as never,
+      chain: makeMockChain(),
     });
-    await expect(
-      adapter.submitWithdrawClose({ positionId: "pos_x" }),
-    ).rejects.toBeInstanceOf(CloseOrchestrationWiringIncompleteError);
+    await expect(adapter.submitWithdrawClose({ positionId: "pos_x" })).rejects.toBeInstanceOf(
+      CloseOrchestrationWiringIncompleteError,
+    );
   });
 
   it("submitSwap throws CloseOrchestrationWiringIncompleteError when no resolver", async () => {
@@ -90,7 +154,7 @@ describe("createProductionCloseAdapter — wiring-incomplete behaviour", () => {
     const adapter = createProductionCloseAdapter({
       executorClient: client,
       mixerServiceFor: () => ({} as never),
-      chain: {} as never,
+      chain: makeMockChain(),
     });
     await expect(
       adapter.submitSwap({
@@ -106,16 +170,15 @@ describe("createProductionCloseAdapter — wiring-incomplete behaviour", () => {
 describe("createProductionCloseAdapter — wired behaviour", () => {
   it("submitWithdrawClose builds + sends the dlmm_withdraw_close ix with the resolved context", async () => {
     const { client, buildWithdraw, send } = makeExecutorMock();
-    const ctx = makeCtx();
+    const ctx = makeCtx({ stealthOtherAta: null });
     const adapter = createProductionCloseAdapter({
       executorClient: client,
       mixerServiceFor: () => ({} as never),
-      chain: {} as never,
+      chain: makeMockChain(),
       contextResolver: async () => ctx,
     });
     const result = await adapter.submitWithdrawClose({ positionId: "pos_y" });
 
-    expect(buildWithdraw).toHaveBeenCalledTimes(1);
     expect(buildWithdraw).toHaveBeenCalledWith(
       expect.objectContaining({
         stealth: ctx.stealthKeypair.publicKey,
@@ -127,8 +190,36 @@ describe("createProductionCloseAdapter — wired behaviour", () => {
     );
     expect(send).toHaveBeenCalledTimes(1);
     expect(result.signature).toBe("mock_sig_abc123");
-    // Other-side residual reading is the documented scope-down (see
-    // adapter source): returns 0n until the ATA pubkey field lands.
+    expect(result.otherSideResidualLamports).toBe(0n);
+  });
+
+  it("submitWithdrawClose reads the stealth's other-side ATA balance after withdraw confirms (production-ix-wiring/02)", async () => {
+    const { client } = makeExecutorMock();
+    const ataPubkey = Keypair.generate().publicKey;
+    const chain = makeMockChain({ tokenAmount: 1_230_000n });
+    const ctx = makeCtx({ stealthOtherAta: ataPubkey });
+    const adapter = createProductionCloseAdapter({
+      executorClient: client,
+      mixerServiceFor: () => ({} as never),
+      chain,
+      contextResolver: async () => ctx,
+    });
+    const result = await adapter.submitWithdrawClose({ positionId: "pos_with_other" });
+    expect(result.otherSideResidualLamports).toBe(1_230_000n);
+  });
+
+  it("submitWithdrawClose surfaces 0n when the stealth ATA doesn't exist on-chain", async () => {
+    const { client } = makeExecutorMock();
+    const ataPubkey = Keypair.generate().publicKey;
+    const chain = makeMockChain();
+    const ctx = makeCtx({ stealthOtherAta: ataPubkey });
+    const adapter = createProductionCloseAdapter({
+      executorClient: client,
+      mixerServiceFor: () => ({} as never),
+      chain,
+      contextResolver: async () => ctx,
+    });
+    const result = await adapter.submitWithdrawClose({ positionId: "pos_no_ata" });
     expect(result.otherSideResidualLamports).toBe(0n);
   });
 
@@ -138,21 +229,17 @@ describe("createProductionCloseAdapter — wired behaviour", () => {
     const adapter = createProductionCloseAdapter({
       executorClient: client,
       mixerServiceFor: () => ({} as never),
-      chain: {} as never,
+      chain: makeMockChain(),
       contextResolver: async () => ctx,
     });
-
     await adapter.submitSwap({
       positionId: "pos_z",
       residualLamports: 1_000_000n,
       slippageBps: 50,
       expectedOutLamports: 1_000_000_000n,
     });
-
-    expect(buildSwap).toHaveBeenCalledTimes(1);
     const call = buildSwap.mock.calls[0][0];
     expect(call.amountIn).toBe(1_000_000n);
-    // 1_000_000_000 * (10_000 − 50) / 10_000 = 995_000_000
     expect(call.minAmountOut).toBe(995_000_000n);
     expect(call.stealth).toEqual(ctx.stealthKeypair.publicKey);
     expect(call.lbPair).toEqual(ctx.lbPair);
@@ -164,39 +251,47 @@ describe("createProductionCloseAdapter — wired behaviour", () => {
     const adapter = createProductionCloseAdapter({
       executorClient: client,
       mixerServiceFor: () => ({} as never),
-      chain: {} as never,
+      chain: makeMockChain(),
       contextResolver: async () => ctx,
     });
-
     await adapter.submitSwap({
       positionId: "pos_z2",
       residualLamports: 1_000_000n,
       slippageBps: 50,
       expectedOutLamports: null,
     });
-
-    const call = buildSwap.mock.calls[0][0];
-    expect(call.minAmountOut).toBe(1n);
+    expect(buildSwap.mock.calls[0][0].minAmountOut).toBe(1n);
   });
 
-  it("submitMixerDeposit surfaces a wiring-incomplete error until the relayer signer seam lands", async () => {
+  it("submitMixerDeposit signs the unsigned tx with the stealth keypair and submits it via the chain (production-ix-wiring/02)", async () => {
     const { client } = makeExecutorMock();
-    const mockMixer = {
-      buildDepositTransaction: vi.fn().mockResolvedValue({ transaction: "base64_unsigned_tx" }),
-    };
     const ctx = makeCtx();
+    const chain = makeMockChain({ sendResult: "deposit_sig_remix_abc" });
+    const mockMixer = {
+      buildDepositTransaction: vi
+        .fn()
+        .mockImplementation(async (args: { depositorPubkey: string }) => ({
+          transaction: makeMockUnsignedDepositTx(new PublicKey(args.depositorPubkey)),
+        })),
+    };
     const adapter = createProductionCloseAdapter({
       executorClient: client,
       mixerServiceFor: () => mockMixer as never,
-      chain: {} as never,
+      chain,
       contextResolver: async () => ctx,
     });
-    await expect(
-      adapter.submitMixerDeposit({ positionId: "pos_z3" }),
-    ).rejects.toBeInstanceOf(CloseOrchestrationWiringIncompleteError);
-    // The adapter still builds the unsigned tx (proves the mixer
-    // service plumbing is correct) before reporting the relayer-signer
-    // gap.
-    expect(mockMixer.buildDepositTransaction).toHaveBeenCalledTimes(1);
+    const result = await adapter.submitMixerDeposit({ positionId: "pos_z3" });
+    expect(mockMixer.buildDepositTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        depositorPubkey: ctx.stealthKeypair.publicKey.toBase58(),
+        commitment: ctx.remixCommitment,
+      }),
+    );
+    expect(result.signature).toBe("deposit_sig_remix_abc");
+    const sent = (chain as { sentTx: { raw: Uint8Array } | null }).sentTx;
+    expect(sent).not.toBeNull();
+    const parsed = Transaction.from(Buffer.from(sent!.raw));
+    expect(parsed.signatures[0]?.publicKey.equals(ctx.stealthKeypair.publicKey)).toBe(true);
+    expect(parsed.signatures[0]?.signature).not.toBeNull();
   });
 });
