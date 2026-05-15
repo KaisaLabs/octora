@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Octora — Dust Handling & Stuck-Funds Design</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --good: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --code-bg: #1f2428;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  main {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+  }
+  h1 {
+    font-size: 2rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+    margin-top: 0;
+  }
+  h2 {
+    color: var(--accent);
+    margin-top: 40px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+  h3 { color: var(--text); margin-top: 28px; }
+  h4 { color: var(--warn); margin-top: 22px; margin-bottom: 6px; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px;
+    overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .block {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 16px 0;
+  }
+  .recommend {
+    background: var(--panel);
+    border: 1px solid var(--good);
+    border-left: 4px solid var(--good);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 20px 0;
+  }
+  .recommend h3 { color: var(--good); margin-top: 0; }
+  .warn-block {
+    background: var(--panel);
+    border-left: 4px solid var(--warn);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 14px 0;
+  }
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-left: 6px;
+  }
+  .tag-good { background: rgba(63,185,80,0.15); color: var(--good); border: 1px solid var(--good); }
+  .tag-warn { background: rgba(210,153,34,0.15); color: var(--warn); border: 1px solid var(--warn); }
+  .tag-bad  { background: rgba(248,81,73,0.15); color: var(--bad); border: 1px solid var(--bad); }
+  .muted { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--panel); color: var(--accent); }
+  tr:nth-child(even) td { background: var(--panel); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Octora — Dust Handling &amp; Stuck-Funds Design</h1>
+<p class="muted">Two coupled problems: (1) non-fixed amounts on withdraw + fee-claim, (2) user fails to add liquidity after successful mixer deposit.</p>
+
+<h2>Problem 1 — Non-fixed amounts / dust</h2>
+
+<div class="block">
+<h3>Root cause</h3>
+<p>Stealth wallet sits between mixer-withdraw and pool-deposit. Gap = where dust appears + linkage leak surface. Sweep service is a band-aid, not a fix.</p>
+</div>
+
+<div class="recommend">
+<h3>Best fix — Atomic compound instruction</h3>
+<p>One tx, CPI-chained:</p>
+<pre><code>mixer.withdraw -> pool.add_liquidity
+       \-> position NFT owner = stealth
+       \-> sub-denom dust never lands in stealth account
+</code></pre>
+<ul>
+  <li>Withdraw lamports → pool position in single ix-batch</li>
+  <li>Fee = paid by relayer, deducted from denom inside the CPI</li>
+  <li>No intermediate "stealth holds 4.97 SOL" state → no sweep needed</li>
+  <li>Bot sees: relayer signs, denom in, position out. No dust trail.</li>
+</ul>
+</div>
+
+<h3>Fee-claim path</h3>
+<p><code>pool.claim_fee -> mixer.deposit</code> in one tx:</p>
+<ul>
+  <li>Round-down claimed fees to nearest denom multiple (e.g. 0.1 SOL)</li>
+  <li>Floor portion → fresh mixer commitment (new anonymity set entry)</li>
+  <li>Residual sub-denom dust → <strong>compound back into position</strong> (not swept, not paid out). Stays inside LP, grows next claim.</li>
+  <li>No off-chain sweeper. No protocol treasury siphon. User funds never leave their own LP.</li>
+</ul>
+
+<h3>Denom ladder (smaller buckets)</h3>
+<ul>
+  <li>Add ladder: <code>{0.1, 1, 5, 10}</code> SOL</li>
+  <li>Smaller bucket = less residual after LP price-range fit</li>
+  <li>Tradeoff: more buckets fragment anonymity sets</li>
+  <li>Mitigate: enforce <code>MIN_ANONYMITY_SET=20</code> per bucket, hide empty buckets in UI until filled</li>
+</ul>
+
+<h3>Alternative if atomic CPI infeasible</h3>
+<div class="warn-block">
+<p><strong>Note-based change (Zcash-style):</strong> withdraw emits <code>(denom_note - fee_note)</code>. User redeposits <code>fee_note</code> later when accumulated to denom.</p>
+<p>Heavier crypto. Only if atomic CPI blocked by program size / CU.</p>
+</div>
+
+<div class="recommend">
+<p><strong>Recommendation:</strong> atomic compound ix + denom ladder + floor-round on fee-claim. Kills dust without sweeper. As of ADR <code>octora-api/docs/adr/0003-compound-mixer-dlmm-cpi-remains-fail-closed.md</code>, the on-chain compound entrypoints are exported as fail-closed scaffolding only; production traffic must stay on the existing orchestration path until the Mixer/DLMM CPI boundary is redesigned.</p>
+</div>
+
+<h2>Problem 2 — Mixer deposit success → add-LP fail</h2>
+
+<div class="block">
+<h3>Reframe: not actually stuck</h3>
+<p>User holds nullifier secret → user holds funds. Mixer is custodial-less. "Stuck" = UX gap, not protocol gap.</p>
+</div>
+
+<div class="recommend">
+<h3>Best fix — Atomic deposit + add-LP in one tx</h3>
+<pre><code>user.sign:
+  mixer.deposit (commitment)
+  CPI -> pool.add_liquidity (via relayer-derived stealth or PDA)
+</code></pre>
+<ul>
+  <li>LP fail → whole tx reverts → SOL never left user wallet</li>
+  <li>Eliminates the stuck state by construction</li>
+</ul>
+<div class="warn-block">
+<strong>Constraint:</strong> tx size + CU budget must fit both ix. DLMM <code>addLiquidity</code> is heavy → may need to split bin-array init into prep tx (non-fund-moving, safe to fail).
+</div>
+</div>
+
+<h3>If atomic infeasible — Two-phase with persisted intent</h3>
+<ol>
+  <li><code>deposit</code> → backend stores <code>{commitment, intended_pool, denom, expires_at}</code> keyed by nullifier hash (user holds preimage)</li>
+  <li>Frontend immediately attempts <code>withdraw + add_liquidity</code> (atomic from stealth)</li>
+  <li>On fail: UI surfaces 3 paths:
+    <ul>
+      <li><strong>Retry</strong> — re-run withdraw+LP, same denom, different pool / params</li>
+      <li><strong>Withdraw to new stealth</strong> — treat as parked funds, use later</li>
+      <li><strong>Auto-retry</strong> — backend relayer retries N times with backoff</li>
+    </ul>
+  </li>
+  <li>State machine:
+<pre><code>DEPOSITED -> LP_PENDING -> LP_FAILED -> { LP_RETRIED | PARKED | WITHDRAWN }
+</code></pre>
+  </li>
+</ol>
+
+<h3>Edge case — relayer disappears mid-flow</h3>
+<ul>
+  <li>Nullifier must be revealable to user directly (not just relayer)</li>
+  <li>UI: <strong>"Recover funds"</strong> button → user-signed withdraw to any stealth they control, paying own fee</li>
+  <li>Worst case but always available <span class="tag tag-good">SAFE</span></li>
+</ul>
+
+<div class="recommend">
+<p><strong>Recommendation:</strong> atomic deposit+LP if CU fits; otherwise two-phase with retry UI + always-available user-signed recover path. Persist intent server-side. No funds ever truly stuck.</p>
+</div>
+
+<h2>State machine summary</h2>
+<table>
+<thead><tr><th>State</th><th>Trigger</th><th>Next</th><th>UI affordance</th></tr></thead>
+<tbody>
+<tr><td><code>DEPOSITED</code></td><td>mixer.deposit confirmed</td><td><code>LP_PENDING</code></td><td>"Adding liquidity…"</td></tr>
+<tr><td><code>LP_PENDING</code></td><td>withdraw+addLP submitted</td><td><code>LP_DONE</code> / <code>LP_FAILED</code></td><td>spinner</td></tr>
+<tr><td><code>LP_FAILED</code></td><td>tx revert / timeout</td><td>retry / park / withdraw</td><td>3-button panel</td></tr>
+<tr><td><code>PARKED</code></td><td>user chose "later"</td><td>resume anytime</td><td>"Resume in pool" CTA</td></tr>
+<tr><td><code>WITHDRAWN</code></td><td>user-signed recover</td><td>terminal</td><td>tx receipt</td></tr>
+<tr><td><code>LP_DONE</code></td><td>position NFT minted</td><td>terminal</td><td>position view</td></tr>
+</tbody>
+</table>
+
+<h2>Order of work</h2>
+<ol>
+  <li>Prototype atomic <code>deposit + addLiquidity</code> once a faithful Mixer/DLMM CPI interface exists — measure CU. Decide single-tx vs two-tx.</li>
+  <li>Add denom ladder + floor-round fee-claim path.</li>
+  <li>Build <code>LP_FAILED</code> state machine + "Recover funds" user-signed fallback.</li>
+  <li>Drop sweeper from roadmap — replaced by atomic compounding.</li>
+</ol>
+
+</main>
+</body>
+</html>

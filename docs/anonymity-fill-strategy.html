@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Octora — Anonymity Set Fill Strategy</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --good: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --code-bg: #1f2428;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-top: 0; }
+  h2 { color: var(--accent); margin-top: 40px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  h3 { color: var(--text); margin-top: 28px; }
+  h4 { color: var(--warn); margin-top: 22px; margin-bottom: 6px; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 14px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .block { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 16px 20px; margin: 16px 0; }
+  .recommend { background: var(--panel); border: 1px solid var(--good); border-left: 4px solid var(--good); border-radius: 6px; padding: 16px 20px; margin: 20px 0; }
+  .recommend h3 { color: var(--good); margin-top: 0; }
+  .warn-block { background: var(--panel); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; }
+  .bad-block { background: var(--panel); border-left: 4px solid var(--bad); border-radius: 6px; padding: 12px 16px; margin: 14px 0; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; margin-left: 6px; }
+  .tag-good { background: rgba(63,185,80,0.15); color: var(--good); border: 1px solid var(--good); }
+  .tag-warn { background: rgba(210,153,34,0.15); color: var(--warn); border: 1px solid var(--warn); }
+  .tag-bad  { background: rgba(248,81,73,0.15); color: var(--bad); border: 1px solid var(--bad); }
+  .muted { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th, td { border: 1px solid var(--border); padding: 10px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); color: var(--accent); }
+  tr:nth-child(even) td { background: var(--panel); }
+  .kbd { background: var(--code-bg); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-family: "SF Mono", Menlo, monospace; font-size: 0.85em; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Octora — Anonymity Set Fill Strategy</h1>
+<p class="muted">How to bootstrap and sustain the mixer's anonymity set on mainnet, and how to test the strategy on localnet first.</p>
+
+<h2>1. Why this matters</h2>
+
+<div class="block">
+<p>The mixer's privacy guarantee is <strong>bounded by the anonymity set</strong> — the count of deposits in a given denomination pool that <em>could</em> have funded any one withdrawal.</p>
+<p>From <code>runbooks/PRIVACY_MODEL.md §4</code>:</p>
+<table>
+  <tr><th>Anonymity set size</th><th>Linkability per withdrawal</th></tr>
+  <tr><td>&lt; 10</td><td>Near-trivial. Amount + timing pinpoints the deposit.</td></tr>
+  <tr><td>10–50</td><td>Weak. Chainalysis-class tooling typically recovers it.</td></tr>
+  <tr><td>50–500</td><td>Moderate. Effective vs. non-state adversaries.</td></tr>
+  <tr><td>500+</td><td>Strong. Comparable to Tornado Cash classic at peak.</td></tr>
+</table>
+<p>Hard floor: <code>MIN_ANONYMITY_SET = 20</code> per pool. The relayer should refuse a withdraw below this (P1-18, gate on roadmap).</p>
+</div>
+
+<h2>2. Levers we control</h2>
+
+<div class="recommend">
+<h3>Primary: seed liquidity</h3>
+<ul>
+  <li><strong>Many fresh wallets, not one wallet × N times.</strong> Same-wallet deposits cluster — observer infers they belong to one operator.</li>
+  <li><strong>Concentrate, don't fragment.</strong> Launch with 2–3 denoms (e.g. <code>0.1, 1, 10 SOL</code>); open higher tiers only after demand exists. Per <code>docs/POOL_ROTATION.md</code>, the supported denom ladder is <code>{0.1, 1, 5, 10}</code> SOL.</li>
+  <li><strong>Each denom must hit ≥ 20 deposits before the first withdrawal lands.</strong> Otherwise the first withdrawer is the deanonymization case study.</li>
+  <li><strong>Stagger over hours/days with randomized intervals.</strong> Bursts at round-number times leak.</li>
+</ul>
+</div>
+
+<div class="recommend">
+<h3>Secondary: protocol gates</h3>
+<ul>
+  <li><strong>Privacy delay</strong> — <code>OCTORA_MIXER_PRIVACY_DELAY_MS</code> (default 13s). Consider raising to 60–120s for the first weeks of mainnet.</li>
+  <li><strong>Min-N gate (P1-18)</strong> — relayer must refuse withdrawals when <code>set_size &lt; MIN_ANONYMITY_SET</code>. Ship before mainnet open. Without this, a single first-withdrawer is fully linkable.</li>
+  <li><strong>Per-denom withdrawal rate limit</strong> — withdrawals per minute capped so set drain &lt; deposit rate. Prevents an attacker draining the set to trivialize subsequent withdraws.</li>
+</ul>
+</div>
+
+<div class="recommend">
+<h3>Tertiary: incentives</h3>
+<ul>
+  <li><strong>Fee rebate / points multiplier scaling with time-in-pool.</strong> Withdraw fast → forfeit rebate. Aligns user incentive with anonymity-set health.</li>
+  <li><strong>Cohort launches.</strong> Announce deposit windows ("Tuesday 14:00 UTC"). Each depositor inherits the cohort's anonymity set for free.</li>
+  <li><strong>Surface set size in UI.</strong> <code>/vault/info</code> already exposes <code>anonymitySetSize</code>; show RED &lt;10, YELLOW 10–50, GREEN 50+. Lets self-policing users delay.</li>
+</ul>
+</div>
+
+<h2>3. Mainnet playbook (T-7d → T+30d)</h2>
+
+<div class="block">
+<h3>T-7d: gate work</h3>
+<ul>
+  <li>Implement P1-18 min-N gate in <code>octora-api/src/modules/relayer/relayer.service.ts</code>.</li>
+  <li>Set <code>OCTORA_MIXER_PRIVACY_DELAY_MS=60000</code> for first 30 days.</li>
+  <li>Set <code>BETA_MAX_*</code> caps to limit any single user's contribution to ≤ 10% of pool deposits.</li>
+  <li>Add Grafana panel for per-denom <code>anonymitySetSize</code>; alert when &lt; 20.</li>
+</ul>
+
+<h3>T-1d: dry run on devnet</h3>
+<ul>
+  <li>Run the localnet fill script (§5) against devnet with <code>NETWORK=devnet</code>. Verify witness JSON is recoverable end-to-end before risking mainnet SOL.</li>
+</ul>
+
+<h3>T-0: seeded launch</h3>
+<ul>
+  <li>Seed each active denom from <strong>≥ 30 fresh wallets</strong> over <strong>2–4 hours</strong> with randomized inter-deposit intervals (60–600s).</li>
+  <li>Keep withdrawals paused (or denom-list empty in <code>/relayer/info</code>) until <code>set_size ≥ 30</code> per denom.</li>
+  <li>Persist every <code>(secret, nullifier, commitment, leafIndex, denomination)</code> tuple to an offline-signed witness file. Without it, your seed SOL is permanently locked.</li>
+</ul>
+
+<h3>T+1d → T+30d: sustain</h3>
+<ul>
+  <li>Top up any denom that drops &lt; 25.</li>
+  <li>Run a small "background depositor" service that adds 1 deposit / hour at randomized intervals to thin pools, capped by a daily budget.</li>
+  <li>Roll forward seed-wallet rotation: never reuse a seed wallet within 30 days.</li>
+</ul>
+</div>
+
+<div class="bad-block">
+<strong>Anti-patterns to avoid</strong>
+<ul>
+  <li><strong>One ops wallet depositing 20× to "fill the set".</strong> Linkable on the depositor side; the entire seed cohort collapses to one entity.</li>
+  <li><strong>Withdrawing your own seed deposits early.</strong> Pool drains, real users are now in a thin set.</li>
+  <li><strong>Skipping witness persistence.</strong> If you lose the secret/nullifier, the seed SOL is unrecoverable. <code>scripts/anon-fill-localnet.ts</code> writes a JSON file — never delete it.</li>
+  <li><strong>Bursty deposits.</strong> 30 deposits at exactly <code>00:00:00</code>, <code>00:01:00</code>, <code>00:02:00</code> is a fingerprint.</li>
+</ul>
+</div>
+
+<h2>4. Recovery story (do not skip)</h2>
+
+<div class="warn-block">
+<p>Every seed deposit is recoverable <strong>if and only if</strong> you keep its commitment witness — <code>(secret, nullifier, commitment, leafIndex, denomination)</code>. Lose the file → SOL stays in the pool forever.</p>
+<p>The localnet script writes <code>scripts/.anon-fill-witnesses.json</code>. For mainnet:</p>
+<ul>
+  <li>Encrypt the witness file at rest (e.g. <code>age</code> or <code>gpg --symmetric</code>).</li>
+  <li>Back up to a secondary location <em>before</em> running the next batch.</li>
+  <li>Test recovery on devnet first by running a withdrawal from a recorded witness via the standard Groth16 prove + relayer flow.</li>
+</ul>
+</div>
+
+<h2>5. Localnet fill — how to run it</h2>
+
+<div class="block">
+<h3>Prereqs</h3>
+<ol>
+  <li>Programs deployed to localnet — <code>NETWORK=localnet ./scripts/localnet-bootstrap.sh</code></li>
+  <li>Mixer pools initialized — <code>pnpm tsx scripts/init-mixer-pools.ts</code> (writes pools for the four default denominations).</li>
+  <li>Funder keypair has enough SOL — for 30 deposits × <code>0.1 SOL</code> denom, budget <strong>≥ 5 SOL</strong> to cover deposit + rent + fees per fresh wallet.</li>
+</ol>
+
+<h3>Run</h3>
+<pre><code># default: 30 deposits per denom, denominations from MIXER_DENOMINATIONS env
+OCTORA_MIXER_PROGRAM_ID=&lt;your_program_id&gt; \
+OCTORA_MIXER_ADMIN_KEYPAIR=$HOME/.config/solana/id.json \
+OCTORA_EXECUTOR_RPC_URL=http://127.0.0.1:8899 \
+pnpm tsx scripts/anon-fill-localnet.ts
+
+# tune:
+ANON_FILL_PER_DENOM=50 \              # deposits per denom
+ANON_FILL_DENOMS=100000000,1000000000 \   # subset of denoms (lamports)
+ANON_FILL_MIN_DELAY_MS=200 \           # min inter-deposit pause
+ANON_FILL_MAX_DELAY_MS=2000 \          # max inter-deposit pause
+ANON_FILL_WITNESS_FILE=./scripts/.anon-fill-witnesses.json \
+pnpm tsx scripts/anon-fill-localnet.ts
+</code></pre>
+
+<h3>What it does</h3>
+<ol>
+  <li>Loads the funder keypair (your admin / dev wallet).</li>
+  <li>For each denom × <code>ANON_FILL_PER_DENOM</code> iterations:
+    <ul>
+      <li>Generates a fresh <code>Keypair</code> (one-time-use depositor).</li>
+      <li>Funds it from the admin with <code>denom + rent + fees</code>.</li>
+      <li>Generates a Poseidon commitment from random <code>(secret, nullifier)</code>.</li>
+      <li>Submits <code>mixer.deposit</code> from the fresh wallet.</li>
+      <li>Appends the witness tuple to the JSON file (atomic-write per row — so a kill mid-run doesn't lose prior work).</li>
+      <li>Sleeps <code>uniform(MIN_DELAY, MAX_DELAY)</code> ms.</li>
+    </ul>
+  </li>
+  <li>Prints final per-denom <code>nextLeafIndex</code> so you can verify the set grew as expected.</li>
+</ol>
+
+<h3>Verify</h3>
+<pre><code># per-pool count via API
+curl http://localhost:3000/api/mixer/status?denomination=1000000000
+
+# or direct on-chain — read MixerPool.next_leaf_index for the PDA
+solana account &lt;mixer_pool_pda&gt; --url http://127.0.0.1:8899
+</code></pre>
+</div>
+
+<h2>6. Mainnet variant — what changes</h2>
+
+<div class="block">
+<ol>
+  <li>Use a hardware-wallet-derived funder (or multisig). Never use a hot key for the seed budget.</li>
+  <li>Set <code>OCTORA_EXECUTOR_RPC_URL=https://api.mainnet-beta.solana.com</code> (or your private RPC).</li>
+  <li>Encrypt the witness file the moment the script exits: <code>age -p -o witnesses.age scripts/.anon-fill-witnesses.json &amp;&amp; shred -u scripts/.anon-fill-witnesses.json</code>.</li>
+  <li>Run from a single source IP — observers correlating IPs is out of scope, but rotating IPs adds nothing for anonymity-set growth.</li>
+  <li>Cap per-run iterations at 5–10 deposits then re-run after a randomized cool-off; one giant batch is bursty.</li>
+</ol>
+</div>
+
+<h2>7. Open questions / gaps</h2>
+
+<div class="warn-block">
+<ul>
+  <li><strong>P1-18 min-N gate is not yet implemented.</strong> Until shipped, "first withdrawer is fully linkable" remains the worst-case.</li>
+  <li><strong>No automatic background depositor.</strong> Today the fill is operator-triggered. A scheduled task running the script with budget caps would be cleaner — tracked separately.</li>
+  <li><strong>Withdrawal rate limit not enforced.</strong> Set drain can outpace seed rate during volume spikes.</li>
+  <li><strong>UI doesn't yet color-code <code>anonymitySetSize</code>.</strong> Backend exposes it; frontend treatment is a small follow-up.</li>
+</ul>
+</div>
+
+<p class="muted">References: <code>runbooks/PRIVACY_MODEL.md</code>, <code>docs/POOL_ROTATION.md</code>, <code>docs/tornado-mixer-architecture.md</code>, <code>scripts/init-mixer-pools.ts</code>, <code>programs/octora-mixer/src/instructions/deposit.rs</code>.</p>
+
+</main>
+</body>
+</html>

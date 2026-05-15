@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Octora — Trace Linkage & Verify Bot Resistance</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --good: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --code-bg: #1f2428;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  main {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+  }
+  h1 {
+    font-size: 2rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+    margin-top: 0;
+  }
+  h2 {
+    color: var(--accent);
+    margin-top: 40px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+  h3 { color: var(--text); margin-top: 28px; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px;
+    overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--panel); color: var(--accent); }
+  tr:nth-child(even) td { background: var(--panel); }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .step {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 16px 0;
+  }
+  .probe {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 14px 0;
+  }
+  .probe h3 { margin-top: 0; color: var(--warn); }
+  .checklist {
+    background: var(--panel);
+    border: 1px solid var(--good);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 20px 0;
+  }
+  .checklist h3 { color: var(--good); margin-top: 0; }
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-left: 6px;
+  }
+  .tag-good { background: rgba(63,185,80,0.15); color: var(--good); border: 1px solid var(--good); }
+  .tag-bad  { background: rgba(248,81,73,0.15); color: var(--bad); border: 1px solid var(--bad); }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Octora — Trace Linkage &amp; Verify Bot Resistance</h1>
+<p class="muted">Trace main wallet → mixer → stealth → pool on Solana explorers. Verify copy-trader bots cannot follow.</p>
+
+<h2>Tools</h2>
+<ul>
+  <li><strong>Solscan</strong> — best for token flow + multi-tx view</li>
+  <li><strong>Solana Explorer</strong> — official, raw ix data</li>
+  <li><strong>SolanaFM</strong> — graph view + account labelling</li>
+  <li><strong>solana-cli</strong> — scriptable verification</li>
+</ul>
+
+<h2>Step-by-step trace</h2>
+
+<div class="step">
+<h3>1. Main wallet → mixer deposit</h3>
+<ul>
+  <li>Open main wallet on Solscan → tab <code>Transactions</code> / <code>SOL Transfers</code></li>
+  <li>Find deposit tx to mixer program. Note:
+    <ul>
+      <li><code>signer</code> = main wallet</li>
+      <li><code>instruction</code> calls mixer program ID</li>
+      <li>SOL amount = denom bucket (e.g. 1, 5, 10 SOL)</li>
+    </ul>
+  </li>
+  <li>Copy tx signature. Confirm mixer PDA receives lamports.</li>
+</ul>
+</div>
+
+<div class="step">
+<h3>2. Mixer commitment</h3>
+<p>In tx <code>Instruction Details</code>, find <code>commitment</code> (32-byte hash) logged. = nullifier preimage anchor. Public but unlinkable to withdrawal.</p>
+</div>
+
+<div class="step">
+<h3>3. Mixer withdraw → stealth address</h3>
+<ul>
+  <li>Search mixer program ID → filter <code>withdraw</code> ix</li>
+  <li>Find withdraw tx where recipient = stealth pubkey. Signer = relayer (or fresh wallet, not main).</li>
+  <li>Key check: <strong>no ix-level link</strong> main_wallet ↔ stealth. Only shared mixer program + denom.</li>
+</ul>
+</div>
+
+<div class="step">
+<h3>4. Stealth → pool deposit</h3>
+<ul>
+  <li>Open stealth address. Tx list → deposit ix into pool (e.g. DLMM <code>addLiquidity</code>, position open)</li>
+  <li>Signer = stealth. Funding source = mixer withdraw tx.</li>
+</ul>
+</div>
+
+<h2>Linkage attack surface</h2>
+<p>What copy-bot scans for, and Octora's defense:</p>
+<table>
+<thead><tr><th>Heuristic</th><th>Defense</th></tr></thead>
+<tbody>
+<tr><td>Same signer across deposit + pool</td><td>stealth ≠ main, separate keys</td></tr>
+<tr><td>Exact-amount match (deposit = pool size)</td><td>Fixed denom buckets + change handling</td></tr>
+<tr><td>Timing correlation (deposit + withdraw within Xs)</td><td>Relayer delay / batching</td></tr>
+<tr><td>Anonymity-set-of-1 (only one deposit of that denom in window)</td><td><code>MIN_ANONYMITY_SET=20</code> gate</td></tr>
+<tr><td>Fee-payer = main wallet</td><td>Relayer pays fees, not user</td></tr>
+<tr><td>Shared rent-payer / referrer field</td><td>Scrub, use stealth</td></tr>
+</tbody>
+</table>
+
+<h2>Verify "hard to copy"</h2>
+<p>Run these probes on mainnet / surfpool:</p>
+
+<div class="probe">
+<h3>A. Graph-trace probe</h3>
+<pre><code>solscan main_wallet -> list all outgoing tx
+  for each tx: follow recipient 2 hops
+  assert: stealth NOT reachable via direct SOL path</code></pre>
+<p>Use <code>solana-cli</code> + <code>getSignaturesForAddress</code> → walk graph. If main→stealth path exists outside mixer program = <span class="tag tag-bad">LEAK</span></p>
+</div>
+
+<div class="probe">
+<h3>B. Co-spend / common-input heuristic</h3>
+<ul>
+  <li>Check no tx ever uses both <code>main_wallet</code> and <code>stealth</code> as signers/writable accounts. Single co-spend = full deanon.</li>
+</ul>
+<pre><code>solana confirm &lt;sig&gt; --output json \
+  | jq '.transaction.message.accountKeys'</code></pre>
+<p>For every stealth tx. Grep for main pubkey.</p>
+</div>
+
+<div class="probe">
+<h3>C. Amount-fingerprint probe</h3>
+<ul>
+  <li>Mixer denom must be common bucket. Deposit 7.3 SOL → pool position 7.3 SOL = trivial fingerprint.</li>
+  <li>Verify: pool deposit ∈ {denom, denom-fee, denom-rent}. No custom fractional leak.</li>
+</ul>
+</div>
+
+<div class="probe">
+<h3>D. Timing probe</h3>
+<ul>
+  <li>Δt(deposit, withdraw) distribution must overlap with other users in same denom bucket.</li>
+  <li>If your withdraw always = deposit + 30s = unique signature in time-amount space → <span class="tag tag-bad">LEAK</span></li>
+</ul>
+</div>
+
+<div class="probe">
+<h3>E. Anonymity-set size</h3>
+<ul>
+  <li>Query mixer commitments at withdraw time. Count = N.</li>
+  <li><code>MIN_ANONYMITY_SET=20</code> → bot has ≤1/20 = 5% guess.</li>
+  <li>Below 20 = withdraw rejects.</li>
+</ul>
+</div>
+
+<div class="probe">
+<h3>F. Bot simulation</h3>
+<p>Write naive copy-bot:</p>
+<pre><code># pseudo
+for tx in watch(main_wallet):
+    if is_pool_deposit(tx):
+        copy(tx)</code></pre>
+<ul>
+  <li>Run against mainnet beta.</li>
+  <li>Bot copies your pool entry → <span class="tag tag-bad">LEAK</span></li>
+  <li>Bot sees nothing after mixer → <span class="tag tag-good">PASS</span></li>
+</ul>
+</div>
+
+<div class="probe">
+<h3>G. Fee-payer audit</h3>
+<p><code>tx.message.accountKeys[0]</code> = fee payer. Across full flow:</p>
+<ul>
+  <li>deposit: main_wallet <span class="tag tag-good">OK</span> (public)</li>
+  <li>withdraw: relayer <span class="tag tag-good">OK</span> (NOT main)</li>
+  <li>pool: stealth or relayer <span class="tag tag-good">OK</span> (NOT main)</li>
+  <li>Any main_wallet as fee payer post-mix = <span class="tag tag-bad">LEAK</span></li>
+</ul>
+</div>
+
+<h2>Quick CLI verify</h2>
+<pre><code># all sigs for stealth
+solana transaction-history &lt;STEALTH&gt; --limit 50
+
+# for each sig, dump signers + writable accounts
+solana confirm -v &lt;SIG&gt; | grep -E "Signer|Writable"
+
+# grep for main wallet pubkey -> must be empty
+</code></pre>
+<p>Grep empty across full stealth history → on-chain unlinkable. Bot must rely on off-chain (IP, timing, behavioral) = out of scope.</p>
+
+<div class="checklist">
+<h3>Bottom line — on-chain unlinkability checklist</h3>
+<ol>
+  <li>No shared signer</li>
+  <li>No shared fee payer</li>
+  <li>No exact-amount leak</li>
+  <li>Anonymity set ≥ 20 at withdraw</li>
+  <li>No graph path main → stealth outside mixer program</li>
+</ol>
+<p>Verify all 5 per flow → bot blind on-chain.</p>
+</div>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Octora — Monorepo → 3-Repo Split Migration Guide</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --good: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --code-bg: #1f2428;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  main {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+  }
+  h1 {
+    font-size: 2rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+    margin-top: 0;
+  }
+  h2 {
+    color: var(--accent);
+    margin-top: 40px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+  h3 { color: var(--text); margin-top: 28px; }
+  h4 { color: var(--muted); margin-top: 20px; margin-bottom: 6px; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.05em; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px;
+    overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 0.92rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--panel); color: var(--accent); }
+  tr:nth-child(even) td { background: var(--panel); }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .step {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 16px 0;
+  }
+  .warn {
+    background: var(--panel);
+    border: 1px solid var(--warn);
+    border-left: 3px solid var(--warn);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin: 16px 0;
+  }
+  .warn h3, .warn strong { color: var(--warn); }
+  .danger {
+    background: var(--panel);
+    border: 1px solid var(--bad);
+    border-left: 3px solid var(--bad);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin: 16px 0;
+  }
+  .danger h3, .danger strong { color: var(--bad); }
+  .checklist {
+    background: var(--panel);
+    border: 1px solid var(--good);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 20px 0;
+  }
+  .checklist h3 { color: var(--good); margin-top: 0; }
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-left: 6px;
+  }
+  .tag-good { background: rgba(63,185,80,0.15); color: var(--good); border: 1px solid var(--good); }
+  .tag-warn { background: rgba(210,153,34,0.15); color: var(--warn); border: 1px solid var(--warn); }
+  .tag-bad  { background: rgba(248,81,73,0.15); color: var(--bad); border: 1px solid var(--bad); }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  hr { border: 0; border-top: 1px solid var(--border); margin: 32px 0; }
+  details { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 10px 16px; margin: 12px 0; }
+  details summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+  kbd {
+    background: var(--code-bg); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 4px; padding: 1px 6px; font-family: "SF Mono", Menlo, monospace; font-size: 0.85em;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Octora — Monorepo → 3-Repo Split Migration Guide</h1>
+<p class="muted">
+  Split the current <code>KaisaLabs/octora</code> monorepo into three independent repos while preserving git history.
+  The current working repo becomes <strong>octora-web</strong>; <strong>octora-api</strong> and <strong>octora-programs</strong>
+  are extracted into new GitHub repos.
+</p>
+
+<div class="warn">
+  <strong>Read before doing anything:</strong>
+  <ul>
+    <li>This is irreversible relative to history rewrites — do <em>not</em> push <code>--force</code> to the existing <code>origin</code>. Always extract into <em>new</em> remotes first, verify, then prune the current repo as the last step.</li>
+    <li>Commit or stash everything first. Current branch is <code>refactor/octora-api</code> with WIP. Do not start a split mid-WIP.</li>
+    <li>Two untracked HTML docs (<code>docs/dust-and-stuck-funds-design.html</code>, <code>docs/trace-linkage-guide.html</code>) — decide which repo owns them before extraction.</li>
+  </ul>
+</div>
+
+<h2>0. Target layout</h2>
+
+<table>
+  <thead>
+    <tr><th>New repo</th><th>GitHub slug (suggested)</th><th>Contents (at repo root)</th><th>Source of truth for</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>octora-web</strong> <span class="tag tag-good">current repo, pruned</span></td>
+      <td><code>KaisaLabs/octora-web</code> <span class="muted">(rename current <code>octora</code> on GitHub)</span></td>
+      <td>everything currently inside <code>octora-web/</code>, lifted to repo root</td>
+      <td>React/Vite frontend, ZK browser proving, e2e Playwright</td>
+    </tr>
+    <tr>
+      <td><strong>octora-api</strong> <span class="tag tag-warn">new repo</span></td>
+      <td><code>KaisaLabs/octora-api</code></td>
+      <td>everything currently inside <code>octora-api/</code>, lifted to repo root</td>
+      <td>Fastify API, relayer, indexer, Prisma, workers</td>
+    </tr>
+    <tr>
+      <td><strong>octora-programs</strong> <span class="tag tag-warn">new repo</span></td>
+      <td><code>KaisaLabs/octora-programs</code></td>
+      <td><code>programs/</code>, <code>tests/</code>, <code>migrations/</code>, <code>Anchor.toml</code>, <code>Cargo.toml</code>, <code>Cargo.lock</code>, <code>txtx.yml</code>, <code>dlmm_config.jsonc</code>, top-level <code>tsconfig.json</code>, root <code>package.json</code> (Anchor/mocha tooling)</td>
+      <td>Anchor programs <code>octora_mixer</code>, <code>octora_executor</code>, on-chain tests, IDL/types artifacts</td>
+    </tr>
+  </tbody>
+</table>
+
+<h4>Cross-repo coupling that survives the split</h4>
+<ul>
+  <li><strong>Program IDs</strong> — exist in <em>four</em> places after split: <code>programs/*/src/lib.rs</code> <code>declare_id!</code>, <code>Anchor.toml</code> (programs repo), <code>OCTORA_*_PROGRAM_ID</code> env (api repo), <code>VITE_*</code> env (web repo). Any deploy that changes them now needs a coordinated PR in three repos.</li>
+  <li><strong>IDLs</strong> — already vendored as copies in api: <code>octora-api/src/modules/relayer/idl/octora_mixer.json</code>, <code>octora-api/src/modules/execution/clients/idl/octora_executor.json</code>. After split, programs repo publishes them (e.g. into a <code>idl/</code> dir, GitHub release artifact, or npm package); api repo syncs via a script. Web does not import IDLs directly today, so it is unaffected.</li>
+  <li><strong>Mirrored crypto code</strong> — <code>octora-web/src/lib/mixer/{poseidon,merkle-tree,bytes,proof,stealth-wallet}.ts</code> deliberately mirror logic in <code>octora-api/src/modules/{vault,relayer}/...</code>. These are intentional duplicates (browser vs node). Keep them in sync via PR checklist — there is no shared package.</li>
+  <li><strong>Circuits / SRS artifacts</strong> — <code>octora-api/src/modules/vault/circuits/</code> generates artifacts that web consumes at <code>octora-web/public/circuits/</code>. After split, define how the web repo pulls those artifacts (release asset, submodule, or hand-copy + commit).</li>
+</ul>
+
+<h2>1. Prerequisites</h2>
+
+<div class="step">
+  <h3>Install <code>git-filter-repo</code></h3>
+  <p><code>git filter-repo</code> is the modern, fast replacement for <code>git filter-branch</code>. It preserves history per subdirectory and is what the GitHub docs recommend.</p>
+<pre><code>brew install git-filter-repo
+# verify
+git filter-repo --version</code></pre>
+</div>
+
+<div class="step">
+  <h3>Create the new empty GitHub repos</h3>
+  <p>Use <code>gh</code> or the web UI. Do <em>not</em> initialise with README/license — they must be empty so the first push carries full history.</p>
+<pre><code>gh repo create KaisaLabs/octora-api      --private --confirm
+gh repo create KaisaLabs/octora-programs --private --confirm
+# octora-web target already exists as KaisaLabs/octora — will be renamed in step 5</code></pre>
+</div>
+
+<div class="step">
+  <h3>Make a safety bundle of the current monorepo</h3>
+  <p>Single-file backup of every ref and every object. Restorable with <code>git clone octora-pre-split.bundle</code>.</p>
+<pre><code>cd /Users/theo/Documents/PROJECT
+git -C octora bundle create octora-pre-split.bundle --all</code></pre>
+</div>
+
+<div class="step">
+  <h3>Commit or stash WIP on the current branch</h3>
+<pre><code>cd /Users/theo/Documents/PROJECT/octora
+git status
+# decide: commit, stash, or branch off the WIP. The split workflow below
+# operates on FRESH CLONES of origin, so anything uncommitted is invisible
+# to the extraction and would be lost if you later prune this checkout.</code></pre>
+</div>
+
+<h2>2. Extract <code>octora-api</code> into its own repo</h2>
+
+<p class="muted">
+  Strategy: clone the monorepo into a throwaway working copy, filter it down to only the <code>octora-api/</code> subtree (rewriting paths so its contents sit at root), then push to the new remote. The original monorepo is untouched.
+</p>
+
+<div class="step">
+  <h3>2.1 Clone a throwaway copy</h3>
+<pre><code>cd /tmp
+git clone --no-local /Users/theo/Documents/PROJECT/octora octora-api-extract
+cd octora-api-extract
+# detach from old origin so accidental push can't hit it
+git remote remove origin
+git remote remove backup 2&gt;/dev/null || true</code></pre>
+</div>
+
+<div class="step">
+  <h3>2.2 Rewrite history to only contain <code>octora-api/</code>, lifted to root</h3>
+<pre><code>git filter-repo --subdirectory-filter octora-api</code></pre>
+  <p>After this:</p>
+  <ul>
+    <li>Every commit that never touched <code>octora-api/</code> is gone.</li>
+    <li>Every surviving commit has its paths rewritten so <code>octora-api/src/...</code> becomes <code>src/...</code> at repo root.</li>
+    <li>Branches/tags that contained <code>octora-api</code> changes are kept and re-pointed.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <h3>2.3 Sanity-check before pushing</h3>
+<pre><code>ls                    # should look like: src/ prisma/ api/ infra/ package.json ...
+git log --oneline | head -20
+git log --oneline --all | wc -l   # roughly: monorepo commit count minus commits that never touched octora-api/</code></pre>
+</div>
+
+<div class="step">
+  <h3>2.4 Push to the new remote</h3>
+<pre><code>git remote add origin git@github.com:KaisaLabs/octora-api.git
+git push -u origin --all
+git push     origin --tags</code></pre>
+</div>
+
+<h2>3. Extract <code>octora-programs</code> into its own repo</h2>
+
+<p class="muted">
+  Programs is trickier than api/web: it is not a single subdirectory. It needs <code>programs/</code> plus a handful of root-level Anchor/Cargo tooling files. Use <code>--path</code> filters instead of <code>--subdirectory-filter</code>.
+</p>
+
+<div class="step">
+  <h3>3.1 Clone a throwaway copy</h3>
+<pre><code>cd /tmp
+git clone --no-local /Users/theo/Documents/PROJECT/octora octora-programs-extract
+cd octora-programs-extract
+git remote remove origin
+git remote remove backup 2&gt;/dev/null || true</code></pre>
+</div>
+
+<div class="step">
+  <h3>3.2 Keep only program-related paths</h3>
+<pre><code>git filter-repo \
+  --path programs/ \
+  --path tests/ \
+  --path migrations/ \
+  --path Anchor.toml \
+  --path Cargo.toml \
+  --path Cargo.lock \
+  --path tsconfig.json \
+  --path txtx.yml \
+  --path dlmm_config.jsonc \
+  --path package.json \
+  --path pnpm-lock.yaml \
+  --path .gitignore</code></pre>
+  <p class="muted">
+    <code>package.json</code> and <code>pnpm-lock.yaml</code> at root are the Anchor/mocha tooling layer — different from the per-app ones. After the split, prune that root <code>package.json</code> down to only Anchor + mocha + spl-token + circomlibjs + snarkjs deps; everything app-side is gone.
+  </p>
+</div>
+
+<div class="step">
+  <h3>3.3 Decide what to do with root-level design docs</h3>
+  <p>The current repo root has many design docs that conceptually belong to the protocol, not to any single app:</p>
+  <ul>
+    <li><code>ARCHITECTURE_AND_MAINNET_GAPS.md</code>, <code>MVP_LAUNCH_PLAN.md</code>, <code>CORE_FEATURES_MVP_PLAN.md</code>, <code>SECURITY.md</code>, <code>CHANGELOG.md</code></li>
+    <li><code>CONTEXT-MAP.md</code>, <code>docs/</code> (root-level), <code>runbooks/</code>, <code>AGENTS.md</code>, <code>CLAUDE.md</code> (symlink)</li>
+    <li><code>.scratch/</code>, <code>.github/</code>, <code>.out-of-scope/</code></li>
+  </ul>
+  <p>Recommendation: these stay with <strong>octora-programs</strong> (it is the protocol repo of record). Re-run filter-repo to include them, or keep a copy in each repo. Pick one and document it.</p>
+<pre><code># If you want the protocol docs to ride with programs:
+git filter-repo \
+  --path programs/ --path tests/ --path migrations/ \
+  --path Anchor.toml --path Cargo.toml --path Cargo.lock \
+  --path tsconfig.json --path txtx.yml --path dlmm_config.jsonc \
+  --path package.json --path pnpm-lock.yaml --path .gitignore \
+  --path ARCHITECTURE_AND_MAINNET_GAPS.md \
+  --path MVP_LAUNCH_PLAN.md \
+  --path CORE_FEATURES_MVP_PLAN.md \
+  --path SECURITY.md \
+  --path CHANGELOG.md \
+  --path CONTEXT-MAP.md \
+  --path AGENTS.md \
+  --path README.md \
+  --path docs/ \
+  --path runbooks/ \
+  --path .github/</code></pre>
+  <p class="muted">Run filter-repo with <em>all</em> the <code>--path</code> flags in one shot — re-running on the same repo refuses unless you pass <code>--force</code>.</p>
+</div>
+
+<div class="step">
+  <h3>3.4 Push to the new remote</h3>
+<pre><code>ls    # programs/ tests/ Anchor.toml Cargo.toml ...
+git remote add origin git@github.com:KaisaLabs/octora-programs.git
+git push -u origin --all
+git push     origin --tags</code></pre>
+</div>
+
+<h2>4. Cut a clean <code>octora-web</code> branch from the current repo</h2>
+
+<p class="muted">
+  octora-web stays in the current checkout. But the current <code>main</code> contains the entire monorepo. To make web the standalone repo, you have two options.
+</p>
+
+<h3>Option A — In-place subtree filter <span class="tag tag-bad">history rewrite on origin</span></h3>
+<p>
+  Run filter-repo against the existing checkout to lift <code>octora-web/</code> to root and drop everything else, then force-push to <code>origin</code>. Simplest, but rewrites public history. Only acceptable because the repo is private and you control all collaborators.
+</p>
+<div class="danger">
+  <strong>Force-push is destructive.</strong> Anyone with an existing clone of <code>KaisaLabs/octora</code> will have to re-clone. Coordinate before doing this.
+</div>
+<pre><code>cd /Users/theo/Documents/PROJECT/octora
+
+# triple-check WIP is committed or stashed
+git status
+
+# 4A.1 — same extraction technique as api, but applied in place
+git filter-repo --subdirectory-filter octora-web --force
+
+# 4A.2 — verify
+ls   # should now be: src/ public/ index.html package.json vite.config.ts ...
+
+# 4A.3 — push (force, because history was rewritten)
+git push origin --all   --force-with-lease
+git push origin --tags  --force-with-lease</code></pre>
+
+<h3>Option B — Fresh extraction → new remote, then rename <span class="tag tag-good">recommended</span></h3>
+<p>
+  Cleaner. Same workflow as api/programs: extract into a fresh clone, push to a brand-new remote, then on GitHub rename the old <code>octora</code> repo to <code>octora-archive</code> (or delete it) and rename the new repo to <code>octora-web</code>. No force-push, no rewritten origin.
+</p>
+<pre><code>cd /tmp
+git clone --no-local /Users/theo/Documents/PROJECT/octora octora-web-extract
+cd octora-web-extract
+git remote remove origin
+git remote remove backup 2&gt;/dev/null || true
+
+git filter-repo --subdirectory-filter octora-web
+
+# create a TEMPORARY new repo first; rename via GitHub UI after archive
+gh repo create KaisaLabs/octora-web-new --private --confirm
+git remote add origin git@github.com:KaisaLabs/octora-web-new.git
+git push -u origin --all
+git push     origin --tags
+
+# Then on GitHub:
+#  1. rename KaisaLabs/octora        -> KaisaLabs/octora-archive  (keep as cold backup)
+#  2. rename KaisaLabs/octora-web-new -> KaisaLabs/octora-web</code></pre>
+
+<div class="warn">
+  <strong>Pick one, not both.</strong> If you go with Option B, the existing checkout at <code>/Users/theo/Documents/PROJECT/octora</code> is now pointing at an archived remote. Re-clone the new <code>octora-web</code> repo somewhere clean and work from there.
+</div>
+
+<h2>5. Wire up each new repo</h2>
+
+<h3>5.1 octora-programs</h3>
+<ol>
+  <li>Prune root <code>package.json</code>: keep only Anchor/mocha/ts-mocha/ts-node/typescript/<code>@solana/*</code>/<code>@meteora-ag/dlmm</code>/<code>bn.js</code>/<code>circomlibjs</code>/<code>snarkjs</code>/<code>chai</code> deps and the <code>validator*</code>/<code>test:*</code>/<code>deploy:*</code> scripts. Drop monorepo-only scripts.</li>
+  <li>Update <code>repository.url</code> in <code>package.json</code>.</li>
+  <li>Add CI: <code>anchor build</code> + selected mocha suites on PR.</li>
+  <li>Decide IDL publishing path. Two reasonable options:
+    <ul>
+      <li><strong>GitHub Release artifact</strong> — every tagged release uploads <code>target/idl/*.json</code> + <code>target/types/*.ts</code>. api consumes via a sync script.</li>
+      <li><strong>Dedicated <code>idl/</code> dir committed</strong> — programs repo commits IDLs after each <code>anchor build</code>; api repo pulls them via a <code>scripts/sync-idl.sh</code> that <code>curl</code>s raw GitHub.</li>
+    </ul>
+  </li>
+  <li>Move <code>infra/</code> here if it contains program deploy infra; otherwise it goes to api.</li>
+</ol>
+
+<h3>5.2 octora-api</h3>
+<ol>
+  <li>The repo already has its own <code>package.json</code>, <code>Dockerfile</code>, <code>vercel.json</code>, <code>tsconfig.json</code>, <code>prisma/</code> — they all sit at root after the subtree filter. Verify nothing in the code imports across former-monorepo paths (e.g. <code>../programs</code>): the earlier grep showed only comment references, no actual imports.</li>
+  <li>Replace the vendored IDL files (<code>src/modules/relayer/idl/octora_mixer.json</code>, <code>src/modules/execution/clients/idl/octora_executor.json</code>) with whatever sync mechanism you chose in 5.1.</li>
+  <li>Update <code>repository.url</code> in <code>package.json</code>.</li>
+  <li>CI: <code>pnpm typecheck</code>, <code>pnpm test</code>, lint scripts already exist.</li>
+</ol>
+
+<h3>5.3 octora-web</h3>
+<ol>
+  <li><code>vite.config.ts</code>, <code>playwright.config.ts</code>, Tailwind/PostCSS configs sit at root post-extract. Verify.</li>
+  <li><code>VITE_OCTORA_API_URL</code> (or whatever the env var is — check <code>.env.example</code>) now points at the deployed octora-api, not a relative dev path.</li>
+  <li>The browser-side mirrors of api crypto code (<code>src/lib/mixer/*.ts</code>) stay — they are intentional and have no runtime dependency on api.</li>
+  <li>Define how circuits/SRS artifacts in <code>public/circuits/</code> get refreshed (release-asset pull, or simply commit them and bump on protocol upgrades).</li>
+  <li>CI: <code>pnpm typecheck</code>, <code>pnpm test</code>, <code>pnpm test:e2e</code>, <code>pnpm build</code>.</li>
+</ol>
+
+<h2>6. Things that lived at the root and need new homes</h2>
+
+<table>
+  <thead><tr><th>Item</th><th>Goes to</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td><code>Anchor.toml</code>, <code>Cargo.toml</code>, <code>Cargo.lock</code></td><td>octora-programs</td><td>Anchor workspace root</td></tr>
+    <tr><td><code>tests/</code> (Anchor mocha tests)</td><td>octora-programs</td><td>These tests run against the programs, not the API</td></tr>
+    <tr><td><code>migrations/</code></td><td>octora-programs</td><td>Anchor migrations</td></tr>
+    <tr><td><code>txtx.yml</code>, <code>dlmm_config.jsonc</code></td><td>octora-programs</td><td>On-chain tooling configs</td></tr>
+    <tr><td>Root <code>tsconfig.json</code></td><td>octora-programs</td><td>Used by Anchor ts-mocha tests</td></tr>
+    <tr><td>Root <code>package.json</code>, <code>pnpm-lock.yaml</code></td><td>octora-programs</td><td>Anchor/test tooling layer; prune unrelated deps</td></tr>
+    <tr><td><code>README.md</code></td><td>octora-programs (or all 3)</td><td>It currently describes the whole system. Either keep as the protocol README in programs and add slimmer READMEs in api/web, or write three new ones.</td></tr>
+    <tr><td><code>AGENTS.md</code> / <code>CLAUDE.md</code> symlink</td><td>all 3</td><td>Each repo needs its own agent config; copy and trim per-repo.</td></tr>
+    <tr><td><code>CONTEXT-MAP.md</code>, <code>docs/</code>, <code>runbooks/</code>, <code>docs/adr/</code></td><td>octora-programs</td><td>System-wide design lives with the protocol. Per-app <code>CONTEXT.md</code> already lives inside each app dir and rides along automatically.</td></tr>
+    <tr><td><code>ARCHITECTURE_AND_MAINNET_GAPS.md</code>, <code>MVP_LAUNCH_PLAN.md</code>, <code>CORE_FEATURES_MVP_PLAN.md</code></td><td>octora-programs</td><td>Protocol-wide planning docs</td></tr>
+    <tr><td><code>SECURITY.md</code></td><td>all 3</td><td>GitHub looks for it per-repo for the Security tab</td></tr>
+    <tr><td><code>CHANGELOG.md</code></td><td>octora-programs (history reflects programs/protocol changes)</td><td>Or split into three per-repo changelogs going forward</td></tr>
+    <tr><td><code>.scratch/</code> (issue tracker)</td><td>octora-programs</td><td>Cross-cutting issues. Per-app issues should move into per-app <code>.scratch/</code>.</td></tr>
+    <tr><td><code>.github/</code></td><td>all 3</td><td>CI is per-repo. Copy the relevant workflows into each.</td></tr>
+    <tr><td><code>target/</code>, <code>.anchor/</code>, <code>node_modules/</code>, <code>.surfpool/</code></td><td>nowhere — gitignored already</td><td>Build artifacts</td></tr>
+    <tr><td><code>.env</code> at root</td><td>nowhere — gitignored</td><td>Re-create per-repo <code>.env</code> from <code>.env.example</code></td></tr>
+    <tr><td><code>backup</code> remote (<code>talax0n/Octora</code>)</td><td>delete or repoint</td><td>Old fork; decide whether to keep mirroring</td></tr>
+  </tbody>
+</table>
+
+<h2>7. Post-split coordination</h2>
+
+<h3>7.1 Program-ID change checklist</h3>
+<p>This was a 3-place edit before; after the split it's a 3-repo PR. Update the runbook:</p>
+<ul>
+  <li><code>octora-programs</code> → <code>programs/octora-executor/src/lib.rs</code> + <code>programs/octora-mixer/src/lib.rs</code> <code>declare_id!</code>; <code>Anchor.toml</code> <code>[programs.*]</code>.</li>
+  <li><code>octora-api</code> → <code>.env</code> / deploy secrets: <code>OCTORA_EXECUTOR_PROGRAM_ID</code>, <code>OCTORA_MIXER_PROGRAM_ID</code>; vendored IDL refresh.</li>
+  <li><code>octora-web</code> → <code>VITE_*</code> envs; rebuild + redeploy.</li>
+</ul>
+
+<h3>7.2 Issue tracker</h3>
+<p>The <code>.scratch/&lt;feature-slug&gt;/</code> file-based tracker (per <code>docs/agents/issue-tracker.md</code>) was cross-cutting. After split, each repo has its own. Open issues currently in flight (e.g. <code>production-ix-wiring/02</code>, mentioned in the latest commits) should be assigned to the repo that actually contains the code they touch:</p>
+<ul>
+  <li>close adapters that wire the production executor + mixer ix → <strong>octora-api</strong></li>
+  <li>program-side changes → <strong>octora-programs</strong></li>
+  <li>UI flows → <strong>octora-web</strong></li>
+</ul>
+
+<h3>7.3 Memory / context for AI agents</h3>
+<p>The per-user memory in <code>~/.claude/projects/-Users-theo-Documents-PROJECT-octora/</code> is keyed on the current path. After splitting:</p>
+<ul>
+  <li>If you keep working out of <code>/Users/theo/Documents/PROJECT/octora</code> for octora-web, memory continues to apply but now describes only the web scope. Prune entries that no longer apply.</li>
+  <li>If you re-clone to fresh paths for api/programs, you'll get fresh per-project memory dirs. Re-seed them with anything load-bearing (MVP scope, target user, etc.).</li>
+</ul>
+
+<h2>8. Local development after split</h2>
+
+<p>Three separate clones, three separate <code>pnpm install</code>, three separate dev servers. A suggested local layout:</p>
+
+<pre><code>~/Documents/PROJECT/
+  octora-programs/    # anchor build, surfpool, mocha tests
+  octora-api/         # pnpm dev  (Fastify on :8787 or whatever)
+  octora-web/         # pnpm dev  (Vite on :3000)</code></pre>
+
+<p>Daily flow:</p>
+<ol>
+  <li>In <code>octora-programs/</code>: <code>anchor build</code> on program changes, then either commit IDLs or upload as release artifact.</li>
+  <li>In <code>octora-api/</code>: <code>scripts/sync-idl.sh</code> (you'll write this in 5.1), then <code>pnpm dev</code>.</li>
+  <li>In <code>octora-web/</code>: <code>pnpm dev</code>, point at local api via <code>VITE_OCTORA_API_URL</code>.</li>
+</ol>
+
+<h2>9. Rollback</h2>
+
+<p>If anything in steps 2–4 looks wrong:</p>
+<ul>
+  <li>The throwaway extraction clones in <code>/tmp</code> can be deleted and redone — they were clones, not in-place.</li>
+  <li>If you already pushed to a new remote and want to redo, delete the GitHub repo and re-run from step 2.1.</li>
+  <li>If you did <strong>Option A</strong> (in-place force-push) and need to restore, use the bundle from step 1:
+<pre><code>cd /tmp
+git clone /Users/theo/Documents/PROJECT/octora-pre-split.bundle octora-restored
+# inspect, then push to a recovery remote if needed</code></pre>
+  </li>
+</ul>
+
+<h2>10. Final checklist</h2>
+
+<div class="checklist">
+  <h3>Done when…</h3>
+  <ul>
+    <li><kbd>☐</kbd> <code>octora-pre-split.bundle</code> exists and was verified by cloning from it</li>
+    <li><kbd>☐</kbd> <code>KaisaLabs/octora-api</code> exists, CI green, <code>pnpm typecheck &amp;&amp; pnpm test</code> passes locally on a fresh clone</li>
+    <li><kbd>☐</kbd> <code>KaisaLabs/octora-programs</code> exists, <code>anchor build</code> succeeds on a fresh clone, mocha lifecycle test passes</li>
+    <li><kbd>☐</kbd> <code>KaisaLabs/octora-web</code> exists (renamed from <code>octora-web-new</code> or in-place rewritten), <code>pnpm build &amp;&amp; pnpm test</code> passes on a fresh clone</li>
+    <li><kbd>☐</kbd> IDL sync script in api works end-to-end against a tagged release in programs</li>
+    <li><kbd>☐</kbd> Web env points at deployed api; api env points at on-chain program IDs that match programs repo</li>
+    <li><kbd>☐</kbd> Deploy targets (Vercel/etc.) re-pointed at the new repos</li>
+    <li><kbd>☐</kbd> <code>SECURITY.md</code> present in all 3 repos</li>
+    <li><kbd>☐</kbd> <code>.github/</code> CI workflows split per-repo and passing</li>
+    <li><kbd>☐</kbd> Old monorepo archived or deleted on GitHub; team notified to re-clone</li>
+    <li><kbd>☐</kbd> Program-ID change runbook updated to reflect 3-repo coordination</li>
+  </ul>
+</div>
+
+<hr>
+<p class="muted">
+  Generated <span id="genDate">2026-05-15</span>. Source of truth for paths: <code>/Users/theo/Documents/PROJECT/octora</code> at commit <code>5233c6a</code> on branch <code>refactor/octora-api</code>.
+</p>
+
+</main>
+</body>
+</html>
