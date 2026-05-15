@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 /// Global executor config — emergency pause + admin authority.
 ///
-/// Mirrors `octora-mixer`'s pause model so that a DLMM/DAMM CPI bug or
+/// Mirrors `octora-mixer`'s pause model so that a DLMM CPI bug or
 /// upstream Meteora incident can halt every state-mutating instruction
 /// from a single multisig signature, without requiring a program upgrade.
 ///

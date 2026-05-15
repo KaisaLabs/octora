@@ -60,24 +60,20 @@ pub fn handler<'info>(
     // grows but the bin arrays still sit at the tail.
     require!(remaining.len() >= 16, ExecutorError::AccountsTooShort);
 
-    match &pa.pool_ref {
-        PoolRef::Dlmm {
-            lb_pair: stored_lb_pair,
-            position,
-        } => {
-            require_keys_eq!(
-                remaining[0].key(),
-                *position,
-                ExecutorError::PositionMismatch
-            );
-            require_keys_eq!(
-                remaining[1].key(),
-                *stored_lb_pair,
-                ExecutorError::LbPairMismatch
-            );
-        }
-        PoolRef::Damm { .. } => return err!(ExecutorError::InvalidPoolRefType),
-    }
+    let PoolRef::Dlmm {
+        lb_pair: stored_lb_pair,
+        position,
+    } = &pa.pool_ref;
+    require_keys_eq!(
+        remaining[0].key(),
+        *position,
+        ExecutorError::PositionMismatch
+    );
+    require_keys_eq!(
+        remaining[1].key(),
+        *stored_lb_pair,
+        ExecutorError::LbPairMismatch
+    );
 
     require_keys_eq!(
         remaining[1].key(),
@@ -118,10 +114,8 @@ pub fn handler<'info>(
 
     let stealth_key = ctx.accounts.stealth.key();
     let bump = pa.bump;
-    let lb_pair_key = match &pa.pool_ref {
-        PoolRef::Dlmm { lb_pair, .. } => *lb_pair,
-        _ => return err!(ExecutorError::InvalidPoolRefType),
-    };
+    let PoolRef::Dlmm { lb_pair: lb_pair_key, .. } = &pa.pool_ref;
+    let lb_pair_key = *lb_pair_key;
     let signer_seeds: &[&[u8]] = &[
         POOL_AUTHORITY_SEED,
         stealth_key.as_ref(),

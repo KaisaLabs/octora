@@ -69,10 +69,8 @@ pub fn handler<'info>(
     // Minimum total = 15 v2 fixed slots + 1 rent_receiver + 2 bin arrays = 18.
     require!(remaining.len() >= 18, ExecutorError::AccountsTooShort);
 
-    let (stored_lb_pair, stored_position) = match &pa.pool_ref {
-        PoolRef::Dlmm { lb_pair, position } => (*lb_pair, *position),
-        _ => return Err(error!(ExecutorError::InvalidPoolRefType)),
-    };
+    let PoolRef::Dlmm { lb_pair, position } = &pa.pool_ref;
+    let (stored_lb_pair, stored_position) = (*lb_pair, *position);
 
     require_keys_eq!(
         remaining[0].key(),

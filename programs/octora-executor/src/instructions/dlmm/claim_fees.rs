@@ -55,10 +55,8 @@ pub fn handler<'info>(
     //         remaining_accounts_info).
     require!(remaining.len() >= 14, ExecutorError::AccountsTooShort);
 
-    let (stored_lb_pair, stored_position) = match &pa.pool_ref {
-        PoolRef::Dlmm { lb_pair, position } => (*lb_pair, *position),
-        _ => return Err(error!(ExecutorError::InvalidPoolRefType)),
-    };
+    let PoolRef::Dlmm { lb_pair, position } = &pa.pool_ref;
+    let (stored_lb_pair, stored_position) = (*lb_pair, *position);
 
     require_keys_eq!(
         remaining[0].key(),

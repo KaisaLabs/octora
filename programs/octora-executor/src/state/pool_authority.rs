@@ -7,30 +7,21 @@ pub enum PoolRef {
         lb_pair: Pubkey,
         position: Pubkey,
     },
-    Damm {
-        pool: Pubkey,
-        lp_mint: Pubkey,
-        lock_escrow: Pubkey,
-    },
 }
 
 impl PoolRef {
     pub fn max_serialized_size() -> usize {
-        1 + 32 + 32 + 32
+        1 + 32 + 32
     }
 
     pub fn pool_key(&self) -> Pubkey {
-        match self {
-            PoolRef::Dlmm { lb_pair, .. } => *lb_pair,
-            PoolRef::Damm { pool, .. } => *pool,
-        }
+        let PoolRef::Dlmm { lb_pair, .. } = self;
+        *lb_pair
     }
 }
 
-/// PDA that owns a pool position on behalf of a stealth wallet.
-///
-/// Works for both DLMM and DAMM pools. The PDA is derived from
-/// [POOL_AUTHORITY_SEED, stealth_pubkey, pool_pubkey].
+/// PDA that owns a DLMM pool position on behalf of a stealth wallet.
+/// Derived from [POOL_AUTHORITY_SEED, stealth_pubkey, lb_pair_pubkey].
 #[account]
 pub struct PoolAuthority {
     pub stealth_pubkey: Pubkey,
@@ -40,5 +31,5 @@ pub struct PoolAuthority {
 }
 
 impl PoolAuthority {
-    pub const SPACE: usize = 8 + 32 + 32 + 97 + 1;
+    pub const SPACE: usize = 8 + 32 + 32 + 65 + 1;
 }

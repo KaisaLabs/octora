@@ -38,11 +38,8 @@ pub enum ExecutorError {
     #[msg("DLMM position account must sign initialization")]
     MissingPositionSigner,
 
-    // Retained: the reserved `PoolRef::Damm` enum variant in state.rs
-    // (kept for on-chain backward compat with existing devnet
-    // PoolAuthority accounts) still triggers this error if encountered
-    // in a DLMM instruction context. Removing the variant would
-    // re-serialize older accounts incorrectly.
+    // Retained for IDL stability after DAMM removal — unused at runtime
+    // since `PoolRef::Dlmm` is now the only variant.
     #[msg("PoolAuthority pool ref type does not match instruction expected type")]
     InvalidPoolRefType,
 

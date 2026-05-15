@@ -54,7 +54,7 @@ pub fn init_config_handler(ctx: Context<InitConfig>) -> Result<()> {
 
 /// Authority-gated emergency pause toggle.
 ///
-/// `Config.paused` blocks every state-mutating DLMM / DAMM instruction.
+/// `Config.paused` blocks every state-mutating DLMM instruction.
 /// The authority is set at `init_config` and is the only key allowed to
 /// flip this flag.
 #[derive(Accounts)]
