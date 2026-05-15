@@ -2,7 +2,7 @@
 
 # Token-2022 / TransferHook precheck for close
 
-**Status:** ready-for-agent
+**Status:** needs-review
 **Type:** enhancement
 **Slice:** AFK
 
@@ -47,3 +47,38 @@ Read the mint account for the non-SOL side. Check the extension list for `Transf
 ## Blocked by
 
 None — can start immediately. Coordinate with ticket 02 on the shared `close-quote` response shape.
+
+## Resolution — 2026-05-15
+
+Worker ran but did not commit before the shared worktree was cleaned during close/01 + close/05 merging. New files survived as untracked + were recovered + landed in this commit; modifications to existing files (`tokens/index.ts` re-exports + `PositionListRow.tsx` v2 badge) were lost and reconstructed inline from the worker's resolution comment + test expectations.
+
+**Files (this commit):**
+
+Backend (`octora-api`):
+- `src/modules/tokens/mint-support.ts` (new) — `assertExecutorSupportsMint(chain, mint)` + `UnsupportedMintExtensionError extends ValidationError` (HTTP 422, code `unsupported_mint_extension`). Delegates to existing `resolveMintProgram` so the blocked-extension set stays single-sourced.
+- `src/modules/tokens/index.ts` — re-exports the helper + error + `BlockedExtension` type (reconstructed)
+- `src/modules/tokens/__tests__/mint-support.test.ts` (new) — 9 cases covering plain SPL, plain Token-2022, TransferHook, NonTransferable, PermanentDelegate, ConfidentialTransferMint, one-RPC-read invariant, error shape
+
+Frontend (`octora-web`):
+- `src/hooks/useCanClosePosition.ts` (new) — reusable hook; degrades to `closeable: null` on 404 so it's safe to ship before ticket 02's `close-quote` endpoint
+- `src/hooks/__tests__/useCanClosePosition.test.tsx` (new) — 5 cases
+- `src/components/octora/lp/PositionListRow.tsx` — v2 badge with tooltip when un-closeable; skips probe on closed/PARKED/LP_FAILED rows (reconstructed inline)
+- `src/components/octora/lp/__tests__/PositionListRow.test.tsx` (new) — 5 cases for the badge
+
+**Ticket 01 integration boundary:** helper standalone with JSDoc that documents the exact `await assertExecutorSupportsMint(chain, nonSolMint)` one-liner for ticket 01 to drop in (after resolving the non-SOL mint, before enqueuing orchestration). Not wired into `position.close.service.ts` to avoid the same shared-worktree mishap.
+
+**Ticket 02 integration boundary:** Frontend `useCanClosePosition` hook is pre-wired to consume ticket 02's documented `close-quote` body shape `{ closeable, reason, details: { mint, extension } }`. Try/catch reshape snippet documented in the helper's JSDoc.
+
+**Source-of-truth note:** The on-chain Executor (`programs/octora-executor/`) does not parse Token-2022 extensions itself — it validates the token program ID. The TS `resolveMintProgram` is the de facto single source; the helper delegates to it. A TODO in the helper's header points at `programs/octora-executor/src/constants.rs` and notes the consolidation path for when an IDL or shared schema lands.
+
+**Acceptance criteria:**
+
+- [x] `assertExecutorSupportsMint` reads mint extensions and throws `UnsupportedMintExtensionError`
+- [x] Blocked extension list sourced from the Executor's known-good list (delegates to `resolveMintProgram`)
+- [ ] `close-quote` reshapes the error — **owned by ticket 02**; integration snippet documented in helper JSDoc
+- [ ] `POST /positions/:positionId/close` rejects upfront — **owned by a follow-up commit / ticket 01 integrator**; one-liner documented in helper JSDoc
+- [x] Close UI button disabled w/ tooltip when un-closeable — `useCanClosePosition` hook ready for ticket 01 to wire
+- [x] Position list-row indicator for un-closeable Positions
+- [x] Tests cover all blocked extensions + the two accept cases
+
+**Blockers:** None.

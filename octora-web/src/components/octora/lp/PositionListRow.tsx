@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowUpRight, Coins, PlayCircle, Repeat, Settings2 } from "lucide-react";
 import type { PortfolioPosition } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
+import { useCanClosePosition } from "@/hooks/useCanClosePosition";
 import { PositionStatusPill } from "./PositionStatusPill";
 
 interface Props {
@@ -32,6 +33,11 @@ export function PositionListRow({ position, onOpen, onClaim }: Props) {
         ? "text-primary"
         : "text-foreground";
   const closed = position.closed === true;
+  const statusUpperForProbe = (position.status ?? "").toUpperCase();
+  const inRecoveryFlowForProbe = statusUpperForProbe === "PARKED" || statusUpperForProbe === "LP_FAILED";
+  const canCloseProbe = useCanClosePosition(
+    closed || inRecoveryFlowForProbe ? null : position.id,
+  );
   const canClaim = position.hasClaimableFees === true;
   // Deposit LP Fallback states surfaced from the Position aggregate (or
   // the local lifecycleStatus fallback). PARKED gets a dedicated
@@ -75,6 +81,15 @@ export function PositionListRow({ position, onOpen, onClaim }: Props) {
         </div>
         {!closed && !inRecoveryFlow && (
           <PositionStatusPill inRange={position.inRange} closed={closed} size="sm" />
+        )}
+        {!closed && !inRecoveryFlow && canCloseProbe.closeable === false && (
+          <span
+            data-testid="unclosable-position-badge"
+            title={`Close not yet available for pools with ${canCloseProbe.extension ?? "this"} mints. v2 capability.`}
+            className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-amber-300"
+          >
+            v2
+          </span>
         )}
         {inRecoveryFlow && (
           <span
