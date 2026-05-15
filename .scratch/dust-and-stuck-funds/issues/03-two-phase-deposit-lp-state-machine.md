@@ -55,3 +55,42 @@ Per ADR-0004, the user-signed atomic deposit+addLP (dust/02) is wontfix at curre
 The state machine in this ticket is now the only correct mainline implementation. dust/04 (Recover Funds user-signed fallback) is now load-bearing, not optional — it's the only way the "no funds truly stuck" guarantee survives.
 
 Status unchanged (ready-for-agent).
+
+## Resolution — 2026-05-15
+
+**Status:** needs-review
+
+**State-machine option chosen:** (a) — variants live in the `ExecutionState` union, guarded by the existing `canTransition` machine. Justification: the glossary's existing intent (option (b), "sub-state of `funding-partial`") is the conceptual framing; concretely, every `ExecutionState` variant earns one row in the same `transitions[]` table, so the guard rejects illegal jumps without standing up a parallel machine. CONTEXT.md's `Deposit LP Fallback State` entry now reconciles both readings explicitly.
+
+**Files touched:**
+
+Backend
+- `octora-api/prisma/schema.prisma` — added `PersistedDepositIntent` model.
+- `octora-api/prisma/migrations/20260515090000_persisted_deposit_intent/migration.sql` — new migration.
+- `octora-api/src/modules/positions/position.repository.ts` — wired Prisma `persistedDepositIntent` CRUD; in-memory test-kit already had the matching shape.
+- `octora-api/src/modules/positions/position.deposit-lp.service.ts` (new) — state-machine driver for the Deposit LP Fallback cluster (`recordDeposit`, `markLpPending`, `markLpDone`, `markLpFailed`, `retryLp`, `parkLp`, `markWithdrawn`). Wraps the aggregate's `advance` guard and maps the bare guard error into a typed `DepositLpStateTransitionError`.
+- `octora-api/src/modules/positions/position.service.ts` — exposes the new driver alongside the existing intent / execute / claim methods.
+- `octora-api/src/modules/positions/position.controller.ts` — 7 new handlers (record-deposit / lp-pending / lp-done / lp-failed / lp-retry / park / withdrawn) with 409 mapping for the typed guard error.
+- `octora-api/src/modules/positions/position.routes.ts` — registers the 7 new routes under `/positions/:positionId/{deposit,lp-pending,lp-done,lp-failed,lp-retry,park,withdrawn}`.
+- `octora-api/src/modules/positions/position.schema.ts` — JSON schemas for the new bodies.
+- `octora-api/CONTEXT.md` — rewrote `Deposit LP Fallback State` entry to document the option (a)/(b) reconciliation + every permitted transition; added new `Persisted Deposit Intent` entry.
+
+Backend tests
+- `octora-api/src/modules/positions/__tests__/deposit-lp.test.ts` (new) — 10 cases covering the four AC paths + illegal-transition rejection + terminal-state finality + persisted-intent lifecycle.
+- `octora-api/src/domain/__tests__/execution-state-machine.test.ts` — extended with a new `it("rejects illegal jumps across the Deposit LP Fallback cluster …")` case asserting 12 forbidden transitions.
+
+Frontend
+- `octora-web/src/pages/PositionDetailPage.tsx` — extracted `RecoveryAction` helper and rewrote the `RecoveryPanel` copy so each of the 3 buttons (retry / park / withdraw) carries a visible "Privacy intact" / "Breaks unlinkability" subtitle plus a one-line privacy implication. PARKED-state copy is now distinct from LP_FAILED.
+- `octora-web/src/components/octora/lp/PositionListRow.tsx` — adds a "Resume in pool" CTA (PARKED) and "Review recovery" CTA (LP_FAILED) directly on the portfolio list row, replacing the Claim/Manage cluster only when the Position is in the Deposit LP Fallback recovery flow.
+
+Doc-only
+- `.scratch/dust-and-stuck-funds/issues/03-two-phase-deposit-lp-state-machine.md` — this resolution.
+
+**Tests:** 15 new backend cases added, all green. Full backend suite: 212 / 213 tests pass — the single failure (`octora-executor.client.test.ts > buildWithdrawCloseIx`) is a pre-existing regression in the executor module, confirmed by stashing this branch's changes and re-running (independent of dust/03). Full web suite: 30 / 30 pass. Backend `tsc --noEmit` and web `tsc --noEmit` both clean.
+
+**dust/04 surface area provided (per ticket constraint #6):**
+- `service.markWithdrawn(positionId)` — flips the state to `WITHDRAWN` and clears the persisted intent. TODO comment notes that the user-signed `mixer.withdraw` itself is wired by dust/04.
+- `POST /positions/:positionId/withdrawn` — stable API surface dust/04 can call once the recovery tx confirms.
+- A `position.recover.service.ts` file already landed in this worktree (added by the parallel dust/04 stream) and delegates its terminal transition to `markWithdrawn`; the contract is preserved.
+
+**Blockers:** none. Migration is SQL-only and idempotent against a fresh Postgres; the in-memory test-kit was already aligned, so no shared-fixture work was needed.

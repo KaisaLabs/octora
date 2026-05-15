@@ -175,11 +175,28 @@ export function createPrismaPositionRepository(client: PrismaClient): PositionRe
       for (const row of grouped) out[row.state] = row._count._all;
       return out;
     },
-    persistDepositIntent: async () => {
-      throw new Error("Persisted deposit intent storage is not configured for Prisma yet");
+    persistDepositIntent: async (input) =>
+      client.persistedDepositIntent.upsert({
+        where: { nullifierHash: input.nullifierHash },
+        create: input,
+        update: {
+          positionId: input.positionId,
+          commitment: input.commitment,
+          intendedPool: input.intendedPool,
+          denom: input.denom,
+          expiresAt: input.expiresAt,
+        },
+      }),
+    getDepositIntent: (nullifierHash) =>
+      client.persistedDepositIntent.findUnique({ where: { nullifierHash } }),
+    clearDepositIntent: async (nullifierHash) => {
+      // `deleteMany` is the no-throw variant — the aggregate clears on every
+      // terminal transition, even if the intent was never persisted (standard
+      // mode positions, draft -> failed). A bare `delete` would raise P2025.
+      await client.persistedDepositIntent.deleteMany({ where: { nullifierHash } });
     },
-    getDepositIntent: async () => null,
-    clearDepositIntent: async () => undefined,
-    clearDepositIntentForPosition: async () => undefined,
+    clearDepositIntentForPosition: async (positionId) => {
+      await client.persistedDepositIntent.deleteMany({ where: { positionId } });
+    },
   };
 }

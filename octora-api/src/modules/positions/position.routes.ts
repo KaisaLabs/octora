@@ -3,7 +3,14 @@ import type { FastifyInstance, preHandlerHookHandler } from 'fastify'
 import { rateLimitHook, walletThenIpKey, type RateLimiterFactory } from '#common/ratelimit'
 
 import { createPositionController, type PositionControllerDeps } from './position.controller'
-import { createIntentSchema, executeIntentSchema, positionParamsSchema } from './position.schema'
+import {
+  createIntentSchema,
+  executeIntentSchema,
+  positionParamsSchema,
+  recordDepositSchema,
+  lpFailedSchema,
+  recoverFundsSchema,
+} from './position.schema'
 
 interface CreateIntentBody {
   action: 'add-liquidity' | 'claim' | 'withdraw-close'
@@ -18,6 +25,23 @@ interface ExecuteIntentBody {
 
 interface PositionParams {
   positionId: string
+}
+
+interface RecordDepositBody {
+  nullifierHash: string
+  commitment: string
+  intendedPool: string
+  denomLamports: string
+  expiresAtIso?: string
+}
+
+interface LpFailedBody {
+  reason?: string
+}
+
+interface RecoverFundsBody {
+  withdrawSignature?: string
+  withdrawRecipient?: string
 }
 
 export interface PositionRoutesOptions extends PositionControllerDeps {
@@ -103,5 +127,77 @@ export async function registerPositionRoutes(app: FastifyInstance, options: Posi
       preHandler: mutatePreHandlers,
     },
     controller.withdrawClosePosition,
+  )
+
+  // ── Deposit LP Fallback routes (dust/03 + ADR-0004) ────────────────
+  // Every route drives a single sub-state transition. Sequencing rules
+  // live in `transitions[]` (execution-state-machine.ts) — illegal
+  // transitions map to 409 via `DepositLpStateTransitionError`.
+  app.post<{ Params: PositionParams; Body: RecordDepositBody }>(
+    '/positions/:positionId/deposit',
+    {
+      schema: { ...positionParamsSchema, ...recordDepositSchema, tags },
+      preHandler: mutatePreHandlers,
+    },
+    controller.recordDeposit,
+  )
+
+  app.post<{ Params: PositionParams }>(
+    '/positions/:positionId/lp-pending',
+    { schema: { ...positionParamsSchema, tags }, preHandler: mutatePreHandlers },
+    controller.markLpPending,
+  )
+
+  app.post<{ Params: PositionParams }>(
+    '/positions/:positionId/lp-done',
+    { schema: { ...positionParamsSchema, tags }, preHandler: mutatePreHandlers },
+    controller.markLpDone,
+  )
+
+  app.post<{ Params: PositionParams; Body: LpFailedBody }>(
+    '/positions/:positionId/lp-failed',
+    {
+      schema: { ...positionParamsSchema, ...lpFailedSchema, tags },
+      preHandler: mutatePreHandlers,
+    },
+    controller.markLpFailed,
+  )
+
+  app.post<{ Params: PositionParams }>(
+    '/positions/:positionId/lp-retry',
+    { schema: { ...positionParamsSchema, tags }, preHandler: mutatePreHandlers },
+    controller.retryLp,
+  )
+
+  app.post<{ Params: PositionParams }>(
+    '/positions/:positionId/park',
+    { schema: { ...positionParamsSchema, tags }, preHandler: mutatePreHandlers },
+    controller.parkLp,
+  )
+
+  // Plain `markWithdrawn` — kept for internal orchestration / future
+  // automated callers. The user-facing surface is `/recover-funds`
+  // below, which records the user-signed-recovery audit row before the
+  // terminal transition.
+  app.post<{ Params: PositionParams }>(
+    '/positions/:positionId/withdrawn',
+    { schema: { ...positionParamsSchema, tags }, preHandler: mutatePreHandlers },
+    controller.markWithdrawn,
+  )
+
+  // dust/04 — user-signed Recover Funds reporting endpoint. The
+  // browser-side orchestrator built, signed, and broadcast a
+  // `mixer.withdraw` directly to RPC (never through the relayer); this
+  // endpoint flips the orchestration state to `WITHDRAWN` and stamps
+  // the on-chain signature + destination into the audit log. Wired so
+  // the "no funds truly stuck" guarantee per ADR-0004 is end-to-end
+  // observable from the Position lifecycle.
+  app.post<{ Params: PositionParams; Body: RecoverFundsBody }>(
+    '/positions/:positionId/recover-funds',
+    {
+      schema: { ...positionParamsSchema, ...recoverFundsSchema, tags },
+      preHandler: mutatePreHandlers,
+    },
+    controller.recoverFundsUserSigned,
   )
 }

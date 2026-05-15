@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { ArrowUpRight, Coins, Settings2 } from "lucide-react";
+import { ArrowUpRight, Coins, PlayCircle, Repeat, Settings2 } from "lucide-react";
 import type { PortfolioPosition } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
 import { PositionStatusPill } from "./PositionStatusPill";
@@ -33,6 +33,15 @@ export function PositionListRow({ position, onOpen, onClaim }: Props) {
         : "text-foreground";
   const closed = position.closed === true;
   const canClaim = position.hasClaimableFees === true;
+  // Deposit LP Fallback states surfaced from the Position aggregate (or
+  // the local lifecycleStatus fallback). PARKED gets a dedicated
+  // "Resume in pool" CTA per dust/03 AC — the user explicitly chose
+  // "later", so the row needs an obvious way back into the flow without
+  // diving into the detail page first.
+  const statusUpper = position.status.toUpperCase();
+  const isParked = statusUpper === "PARKED";
+  const isLpFailed = statusUpper === "LP_FAILED";
+  const inRecoveryFlow = isParked || isLpFailed;
 
   // Stop propagation so action buttons don't also trigger the row's onOpen.
   const stop = (fn?: () => void) => (e: React.MouseEvent) => {
@@ -64,8 +73,19 @@ export function PositionListRow({ position, onOpen, onClaim }: Props) {
             {position.protocol} · {position.openedAt ?? "—"}
           </p>
         </div>
-        {!closed && (
+        {!closed && !inRecoveryFlow && (
           <PositionStatusPill inRange={position.inRange} closed={closed} size="sm" />
+        )}
+        {inRecoveryFlow && (
+          <span
+            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] ${
+              isParked
+                ? "border-primary/40 bg-primary/10 text-primary"
+                : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+            }`}
+          >
+            {isParked ? "Parked" : "LP failed"}
+          </span>
         )}
       </div>
 
@@ -92,24 +112,42 @@ export function PositionListRow({ position, onOpen, onClaim }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-1.5">
-            <Button
-              size="sm"
-              variant="premium"
-              onClick={stop(onClaim)}
-              disabled={!canClaim || !onClaim}
-              className="h-7 rounded-full px-3 text-xs"
-            >
-              Claim
-            </Button>
-            <Button
-              size="sm"
-              variant="subtle"
-              onClick={stop(handleOpen)}
-              className="h-7 rounded-full px-3 text-xs"
-            >
-              <Settings2 className="h-3 w-3" />
-              Manage
-            </Button>
+            {inRecoveryFlow ? (
+              <Button
+                size="sm"
+                variant={isParked ? "premium" : "subtle"}
+                onClick={stop(handleOpen)}
+                className="h-7 rounded-full px-3 text-xs"
+              >
+                {isParked ? (
+                  <PlayCircle className="h-3 w-3" />
+                ) : (
+                  <Repeat className="h-3 w-3" />
+                )}
+                {isParked ? "Resume in pool" : "Review recovery"}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  variant="premium"
+                  onClick={stop(onClaim)}
+                  disabled={!canClaim || !onClaim}
+                  className="h-7 rounded-full px-3 text-xs"
+                >
+                  Claim
+                </Button>
+                <Button
+                  size="sm"
+                  variant="subtle"
+                  onClick={stop(handleOpen)}
+                  className="h-7 rounded-full px-3 text-xs"
+                >
+                  <Settings2 className="h-3 w-3" />
+                  Manage
+                </Button>
+              </>
+            )}
           </div>
         </>
       )}

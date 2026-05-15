@@ -1,6 +1,12 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 
-import { BetaCapExceededError, createPositionService, type PositionServiceDependencies } from './position.service'
+import {
+  BetaCapExceededError,
+  DepositLpStateTransitionError,
+  InvalidRecoveryStateError,
+  createPositionService,
+  type PositionServiceDependencies,
+} from './position.service'
 import type { PositionRepository } from './position.repository'
 
 interface CreateIntentBody {
@@ -16,6 +22,29 @@ interface ExecuteIntentBody {
 
 interface PositionParams {
   positionId: string
+}
+
+interface RecordDepositBody {
+  nullifierHash: string
+  commitment: string
+  intendedPool: string
+  denomLamports: string
+  expiresAtIso?: string
+}
+
+interface LpFailedBody {
+  reason?: string
+}
+
+interface RecoverFundsBody {
+  /**
+   * Signature of the user-signed `mixer.withdraw` tx the browser
+   * already submitted. Optional; logged into the activity row when
+   * present so the audit trail links to the on-chain artifact.
+   */
+  withdrawSignature?: string
+  /** Address the funds went to (a fresh stealth or the origin wallet). */
+  withdrawRecipient?: string
 }
 
 export interface PositionControllerDeps extends PositionServiceDependencies {
@@ -137,7 +166,150 @@ export function createPositionController(deps: PositionControllerDeps) {
         throw error
       }
     },
+
+    // ── Deposit LP Fallback handlers ────────────────────────────────
+    // Each handler drives a single Deposit LP Fallback sub-state
+    // transition. `DepositLpStateTransitionError` is mapped to 409 so the
+    // caller sees a typed "wrong-state" failure instead of a 500.
+    async recordDeposit(
+      request: FastifyRequest<{ Params: PositionParams; Body: RecordDepositBody }>,
+      reply: FastifyReply,
+    ) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.recordDeposit({
+          positionId: request.params.positionId,
+          ...request.body,
+        })
+        return reply.send(response)
+      } catch (error) {
+        return handleDepositLpError(error, reply)
+      }
+    },
+
+    async markLpPending(request: FastifyRequest<{ Params: PositionParams }>, reply: FastifyReply) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.markLpPending(request.params.positionId)
+        return reply.send(response)
+      } catch (error) {
+        return handleDepositLpError(error, reply)
+      }
+    },
+
+    async markLpDone(request: FastifyRequest<{ Params: PositionParams }>, reply: FastifyReply) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.markLpDone(request.params.positionId)
+        return reply.send(response)
+      } catch (error) {
+        return handleDepositLpError(error, reply)
+      }
+    },
+
+    async markLpFailed(
+      request: FastifyRequest<{ Params: PositionParams; Body: LpFailedBody }>,
+      reply: FastifyReply,
+    ) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.markLpFailed(
+          request.params.positionId,
+          request.body?.reason ?? 'Add liquidity did not settle.',
+        )
+        return reply.send(response)
+      } catch (error) {
+        return handleDepositLpError(error, reply)
+      }
+    },
+
+    async retryLp(request: FastifyRequest<{ Params: PositionParams }>, reply: FastifyReply) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.retryLp(request.params.positionId)
+        return reply.send(response)
+      } catch (error) {
+        return handleDepositLpError(error, reply)
+      }
+    },
+
+    async parkLp(request: FastifyRequest<{ Params: PositionParams }>, reply: FastifyReply) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.parkLp(request.params.positionId)
+        return reply.send(response)
+      } catch (error) {
+        return handleDepositLpError(error, reply)
+      }
+    },
+
+    /**
+     * Flip the Position to `WITHDRAWN`. The user-signed Recover Funds
+     * transaction itself is wired by dust/04 — this endpoint exists so
+     * dust/04 has a stable API surface to call once the recovery tx
+     * confirms.
+     */
+    async markWithdrawn(request: FastifyRequest<{ Params: PositionParams }>, reply: FastifyReply) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.markWithdrawn(request.params.positionId)
+        return reply.send(response)
+      } catch (error) {
+        return handleDepositLpError(error, reply)
+      }
+    },
+
+    /**
+     * dust/04 — the user-signed Recover Funds reporting endpoint.
+     *
+     * The browser has already built, signed, and broadcast a
+     * `mixer.withdraw` directly to RPC (no backend relayer involved).
+     * This call asserts the Position is in `LP_FAILED` or `PARKED`,
+     * records the user-signed-recovery audit row (signature +
+     * destination), and drives the transition to `WITHDRAWN`.
+     *
+     * Best-effort from the client's POV: if the backend is down at this
+     * moment, the funds are already safe; the Position stays in
+     * `LP_FAILED` / `PARKED` until the next successful call.
+     */
+    async recoverFundsUserSigned(
+      request: FastifyRequest<{ Params: PositionParams; Body: RecoverFundsBody }>,
+      reply: FastifyReply,
+    ) {
+      const wallet = await requirePositionOwner(request, reply)
+      if (!wallet) return
+      try {
+        const response = await service.recoverFundsUserSigned({
+          positionId: request.params.positionId,
+          withdrawSignature: request.body?.withdrawSignature,
+          withdrawRecipient: request.body?.withdrawRecipient,
+        })
+        return reply.send(response)
+      } catch (error) {
+        return handleDepositLpError(error, reply)
+      }
+    },
   }
+}
+
+function handleDepositLpError(error: unknown, reply: FastifyReply) {
+  if (isPositionNotFoundError(error)) {
+    return reply.code(404).send({ message: error.message })
+  }
+  if (error instanceof DepositLpStateTransitionError) {
+    return reply.code(409).send({ error: 'StateTransitionRejected', message: error.message })
+  }
+  if (error instanceof InvalidRecoveryStateError) {
+    return reply.code(409).send({ error: 'InvalidRecoveryState', message: error.message })
+  }
+  throw error
 }
 
 function isPositionNotFoundError(error: unknown): error is Error {

@@ -37,14 +37,37 @@ import {
   type WithdrawClosePositionInput,
 } from "./position.claim.service";
 import {
+  createDepositLpService,
+  type RecordDepositInput,
+  DepositLpStateTransitionError,
+} from "./position.deposit-lp.service";
+import {
+  InvalidRecoveryStateError,
+  recoverFundsUserSigned,
+  type RecoverFundsUserSignedInput,
+} from "./position.recover.service";
+import {
   BetaCapExceededError,
   DEFAULT_BETA_CAPS,
   type PositionResponse,
 } from "./position.aggregate";
 
-export { BetaCapExceededError, PositionNotFoundError, UnsupportedPositionActionError };
+export {
+  BetaCapExceededError,
+  PositionNotFoundError,
+  UnsupportedPositionActionError,
+  DepositLpStateTransitionError,
+  InvalidRecoveryStateError,
+};
 export type { PositionResponse };
-export type { CreateDraftPositionIntentInput, ExecuteSignedIntentInput, ClaimPositionInput, WithdrawClosePositionInput };
+export type {
+  CreateDraftPositionIntentInput,
+  ExecuteSignedIntentInput,
+  ClaimPositionInput,
+  WithdrawClosePositionInput,
+  RecordDepositInput,
+  RecoverFundsUserSignedInput,
+};
 export type {
   PositionSessionState,
   PositionSnapshot,
@@ -75,10 +98,50 @@ export function createPositionService(deps: PositionServiceDependencies) {
     deps.positionIndexer ?? createIndexerService({ store: deps.reconciliationRepo! });
   const recoveryService = deps.recoveryService ?? createRecoveryService();
   const betaCaps = deps.betaCaps ?? DEFAULT_BETA_CAPS;
+  const depositLp = createDepositLpService({ positionRepo, activityService });
 
   return {
     createDraftPositionIntent(input: CreateDraftPositionIntentInput): Promise<PositionResponse> {
       return createDraftPositionIntent(positionRepo, activityService, betaCaps, input);
+    },
+    // ── Deposit LP Fallback state-machine driver ──────────────────────
+    // Each method transitions the Position through a single Deposit LP
+    // Fallback sub-state. The aggregate's `advance` validates against
+    // `transitions[]` in execution-state-machine.ts, so an illegal jump
+    // (e.g. `DEPOSITED -> LP_DONE` skipping `LP_PENDING`) surfaces as a
+    // `DepositLpStateTransitionError` instead of corrupting state.
+    recordDeposit(input: RecordDepositInput): Promise<PositionResponse> {
+      return depositLp.recordDeposit(input);
+    },
+    markLpPending(positionId: string): Promise<PositionResponse> {
+      return depositLp.markLpPending(positionId);
+    },
+    markLpDone(positionId: string): Promise<PositionResponse> {
+      return depositLp.markLpDone(positionId);
+    },
+    markLpFailed(positionId: string, reason: string): Promise<PositionResponse> {
+      return depositLp.markLpFailed(positionId, reason);
+    },
+    retryLp(positionId: string): Promise<PositionResponse> {
+      return depositLp.retryLp(positionId);
+    },
+    parkLp(positionId: string): Promise<PositionResponse> {
+      return depositLp.parkLp(positionId);
+    },
+    markWithdrawn(positionId: string): Promise<PositionResponse> {
+      return depositLp.markWithdrawn(positionId);
+    },
+    /**
+     * dust/04 entry point — the user broke the relayer-offline glass,
+     * signed `mixer.withdraw` themselves, broadcast it directly to RPC,
+     * and is now reporting the on-chain outcome so the orchestration
+     * state matches. Throws `InvalidRecoveryStateError` when the
+     * Position is not in `LP_FAILED` or `PARKED`. See
+     * `position.recover.service` for the privacy + ADR-0002/0004
+     * rationale.
+     */
+    recoverFundsUserSigned(input: RecoverFundsUserSignedInput): Promise<PositionResponse> {
+      return recoverFundsUserSigned(positionRepo, activityService, input);
     },
     executeSignedIntent(input: ExecuteSignedIntentInput): Promise<PositionResponse> {
       return executeSignedIntent(

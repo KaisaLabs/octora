@@ -52,7 +52,21 @@ The **boundary between `pre-funding` and `funding-partial`** is whether any user
 The catalog entry for a Failure Stage — user-facing headline + message, a terminal flag, an optional **Mode Fallback** target, and a **Safe Next Step**.
 
 **Deposit LP Fallback State**:
-The private deposit -> add-liquidity fallback path uses the existing Position execution state machine, not a parallel machine. The fallback substates are `DEPOSITED -> LP_PENDING -> LP_FAILED -> { LP_RETRIED | PARKED | WITHDRAWN }`, with `LP_PENDING -> LP_DONE` and retry paths back through `LP_RETRIED`. `LP_DONE` and `WITHDRAWN` clear the persisted deposit intent.
+The two-phase `Private Deposit -> Position Open` path — primary mainline after ADR-0004 — uses the existing Position execution state machine, not a parallel machine. Conceptually the fallback cluster is a sub-state of the `funding-partial` Failure Stage (ADR-0004 promoted it from "defense-in-depth floor" to the primary path); concretely it ships as named variants of the `ExecutionState` union so the same `canTransition` guard rejects illegal jumps without a second machine. The substates are:
+
+- `DEPOSITED` — `mixer.deposit` confirmed; a **Persisted Deposit Intent** row is created keyed by nullifier hash.
+- `LP_PENDING` — user-signed `withdraw + add_liquidity` submitted from the Stealth Wallet.
+- `LP_FAILED` — tx revert / timeout; the UI exposes the 3-button recovery panel (retry / park / withdraw).
+- `LP_RETRIED` — user chose **Retry private LP**; re-arms an attempt. Loops back to `LP_PENDING`-shaped behaviour.
+- `PARKED` — user chose **Park for later**; persisted intent survives so the Resume in pool CTA can resume.
+- `WITHDRAWN` — terminal; reached via the user-signed Recover Funds path (dust/04). Clears the persisted intent.
+- `LP_DONE` — terminal; DLMM Position minted to the Stealth Wallet. Clears the persisted intent.
+
+Permitted transitions: `DEPOSITED -> LP_PENDING -> { LP_FAILED | LP_DONE }`; `LP_FAILED -> { LP_RETRIED | PARKED | WITHDRAWN }`; `PARKED -> { LP_RETRIED | WITHDRAWN }`; `LP_RETRIED -> { LP_PENDING | LP_FAILED | LP_DONE }`. `LP_DONE` and `WITHDRAWN` are terminal and clear the persisted deposit intent via the `Position` aggregate.
+
+**Persisted Deposit Intent**:
+The off-chain `{commitment, intended_pool, denom_lamports, expires_at}` row keyed by nullifier hash that the backend writes when a Position enters `DEPOSITED`. The user holds the nullifier preimage off-chain (custodial-less by design); the backend only sees the hash. Cleared on `LP_DONE` or `WITHDRAWN`. Without it, a tab close between deposit and add-liquidity would orphan the user's funds — with it, the funds are always discoverable from the user's Encrypted Seed plus their main wallet signature.
+_Avoid_: Stuck Deposit Record, Pending Position State
 
 **Safe Next Step**:
 Enum of safe user actions: `wait | retry | refresh | contact-support`. Always shown alongside guidance.

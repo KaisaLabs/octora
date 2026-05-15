@@ -32,6 +32,36 @@ describe("execution state machine", () => {
     expect(canTransition("PARKED", "LP_DONE")).toBe(false);
     expect(canTransition("WITHDRAWN", "LP_RETRIED")).toBe(false);
   });
+
+  it("rejects illegal jumps across the Deposit LP Fallback cluster (dust/03)", () => {
+    // Skipping LP_PENDING — `DEPOSITED` MUST go through LP_PENDING first.
+    expect(canTransition("DEPOSITED", "LP_FAILED")).toBe(false);
+    expect(canTransition("DEPOSITED", "PARKED")).toBe(false);
+    expect(canTransition("DEPOSITED", "WITHDRAWN")).toBe(false);
+    expect(canTransition("DEPOSITED", "LP_RETRIED")).toBe(false);
+
+    // LP_PENDING can only land in LP_FAILED or LP_DONE.
+    expect(canTransition("LP_PENDING", "PARKED")).toBe(false);
+    expect(canTransition("LP_PENDING", "WITHDRAWN")).toBe(false);
+    expect(canTransition("LP_PENDING", "LP_RETRIED")).toBe(false);
+    expect(canTransition("LP_PENDING", "DEPOSITED")).toBe(false);
+
+    // PARKED is a holding state — the only exits are LP_RETRIED and WITHDRAWN.
+    expect(canTransition("PARKED", "LP_PENDING")).toBe(false);
+    expect(canTransition("PARKED", "LP_FAILED")).toBe(false);
+
+    // Terminal states are terminal.
+    expect(canTransition("LP_DONE", "LP_PENDING")).toBe(false);
+    expect(canTransition("LP_DONE", "LP_RETRIED")).toBe(false);
+    expect(canTransition("LP_DONE", "WITHDRAWN")).toBe(false);
+    expect(canTransition("WITHDRAWN", "LP_DONE")).toBe(false);
+    expect(canTransition("WITHDRAWN", "PARKED")).toBe(false);
+
+    // No escaping the cluster back into the legacy `active` lane.
+    expect(canTransition("LP_FAILED", "active")).toBe(false);
+    expect(canTransition("PARKED", "active")).toBe(false);
+    expect(canTransition("LP_DONE", "active")).toBe(false);
+  });
 });
 
 describe("mode policy", () => {

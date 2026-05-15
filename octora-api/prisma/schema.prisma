@@ -61,6 +61,27 @@ model PositionReconciliation {
   updatedAt  DateTime @updatedAt
 }
 
+/// Persisted intent row for the two-phase Private Deposit -> Position Open
+/// flow (dust/03 + ADR-0004). Created on `DEPOSITED`, cleared on `LP_DONE`
+/// or `WITHDRAWN`. Keyed by `nullifierHash` because the user holds the
+/// preimage off-chain — the backend only sees the hash, never the secret.
+/// `positionId` is unique-indexed so the aggregate's
+/// `clearDepositIntentForPosition` helper can fire at every transition
+/// into a terminal Deposit LP Fallback state without re-looking up the
+/// nullifier hash.
+model PersistedDepositIntent {
+  nullifierHash String   @id
+  positionId    String   @unique
+  commitment    String
+  intendedPool  String
+  denom         String
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
 model Waitlist {
   id        String   @id @default(cuid())
   email     String   @unique

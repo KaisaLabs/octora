@@ -513,6 +513,8 @@ function RecoveryPanel({ position }: { position: PortfolioPosition }) {
     toast.success("Stealth address copied.");
   };
 
+  const isParked = position.status.toUpperCase() === "PARKED";
+
   return (
     <div className="space-y-5">
       <div
@@ -524,46 +526,53 @@ function RecoveryPanel({ position }: { position: PortfolioPosition }) {
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
           <div>
             <p className="text-sm font-medium text-amber-100">
-              {position.status} recovery available
+              {isParked
+                ? "Position parked — funds still recoverable"
+                : "Add liquidity didn't settle — pick a recovery path"}
             </p>
             <p className="mt-1 text-sm leading-6 text-amber-100/85">
-              The private add-liquidity leg did not finish. Retry keeps the private route alive;
-              park leaves the denomination claim idle for later; recover funds is user signed and
-              can make the origin wallet to withdraw destination relationship linkable on-chain.
+              {isParked
+                ? "Your private deposit is on the Mixer Pool and we still hold the persisted intent (nullifier hash, pool, denomination). Resume to retry the same private route, or recover funds with a user-signed withdraw — the latter links your origin wallet to the destination on-chain."
+                : "Your private deposit confirmed but the add-liquidity leg didn't land. Pick one of the three paths below — each has a different privacy trade-off."}
             </p>
           </div>
         </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <Button
+        {/* Retry / Resume — preserves full privacy. */}
+        <RecoveryAction
           variant="subtle"
-          size="lg"
+          icon={<Repeat className="h-4 w-4" />}
+          title={isParked ? "Resume in pool" : "Retry private LP"}
+          subtitle="Privacy intact"
+          detail={
+            isParked
+              ? "Re-arm the user-signed withdraw + add_liquidity. Stealth Wallet identity preserved; origin wallet stays unlinked."
+              : "Re-attempt the same withdraw + add_liquidity from the Stealth Wallet. No on-chain link to your origin wallet."
+          }
           onClick={handleRetry}
-          className="justify-center rounded-xl"
-        >
-          <Repeat className="h-4 w-4" />
-          {position.status.toUpperCase() === "PARKED" ? "Resume in pool" : "Retry private LP"}
-        </Button>
-        <Button
+          disabled={false}
+        />
+        {/* Park — neutral, persisted intent survives. */}
+        <RecoveryAction
           variant="ghost"
-          size="lg"
+          title="Park for later"
+          subtitle="Privacy intact"
+          detail="Leaves the persisted deposit intent in place. Funds remain recoverable from this Position. Resume from the pool when ready."
           onClick={handlePark}
-          disabled={!wallet.connected || position.status.toUpperCase() === "PARKED"}
-          className="justify-center rounded-xl"
-        >
-          Park for later
-        </Button>
-        <Button
+          disabled={!wallet.connected || isParked}
+        />
+        {/* Withdraw (dust/04 path) — links origin wallet to destination. */}
+        <RecoveryAction
           variant="hero"
-          size="lg"
+          icon={pending ? <Loader2 className="animate-spin" /> : undefined}
+          title="Recover funds"
+          subtitle="Breaks unlinkability"
+          detail="User-signed withdraw straight to a destination you control. Works even if our relayer is offline, but the origin wallet → destination link is visible on-chain."
           onClick={handleRecover}
           disabled={pending || !wallet.connected || !position.stealthPubkey}
-          className="justify-center rounded-xl"
-        >
-          {pending ? <Loader2 className="animate-spin" /> : null}
-          Recover funds
-        </Button>
+        />
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -587,6 +596,53 @@ function RecoveryPanel({ position }: { position: PortfolioPosition }) {
           Portfolio
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Per-button card for the LP_FAILED / PARKED recovery panel. Pulls the
+ * privacy implication out of a tooltip and into a visible "Privacy
+ * intact" / "Breaks unlinkability" subtitle so users see the trade-off
+ * before they click. Mirrors the disclosure invariant in
+ * `DowngradeDisclosureBanner`: never hide a privacy regression behind
+ * a single button label.
+ */
+function RecoveryAction({
+  variant,
+  icon,
+  title,
+  subtitle,
+  detail,
+  onClick,
+  disabled,
+}: {
+  variant: "hero" | "subtle" | "ghost";
+  icon?: React.ReactNode;
+  title: string;
+  subtitle: "Privacy intact" | "Breaks unlinkability";
+  detail: string;
+  onClick: () => void;
+  disabled: boolean;
+}) {
+  const subtitleTone =
+    subtitle === "Privacy intact" ? "text-primary" : "text-amber-300";
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-border bg-card/40 p-3">
+      <Button
+        variant={variant}
+        size="lg"
+        onClick={onClick}
+        disabled={disabled}
+        className="w-full justify-center rounded-xl"
+      >
+        {icon}
+        {title}
+      </Button>
+      <p className={`text-[10px] uppercase tracking-[0.18em] ${subtitleTone}`}>
+        {subtitle}
+      </p>
+      <p className="text-[11px] leading-5 text-muted-foreground">{detail}</p>
     </div>
   );
 }
