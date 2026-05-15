@@ -57,6 +57,36 @@ export interface StoredPosition {
   /** Local terminal/failure marker used by the web fallback panels while the
    *  backend state machine catches up. */
   lifecycleStatus?: "LP_FAILED" | "PARKED" | "WITHDRAWN";
+  /**
+   * Mixer-withdraw witness captured at deposit time. Required by dust/04's
+   * user-signed Recover Funds fallback to construct a `mixer.withdraw`
+   * proof without depending on the backend relayer.
+   *
+   * The witness lives entirely in the browser — server never sees the
+   * preimages (`secret`, `nullifier`). It is the only thing standing
+   * between the user and forever-stuck mixer funds when the relayer
+   * disappears mid-flight (the ADR-0004 escape hatch). Cleared once the
+   * Position transitions to LP_DONE or WITHDRAWN.
+   *
+   * Cleared from this struct only after `runUserSignedRecovery` confirms
+   * the on-chain withdraw — `nullifier` is single-use, so retaining a
+   * witness for a spent commitment would just create user confusion if a
+   * second recovery attempt was triggered.
+   */
+  mixerWithdrawWitness?: {
+    /** Field-element secret (decimal string). Hashed into commitment. */
+    secret: string;
+    /** Field-element nullifier (decimal string). Hashed into nullifierHash. */
+    nullifier: string;
+    /** Public commitment (decimal string) the mixer accepted on deposit. */
+    commitment: string;
+    /** Public nullifierHash (decimal string) the withdraw will spend. */
+    nullifierHash: string;
+    /** Leaf index assigned by the on-chain `next_leaf_index` at deposit. */
+    leafIndex: number;
+    /** Denomination in lamports (decimal string) of the mixer pool. */
+    denominationLamports: string;
+  };
   /** Position execution-mode metadata mirrored from backend activity when available. */
   mode?: "fast-private" | "standard" | string;
   fallbackMode?: "standard" | "fast-private" | string;
@@ -162,6 +192,59 @@ export function markLocalPositionWithdrawn(
       withdrawSignature: meta.signature,
       withdrawRecipient: meta.recipient,
     };
+  });
+  if (!changed) return;
+  window.localStorage.setItem(storageKey(walletAddress), JSON.stringify(next));
+  notifyChanged();
+}
+
+/**
+ * Persist the mixer-withdraw witness for a Position. Called by the
+ * deposit orchestrator once the on-chain `mixer.deposit` has confirmed
+ * (we have the leafIndex) so the dust/04 Recover Funds fallback can run
+ * later without going back to the network for the preimages.
+ *
+ * Idempotent: a re-record with the same positionId overwrites the
+ * previous witness (e.g. a retry that re-derived the commitment).
+ */
+export function recordMixerWithdrawWitness(
+  walletAddress: string,
+  positionId: string,
+  witness: NonNullable<StoredPosition["mixerWithdrawWitness"]>,
+): void {
+  if (!walletAddress || typeof window === "undefined") return;
+  const current = listLocalPositions(walletAddress);
+  let changed = false;
+  const next = current.map((p) => {
+    if (p.positionId !== positionId) return p;
+    changed = true;
+    return { ...p, mixerWithdrawWitness: witness };
+  });
+  if (!changed) return;
+  window.localStorage.setItem(storageKey(walletAddress), JSON.stringify(next));
+  notifyChanged();
+}
+
+/**
+ * Drop a stored mixer-withdraw witness — called once the corresponding
+ * nullifier has been spent (after a successful user-signed recovery or
+ * a clean LP completion). The nullifier is single-use, so keeping a
+ * witness for a spent commitment would invite a second recovery
+ * attempt that can only fail on-chain.
+ */
+export function clearMixerWithdrawWitness(
+  walletAddress: string,
+  positionId: string,
+): void {
+  if (!walletAddress || typeof window === "undefined") return;
+  const current = listLocalPositions(walletAddress);
+  let changed = false;
+  const next = current.map((p) => {
+    if (p.positionId !== positionId || !p.mixerWithdrawWitness) return p;
+    changed = true;
+    const { mixerWithdrawWitness: _drop, ...rest } = p;
+    void _drop;
+    return rest;
   });
   if (!changed) return;
   window.localStorage.setItem(storageKey(walletAddress), JSON.stringify(next));

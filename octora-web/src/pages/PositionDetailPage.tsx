@@ -7,6 +7,14 @@ import { Connection, PublicKey } from "@solana/web3.js";
 
 import type { DistributionShape, LiquidityBin, PortfolioPosition } from "@/components/octora/types";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BinLiquidityChart } from "@/components/octora/lp/BinLiquidityChart";
 import { DistributionPreset } from "@/components/octora/lp/DistributionPreset";
@@ -19,10 +27,16 @@ import {
   runSweepStealthToMain,
 } from "@/lib/privateLifecycle";
 import {
+  listLocalPositions,
   markLocalPositionLifecycleStatus,
   markLocalPositionWithdrawn,
   removeLocalPosition,
 } from "@/lib/localPositions";
+import {
+  MissingWithdrawWitnessError,
+  runUserSignedRecovery,
+} from "@/lib/userSignedRecovery";
+import { UserSignedRecoveryDisclosure } from "@/components/octora/lp/UserSignedRecoveryDisclosure";
 import { useSolana } from "@/providers/SolanaProvider";
 import { getPrices } from "@/lib/api";
 import { PrivateClaimModal } from "@/components/octora/lp/PrivateClaimModal";
@@ -455,6 +469,8 @@ function RecoveryPanel({ position }: { position: PortfolioPosition }) {
   const { wallet } = useSolana();
   const navigate = useNavigate();
   const [pending, setPending] = useState(false);
+  const [disclosureOpen, setDisclosureOpen] = useState(false);
+  const [acknowledged, setAcknowledged] = useState(false);
 
   const handleRetry = () => {
     if (wallet.address) {
@@ -474,19 +490,73 @@ function RecoveryPanel({ position }: { position: PortfolioPosition }) {
     });
   };
 
-  const handleRecover = async () => {
+  /**
+   * Open the disclosure dialog. The actual signing happens in
+   * `executeUserSignedRecovery` after the user acknowledges that the
+   * origin wallet → withdraw destination link becomes observable
+   * on-chain (the dust/04 / ADR-0004 trade-off).
+   */
+  const handleRecover = () => {
     if (!wallet.address) {
       toast.error("Connect your origin wallet to recover funds.");
       return;
     }
-    if (!position.stealthPubkey) {
-      toast.error("Stealth wallet missing on this Position. Recovery needs the original stealth receipt.");
+    setAcknowledged(false);
+    setDisclosureOpen(true);
+  };
+
+  /**
+   * Runs the dust/04 user-signed Recover Funds flow once the
+   * disclosure has been acknowledged.
+   *
+   * Tries the new `runUserSignedRecovery` first — it builds, signs, and
+   * broadcasts a `mixer.withdraw` directly to RPC without touching the
+   * backend relayer. Falls back to the legacy stealth-sweep when the
+   * Position lacks a persisted mixer-withdraw witness (older deposits,
+   * non-mixer flows). The fallback still recovers funds — it's
+   * stealth → main rather than mixer → main — and the disclosure
+   * already covered the linkability trade-off either way.
+   */
+  const executeUserSignedRecovery = async () => {
+    if (!wallet.address) {
+      toast.error("Connect your origin wallet to recover funds.");
       return;
     }
 
+    setDisclosureOpen(false);
     setPending(true);
     const t = toast.loading("Building user-signed recovery transaction...");
     try {
+      const stored = listLocalPositions(wallet.address).find(
+        (p) => p.positionId === position.id,
+      );
+
+      if (stored?.mixerWithdrawWitness) {
+        const res = await runUserSignedRecovery({
+          mainWalletAddress: wallet.address,
+          position: stored,
+        });
+        markLocalPositionWithdrawn(wallet.address, position.id, {
+          signature: res.signature,
+          recipient: res.recipient,
+        });
+        toast.success("Recovery submitted", {
+          id: t,
+          description: shorten(res.signature),
+        });
+        return;
+      }
+
+      // Legacy fallback — Position has no mixer witness (pre-dust/04
+      // deposit, or LP_FAILED *after* a successful relayer.withdraw).
+      // Sweep the stealth wallet's residual balance straight to main.
+      // Throws `MissingWithdrawWitnessError` is impossible here (we just
+      // checked) — leaving the catch for future signal.
+      if (!position.stealthPubkey) {
+        throw new Error(
+          "Position has no mixer-withdraw witness and no stealth address — recovery requires at least one.",
+        );
+      }
       const res = await runSweepStealthToMain({
         mainWalletAddress: wallet.address,
         poolAddress: position.poolAddress,
@@ -498,10 +568,16 @@ function RecoveryPanel({ position }: { position: PortfolioPosition }) {
       });
       toast.success("Recovery submitted", {
         id: t,
-        description: res.signature ? shorten(res.signature) : "Nothing transferable remained at the stealth wallet.",
+        description: res.signature
+          ? shorten(res.signature)
+          : "Nothing transferable remained at the stealth wallet.",
       });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err), { id: t });
+      if (err instanceof MissingWithdrawWitnessError) {
+        toast.error(err.message, { id: t });
+      } else {
+        toast.error(err instanceof Error ? err.message : String(err), { id: t });
+      }
     } finally {
       setPending(false);
     }
@@ -596,7 +672,92 @@ function RecoveryPanel({ position }: { position: PortfolioPosition }) {
           Portfolio
         </Button>
       </div>
+
+      <UserSignedRecoveryDialog
+        open={disclosureOpen}
+        onOpenChange={setDisclosureOpen}
+        acknowledged={acknowledged}
+        onAcknowledgedChange={setAcknowledged}
+        onConfirm={executeUserSignedRecovery}
+        recipient={wallet.address ?? undefined}
+        pending={pending}
+      />
     </div>
+  );
+}
+
+/**
+ * Pre-sign disclosure dialog for the dust/04 user-signed Recover
+ * Funds path. Same disclosure pattern as ADR-0001's Mode Fallback
+ * banner, except this one is gated *before* signing (the user is the
+ * one initiating the trade-off).
+ *
+ * Confirms two things:
+ *   1. The recovery path bypasses Octora's relayer entirely — it works
+ *      even if the relayer service is down.
+ *   2. The recovery transaction makes the origin wallet linkable to
+ *      the withdraw destination on-chain (ADR-0002 invariant the other
+ *      way: the origin wallet is the only thing that can decrypt the
+ *      stealth seed, so its signature here is the price of recovery).
+ */
+function UserSignedRecoveryDialog({
+  open,
+  onOpenChange,
+  acknowledged,
+  onAcknowledgedChange,
+  onConfirm,
+  recipient,
+  pending,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  acknowledged: boolean;
+  onAcknowledgedChange: (v: boolean) => void;
+  onConfirm: () => void;
+  recipient?: string;
+  pending: boolean;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-amber-300" />
+            Recover funds with a user-signed withdraw
+          </DialogTitle>
+          <DialogDescription>
+            This path is the worst-case-but-always-available recovery for a
+            Position whose private add-liquidity leg did not settle. It works
+            even if Octora's relayer is offline — the origin wallet signs the
+            mixer withdraw directly and broadcasts it to RPC.
+          </DialogDescription>
+        </DialogHeader>
+
+        <UserSignedRecoveryDisclosure
+          acknowledged={acknowledged}
+          onAcknowledgedChange={onAcknowledgedChange}
+          recipient={recipient}
+        />
+
+        <DialogFooter>
+          <Button
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            disabled={pending}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="hero"
+            onClick={onConfirm}
+            disabled={!acknowledged || pending}
+          >
+            {pending ? <Loader2 className="animate-spin" /> : null}
+            Sign and broadcast
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

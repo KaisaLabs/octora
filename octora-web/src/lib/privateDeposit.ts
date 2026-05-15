@@ -1,6 +1,7 @@
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import { deriveStealthForPosition, type DerivedStealth } from "./stealthVault";
 import { breadcrumb } from "./observability";
+import { recordMixerWithdrawWitness } from "./localPositions";
 
 // `@/lib/mixer` transitively imports circomlibjs and the snarkjs/witness
 // machinery (~3MB). Loading it at module level here would pull that whole
@@ -376,6 +377,33 @@ export async function runPrivateDeposit(
     onStep({ step: "confirm-deposit", status: "error", message: describe(err) });
   }
   onStep({ step: "confirm-deposit", status: "ok" });
+
+  // Persist the mixer-withdraw witness *before* attempting any
+  // relayer-driven steps below. From this point on, the user has the
+  // material to recover the deposit via the dust/04 user-signed
+  // Recover Funds path if anything downstream fails — the ADR-0004
+  // "no funds truly stuck" guarantee depends on this row landing in
+  // localStorage. Idempotent on positionId.
+  try {
+    recordMixerWithdrawWitness(input.mainWalletAddress, positionId, {
+      secret: commitmentBundle.secret.toString(),
+      nullifier: commitmentBundle.nullifier.toString(),
+      commitment: commitmentBundle.commitment.toString(),
+      nullifierHash: commitmentBundle.nullifierHash.toString(),
+      leafIndex,
+      denominationLamports: denominationParam,
+    });
+  } catch (err) {
+    // Persisting the witness is best-effort: failure here doesn't block
+    // the happy path, but it weakens the recovery story for this
+    // Position. Surface it loudly in observability so we can investigate.
+    breadcrumb(
+      "privateDeposit",
+      "persist-witness:error",
+      { positionId, error: describe(err) },
+      "error",
+    );
+  }
 
   // ── 6. build merkle tree locally ──────────────────────────────────
   onStep({ step: "build-tree", status: "active", message: "Reconstructing Merkle tree…" });

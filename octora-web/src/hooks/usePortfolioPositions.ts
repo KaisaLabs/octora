@@ -247,6 +247,11 @@ function mapStoredToPortfolio(
     pnl: closed ? "$0.00" : state ? formatUsdSigned(pnlAmount) : "$0.00",
     pnlDirection,
     openedAt: formatRelativeTime(s.ts),
+    // dust/04: flag that a mixer-withdraw witness is persisted so the
+    // Recover Funds button knows it can run a user-signed mixer.withdraw
+    // (vs. the existing stealth-sweep fallback). The actual preimages
+    // stay in localStorage — they never make it onto the view-model.
+    hasMixerWithdrawWitness: !!s.mixerWithdrawWitness,
   };
 }
 

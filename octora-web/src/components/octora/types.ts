@@ -106,6 +106,14 @@ export type PortfolioPosition = {
   pnl?: string;
   pnlDirection?: "up" | "down" | "flat";
   openedAt?: string;
+  /**
+   * Indicates a mixer-withdraw witness is persisted client-side for
+   * this Position. Surfaced so the dust/04 Recover Funds button can
+   * gate on it without leaking the actual preimages into the
+   * portfolio view-model. The orchestrator reads the witness directly
+   * from `localPositions` when it runs.
+   */
+  hasMixerWithdrawWitness?: boolean;
 };
 
 export type ActivityKind = "deposit" | "withdraw" | "claim" | "rebalance";

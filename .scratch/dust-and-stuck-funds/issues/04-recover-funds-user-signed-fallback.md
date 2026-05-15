@@ -2,7 +2,7 @@
 
 # "Recover funds" user-signed withdraw fallback
 
-**Status:** ready-for-agent
+**Status:** needs-review
 **Type:** enhancement
 **Slice:** AFK
 
@@ -31,3 +31,57 @@ Privacy note: a user-signed recover *does* link the origin wallet to the withdra
 ## Blocked by
 
 - `.scratch/dust-and-stuck-funds/issues/03-two-phase-deposit-lp-state-machine.md` (needs `LP_FAILED` / `PARKED` states)
+
+## Resolution (2026-05-15, branch `dust/04-recover-funds-user-signed-fallback`)
+
+Vertical slice landed. Per ADR-0004 this ticket carries the "no funds truly stuck" guarantee for the Private Deposit → Position Open flow now that the atomic user-signed `mixer.deposit + DLMM add_liquidity` path is closed.
+
+**Backend (`octora-api`):**
+- New `position.recover.service.ts` with `recoverFundsUserSigned()` + `InvalidRecoveryStateError`. Delegates the `LP_FAILED | PARKED → WITHDRAWN` advance to dust/03's `DepositLpService.markWithdrawn` so the state-machine stays single-owner; records the user-signed-recovery audit row (signature + recipient + linkability disclosure) ahead of the terminal transition.
+- Wired through `position.service`, `position.controller` (with typed `InvalidRecoveryStateError → 409` mapping), and a new `POST /positions/:id/recover-funds` route (`position.routes.ts` + `position.schema.ts`'s `recoverFundsSchema`).
+- The dust/03 `markWithdrawn` stub body is now exercised; the `TODO(dust/04)` comment on `position.routes.ts`'s `/withdrawn` route has been updated.
+
+**Frontend (`octora-web`):**
+- New `lib/userSignedRecovery.ts` orchestrator. Builds the `mixer.withdraw` server-side via `/mixer/withdraw` (tx assembly only — no relayer signing), origin wallet signs, broadcasts directly to RPC. Never hits `/relayer/*`. Reports the on-chain outcome to `POST /positions/:id/recover-funds` as best-effort (failure is harmless — funds are already safe).
+- `lib/localPositions.ts` gains `mixerWithdrawWitness` persistence (`recordMixerWithdrawWitness`, `clearMixerWithdrawWitness`) so the secret + nullifier preimage stay client-side per ADR-0002.
+- `privateDeposit.ts` persists the witness immediately after `mixer.deposit` confirms — closes the recovery story for any Position that fails downstream.
+- New `UserSignedRecoveryDisclosure` component (mirrors `StealthRiskDisclosure` and ADR-0001's Mode Fallback disclosure pattern) gates the action behind explicit acknowledgement of the origin-wallet ↔ destination linkability trade-off.
+- `PositionDetailPage.tsx` `RecoveryPanel` now opens a `UserSignedRecoveryDialog` (built from `@/components/ui/dialog`) before signing; falls back to the legacy stealth-sweep when the Position has no witness (older deposits).
+
+**Tests (load-bearing per ticket AC):**
+- `recover-funds.test.ts` (4 tests) — service-level relayer-offline contract: the `PrivacyAdapter` is wired to throw on every method, recovery still drives `LP_FAILED → WITHDRAWN` and `PARKED → WITHDRAWN`, audit row carries signature + recipient, invalid source state returns `InvalidRecoveryStateError`, deposit-intent row cleared.
+- `recover-funds.routes.test.ts` (5 tests) — route surface: 200 / 200 / 409 / 403 / 401 for LP_FAILED, PARKED, wrong-source-state, non-owner wallet, unauthenticated.
+- `userSignedRecovery.test.ts` (4 tests) — frontend orchestrator: throws when witness missing, never hits any `/relayer/*` URL when relayer + state-machine endpoints are forced 500, clears the witness after a confirmed recovery, completes even when the backend reporting endpoint 500s.
+
+**dust/03 dependencies stubbed:** None — dust/03 had already landed by the time this work started. We import its types (`ExecutionState`, `PositionResponse`) and call its `DepositLpService.markWithdrawn` directly. No `as any` shims or local type stubs were needed.
+
+**Test counts:**
+- Backend positions suite: 42 / 42 pass (was 33; +9 new).
+- Backend full suite: 212 / 213 pass — the one failing test (`octora-executor.client.test.ts > buildWithdrawCloseIx`) is pre-existing on `refactor/octora-api` (verified by stashing + running on the parent commit) and unrelated to this ticket.
+- Frontend full suite: 34 / 34 pass (was 30; +4 new).
+- TypeScript: clean (`pnpm tsc --noEmit` passes).
+
+**Files touched (absolute):**
+- `octora-api/src/modules/positions/position.recover.service.ts` (new)
+- `octora-api/src/modules/positions/position.service.ts`
+- `octora-api/src/modules/positions/position.controller.ts`
+- `octora-api/src/modules/positions/position.routes.ts`
+- `octora-api/src/modules/positions/position.schema.ts`
+- `octora-api/src/modules/positions/__tests__/recover-funds.test.ts` (new)
+- `octora-api/src/modules/positions/__tests__/recover-funds.routes.test.ts` (new)
+- `octora-web/src/lib/userSignedRecovery.ts` (new)
+- `octora-web/src/lib/__tests__/userSignedRecovery.test.ts` (new)
+- `octora-web/src/lib/localPositions.ts`
+- `octora-web/src/lib/privateDeposit.ts`
+- `octora-web/src/components/octora/lp/UserSignedRecoveryDisclosure.tsx` (new)
+- `octora-web/src/components/octora/types.ts`
+- `octora-web/src/hooks/usePortfolioPositions.ts`
+- `octora-web/src/pages/PositionDetailPage.tsx`
+
+**Acceptance checklist:**
+- [x] "Recover funds" button appears in `LP_FAILED` and `PARKED` UI panels (dust/03's existing 3-button panel; dust/04 replaces the click handler with the user-signed flow + disclosure dialog gate).
+- [x] Clicking it builds and broadcasts a user-signed `mixer.withdraw` without backend signing.
+- [x] Works against a stopped relayer (covered by both the backend `recover-funds.test.ts` "throwing privacy adapter" suite and the frontend `userSignedRecovery.test.ts` "fetch returns 500 on every /relayer/* and /positions/:id/recover-funds" suite).
+- [x] UI disclosure explains the privacy trade-off (`UserSignedRecoveryDisclosure` + ack checkbox in the dialog).
+- [x] Recovered Position transitions to `WITHDRAWN` (terminal) — asserted in both service + route tests.
+- [x] Integration test exercises the path end-to-end with the relayer offline.
