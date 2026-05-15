@@ -20,10 +20,18 @@ if (existsSync(ENV_FILE)) {
 const MIXER_POOL_SEED = Buffer.from("mixer_pool");
 
 // Default denominations match `MIXER_DENOMINATIONS` default in
-// octora-api/src/common/config.ts: 0.1, 1, 10 SOL.
+// octora-api/src/common/config/index.ts and the Denomination ladder
+// ticket (.scratch/dust-and-stuck-funds/issues/07-denom-ladder.md):
+// {0.1, 1, 5, 10} SOL. Smaller buckets give tighter DLMM price-range
+// fits (less residual dust); larger buckets fragment the Anonymity
+// Set, which is why MIN_ANONYMITY_SET=20 is enforced per pool.
+//
+// Keep this list in sync with `init-surfpool.ts`'s DEFAULT_DENOMINATIONS
+// and with `MIXER_DENOMINATIONS` in octora-api config.
 const DEFAULT_DENOMINATIONS: bigint[] = [
   100_000_000n,
   1_000_000_000n,
+  5_000_000_000n,
   10_000_000_000n,
 ];
 

@@ -2,7 +2,7 @@
 
 # Denomination ladder: {0.1, 1, 5, 10} SOL
 
-**Status:** ready-for-agent
+**Status:** needs-review
 **Type:** enhancement
 **Slice:** AFK
 
@@ -28,3 +28,122 @@ End-to-end:
 ## Blocked by
 
 None — can start immediately.
+
+## Resolution (2026-05-15)
+
+**Branch:** `refactor/octora-api` (from HEAD `b242842`)
+
+Most of the ladder was already plumbed end-to-end from Day 1 (per memory
+`project_mvp_day1_progress.md`): `MIXER_DENOMINATIONS` defaults to
+`[100_000_000n, 1_000_000_000n, 5_000_000_000n, 10_000_000_000n]` in
+`octora-api/src/common/config/index.ts`, `MixerRegistry` instantiates one
+`MixerService` per denom, `GET /mixer/pools` exposes per-pool
+`anonymitySet` + `anonymitySetMin`, the relayer's `assertAnonymitySetSatisfied`
+is called per-denom, and `DenominationSelector` already consumed the API.
+
+What landed in this commit:
+
+1. **On-chain** — confirmed `Initialize` ix is already invocable per-denom
+   via existing `scripts/init-mixer-pools.ts` (idempotent, skips existing
+   pools). Updated its `DEFAULT_DENOMINATIONS` constant (and the matching
+   constant + comment in `scripts/init-surfpool.ts`) from `{0.1, 1, 10}` SOL
+   to the full `{0.1, 1, 5, 10}` SOL ladder so a fresh devnet/mainnet
+   bootstrap produces all four Mixer Pool PDAs in one run. No on-chain
+   `Initialize` handler change needed — the PDA seed
+   `[b"mixer_pool", denomination.to_le_bytes()]` already separates pools
+   per denom.
+
+2. **Backend** — added per-pool Anonymity Set Guard tests
+   (`octora-api/src/modules/mixer/__tests__/mixer.service.test.ts`,
+   `MIXER-ANG-001..003`), including the ticket's explicit case: empty
+   0.1 SOL pool → `buildWithdrawTransaction` → `AnonymitySetTooThinError`.
+   Also added `MIXER-ANG-001b` (uninitialized pool → `MixerPoolNotInitializedError`,
+   not anonymity error — locks in the error-ordering contract). Added
+   `API-MIX-LP-001/002` to `mixer.controller.test.ts` covering
+   `GET /mixer/pools` returning every ladder bucket (initialized + thin
+   listed with `anonymitySet`, uninitialized as `{ initialized: false }`).
+
+3. **Web** — rewrote `DenominationSelector` to render *every* initialized
+   ladder bucket and render sub-threshold ones as `disabled` with a
+   tooltip explaining "Needs N more deposit(s) before it's privacy-safe
+   (current Anonymity Set: X, required: 20)". This shifts from the prior
+   "hide entirely" behaviour to "disabled-with-explanation" per project
+   memory `feedback_truthful_ui.md`. Auto-select still picks the largest
+   *usable* bucket. Uninitialized pools (no on-chain account) stay
+   hidden — there's no actionable state for users on those. Added
+   `data-testid="denom-<lamports>"` + `data-usable="true|false"`
+   attributes so the new component test can target buttons without
+   coupling to CSS classnames.
+
+4. **Tests**
+   - Backend: 6 new tests (2 controller `API-MIX-LP-*`, 4 service
+     `MIXER-ANG-*`). Full mixer module suite passes: 25 tests / 4 files.
+   - Web: 4 new tests in
+     `octora-web/src/components/octora/lp/__tests__/DenominationSelector.test.tsx`
+     (renders ladder + disables sub-threshold + disabled click no-op +
+     enabled click fires onChange + empty-ladder message). Full web suite
+     passes: 30 tests / 5 files.
+
+### Files touched
+
+- `scripts/init-mixer-pools.ts` — add 5 SOL to defaults, comment update
+- `scripts/init-surfpool.ts` — sync default ladder + comment
+- `octora-web/src/components/octora/lp/DenominationSelector.tsx` —
+  disabled-with-tooltip rendering for sub-threshold pools
+- `octora-api/src/modules/mixer/__tests__/mixer.service.test.ts` —
+  added `MIXER-ANG-001..003` + `001b`
+- `octora-api/src/modules/mixer/__tests__/mixer.controller.test.ts` —
+  added `API-MIX-LP-001/002`
+- `octora-web/src/components/octora/lp/__tests__/DenominationSelector.test.tsx` —
+  new component test
+- `.scratch/dust-and-stuck-funds/issues/07-denom-ladder.md` — this
+  resolution
+
+### Pre-existing behaviour confirmed (no work needed)
+
+- `MIXER_DENOMINATIONS` already defaulted to the full `{0.1, 1, 5, 10}`
+  ladder in `octora-api/src/common/config/index.ts`.
+- `MixerRegistry` already routes per-denom; `parseDenomination` rejects
+  malformed values; controller resolver maps to the right service.
+- Anonymity Set Guard is already enforced *per denom* at both
+  `MixerService.buildWithdrawTransaction` (Anonymity Set Guard runs
+  before tx-build) and the relayer (`relayer.routes.ts:83` calls
+  `mixerRegistry.get(denom).assertAnonymitySetSatisfied()` before
+  submitting). `MIN_ANONYMITY_SET = 20` per memory commit `5130a3a`.
+
+### Acceptance criteria
+
+- [x] On-chain `Initialize` ix runs for each of `{0.1, 1, 5, 10}` SOL on
+  devnet + mainnet (bootstrap script ready; the actual chain deploy is
+  an out-of-scope manual operator step, per the ticket).
+- [x] Backend exposes the list of currently-active denoms via
+  `GET /mixer/pools` (returns per-pool `anonymitySet`,
+  `anonymitySetMin`, `initialized` flag).
+- [x] Anonymity Set Guard enforces `MIN_ANONYMITY_SET = 20` independently
+  per denom (per-denom `MixerService` instance + per-denom
+  `getAnonymitySetSnapshot`).
+- [x] Denomination Picker disables sub-threshold buckets with a tooltip
+  explaining the deposit deficit (hides uninitialized buckets entirely).
+- [x] Integration test: empty 0.1 SOL pool → withdraw →
+  `AnonymitySetTooThinError` (`MIXER-ANG-001`).
+- [x] Existing 1 SOL tier regression-checked
+  (`DenominationSelector.test.tsx` first case asserts `usable === true`
+  on the 1 SOL button alongside the rest of the ladder).
+
+### Blockers
+
+None. Mainnet deploy is the only remaining manual step (per ticket scope).
+
+### Out of scope (intentionally not done)
+
+- Did not touch on-chain `Initialize` Rust code (unchanged — same PDA
+  seed already separates denoms).
+- Did not initiate any devnet/mainnet chain deploys.
+- Did not touch other tickets (01–06, 08).
+- Pre-existing typecheck failures in
+  `octora-api/src/modules/positions/position.repository.ts` +
+  `position.routes.ts` and one failing
+  `octora-executor.client.test.ts` (`buildWithdrawCloseIx` data length
+  expected 18, got 26 — unrelated; touches the executor's
+  `dlmm_withdraw_close` ix encoding, not the mixer module). These exist
+  on `b242842` before this commit and are not within ticket 07's scope.

@@ -40,8 +40,15 @@ interface Props {
   enabled?: boolean;
 }
 
+interface PoolViewEntry extends MixerPoolEntry {
+  /** True when the pool meets MIN_ANONYMITY_SET — i.e. server will accept a withdraw build. */
+  usable: boolean;
+  /** Human-readable explanation for why the pool is disabled, when `usable === false`. */
+  disabledReason: string | null;
+}
+
 export function DenominationSelector({ value, onChange, enabled = true }: Props) {
-  const [pools, setPools] = useState<MixerPoolEntry[] | null>(null);
+  const [pools, setPools] = useState<PoolViewEntry[] | null>(null);
   const [anonymitySetMin, setAnonymitySetMin] = useState(20);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -59,20 +66,45 @@ export function DenominationSelector({ value, onChange, enabled = true }: Props)
         if (cancelled) return;
         const min = data.anonymitySetMin ?? 20;
         setAnonymitySetMin(min);
-        const activePools = (data.pools ?? []).filter(
-          (p) =>
-            p.initialized !== false &&
-            p.isPaused !== true &&
-            (p.anonymitySet ?? 0) >= min,
-        );
-        setPools(activePools);
+        // Render every configured denomination in the Denomination ladder so
+        // operators / users can see the full {0.1, 1, 5, 10} SOL shape at a
+        // glance — but disable buckets the backend will refuse (per memory
+        // `feedback_truthful_ui.md`: disabled-with-explanation beats hiding,
+        // because a missing bucket is indistinguishable from a broken
+        // config). Pools that aren't initialized on-chain at all stay hidden
+        // — there's no useful action a user can take on those.
+        const viewPools: PoolViewEntry[] = (data.pools ?? [])
+          .filter((p) => p.initialized !== false)
+          .map((p) => {
+            const anonymitySet = p.anonymitySet ?? 0;
+            if (p.isPaused) {
+              return {
+                ...p,
+                usable: false,
+                disabledReason: "Pool is paused by admin — deposits and withdrawals are disabled.",
+              };
+            }
+            if (anonymitySet < min) {
+              const need = Math.max(0, min - anonymitySet);
+              return {
+                ...p,
+                usable: false,
+                disabledReason: `Needs ${need} more deposit${need === 1 ? "" : "s"} before it's privacy-safe (current Anonymity Set: ${anonymitySet}, required: ${min}).`,
+              };
+            }
+            return { ...p, usable: true, disabledReason: null };
+          });
+        setPools(viewPools);
         setError(null);
-        // Auto-select the largest strong pool if none chosen yet — the user
+        // Auto-select the largest *usable* pool if none chosen yet — the user
         // can override, but the default should favour the highest-privacy
-        // option that's actually usable.
-        if (!value && activePools.length > 0) {
-          const chosen = [...activePools].sort((a, b) => Number(b.denomination) - Number(a.denomination))[0]!;
-          onChange(chosen.denomination, chosen.anonymitySet ?? 0);
+        // bucket the server will actually accept.
+        if (!value) {
+          const usable = viewPools.filter((p) => p.usable);
+          if (usable.length > 0) {
+            const chosen = [...usable].sort((a, b) => Number(b.denomination) - Number(a.denomination))[0]!;
+            onChange(chosen.denomination, chosen.anonymitySet ?? 0);
+          }
         }
       })
       .catch((err) => {
@@ -109,10 +141,12 @@ export function DenominationSelector({ value, onChange, enabled = true }: Props)
   if (!pools || pools.length === 0) {
     return (
       <div className="rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
-        No mixer pool has reached the {anonymitySetMin}-deposit privacy threshold yet.
+        No mixer pool has been initialized on-chain yet.
       </div>
     );
   }
+
+  const anyUsable = pools.some((p) => p.usable);
 
   return (
     <div className="space-y-2">
@@ -120,14 +154,25 @@ export function DenominationSelector({ value, onChange, enabled = true }: Props)
         {pools.map((pool) => {
           const selected = pool.denomination === value;
           const sol = formatSol(pool.denomination);
+          const disabled = !pool.usable;
           return (
             <button
               key={pool.denomination}
               type="button"
-              onClick={() => onChange(pool.denomination, pool.anonymitySet ?? 0)}
+              disabled={disabled}
+              aria-disabled={disabled}
+              title={pool.disabledReason ?? undefined}
+              onClick={() => {
+                if (disabled) return;
+                onChange(pool.denomination, pool.anonymitySet ?? 0);
+              }}
+              data-testid={`denom-${pool.denomination}`}
+              data-usable={pool.usable ? "true" : "false"}
               className={[
                 "flex flex-col items-stretch gap-1.5 rounded-md border px-3 py-2.5 text-left transition-colors",
-                selected
+                disabled
+                  ? "cursor-not-allowed border-border/40 bg-card/20 text-muted-foreground opacity-60"
+                  : selected
                   ? "border-primary bg-primary/10 text-foreground"
                   : "border-border/60 bg-card/40 text-muted-foreground hover:border-border hover:text-foreground",
               ].join(" ")}
@@ -144,6 +189,13 @@ export function DenominationSelector({ value, onChange, enabled = true }: Props)
           );
         })}
       </div>
+
+      {!anyUsable && (
+        <div className="rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
+          No mixer pool has reached the {anonymitySetMin}-deposit privacy threshold yet.
+          Hover a bucket above to see how many more deposits it needs.
+        </div>
+      )}
 
       {value !== null &&
         (() => {

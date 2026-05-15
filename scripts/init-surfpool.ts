@@ -79,11 +79,13 @@ const DEFAULT_EXECUTOR_PROGRAM_ID = "4n47TYP2hQ2bwS8GiU3a1EVyF9mgeSbKWBvAVmUjaUt
 const DEFAULT_MIXER_PROGRAM_ID = "BHxT3jyWJ1mRLyMjywQoiSXBqo7YpTiGWC1oVr2Ppnzx";
 const DEFAULT_RPC_URL = "http://127.0.0.1:8899";
 
-// Matches MIXER_DENOMINATIONS default in octora-api/src/common/config.ts:
-// 0.1, 1, 10 SOL. Keep these in sync with init-mixer-pools.ts.
+// Matches MIXER_DENOMINATIONS default in octora-api/src/common/config/index.ts:
+// the {0.1, 1, 5, 10} SOL Denomination ladder. Keep these in sync with
+// init-mixer-pools.ts.
 const DEFAULT_DENOMINATIONS: bigint[] = [
   100_000_000n,
   1_000_000_000n,
+  5_000_000_000n,
   10_000_000_000n,
 ];
 

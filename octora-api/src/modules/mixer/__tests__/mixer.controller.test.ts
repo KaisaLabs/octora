@@ -5,6 +5,10 @@
  *   API-MIX-010  GET /mixer/status returns expected shape (or 404 when uninitialized)
  *   API-MIX-002  deposit with non-canonical commitment → 400
  *   API-MIX-004  deposit when pool not initialized → 400
+ *   API-MIX-LP-001 GET /mixer/pools surfaces every configured Denomination
+ *                  ladder bucket with its per-pool anonymitySet + threshold
+ *   API-MIX-LP-002 GET /mixer/pools reports uninitialized buckets as
+ *                  `{ initialized: false }` so the picker can hide them
  *
  * These tests exercise the controller against a fully mocked MixerService
  * so they don't need a Solana validator. The controller is the thinnest
@@ -13,12 +17,19 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import Fastify from "fastify";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { createMixerController } from "../mixer.controller";
 import {
   AnonymitySetTooThinError,
   MixerPoolNotInitializedError,
   type MixerService,
 } from "../mixer.service";
+import { MIN_ANONYMITY_SET } from "../anonymity";
+import { ScriptedChain } from "#common/solana/scripted-chain";
+import {
+  MIXER_POOL_IS_PAUSED_OFFSET,
+  MIXER_POOL_NEXT_LEAF_INDEX_OFFSET,
+} from "../layout";
 
 function fakeService(over: Partial<MixerService> = {}): MixerService {
   // Cast: we only need the methods the controller calls.
@@ -190,6 +201,172 @@ describe("mixer controller", () => {
     expect(body.denomination).toBe("1000000000");
 
     await app.close();
+  });
+
+  describe("GET /mixer/pools (Denomination ladder)", () => {
+    const PROGRAM_ID = new PublicKey("11111111111111111111111111111111");
+    const MIXER_POOL_SEED = Buffer.from("mixer_pool");
+    const LADDER: bigint[] = [
+      100_000_000n, // 0.1 SOL — kept empty: should appear with anonymitySet=0
+      1_000_000_000n, // 1 SOL — kept healthy: should appear with anonymitySet>=MIN
+      5_000_000_000n, // 5 SOL — uninitialized: should appear as { initialized: false }
+      10_000_000_000n, // 10 SOL — uninitialized: same
+    ];
+
+    function poolPda(denom: bigint) {
+      const buf = Buffer.alloc(8);
+      buf.writeBigUInt64LE(denom);
+      const [pda] = PublicKey.findProgramAddressSync(
+        [MIXER_POOL_SEED, buf],
+        PROGRAM_ID,
+      );
+      return pda;
+    }
+
+    function buildPoolAccount(nextLeafIndex: number, isPaused = false) {
+      const size = MIXER_POOL_IS_PAUSED_OFFSET + 1;
+      const data = Buffer.alloc(size);
+      data.writeUInt32LE(nextLeafIndex, MIXER_POOL_NEXT_LEAF_INDEX_OFFSET);
+      data[MIXER_POOL_IS_PAUSED_OFFSET] = isPaused ? 1 : 0;
+      return {
+        executable: false,
+        owner: SystemProgram.programId,
+        lamports: 0,
+        data,
+        rentEpoch: 0,
+      };
+    }
+
+    async function bindWithPools(opts: {
+      // Resolver returns a fake service per denom; we use it to spike the
+      // anonymitySet snapshot the controller will read after the static
+      // `readPoolStatus` returns the optimistic upper bound.
+      services: Map<string, MixerService>;
+      chain: ScriptedChain;
+    }) {
+      const app = Fastify({ logger: false });
+      const resolver = (denom?: bigint) => {
+        const key = (denom ?? LADDER[0]!).toString();
+        const svc = opts.services.get(key);
+        if (!svc) throw new Error(`no fake service for denom ${key}`);
+        return svc;
+      };
+      const controller = createMixerController(resolver, {
+        chain: opts.chain,
+        programId: PROGRAM_ID,
+        denominations: LADDER,
+      });
+      app.get("/mixer/pools", controller.listPools);
+      return app;
+    }
+
+    it("API-MIX-LP-001: lists every configured Denomination ladder bucket with its anonymity snapshot", async () => {
+      const empty01 = poolPda(LADDER[0]!);
+      const healthy1 = poolPda(LADDER[1]!);
+      const chain = new ScriptedChain({
+        accounts: {
+          // 0.1 SOL: initialized, but 0 deposits → thin
+          [empty01.toBase58()]: buildPoolAccount(0),
+          // 1 SOL: initialized with MIN unspent deposits → strong
+          [healthy1.toBase58()]: buildPoolAccount(MIN_ANONYMITY_SET),
+          // 5 SOL + 10 SOL: missing on-chain accounts → null
+        },
+        balances: {
+          [empty01.toBase58()]: 0,
+          [healthy1.toBase58()]: Number(LADDER[1]!) * MIN_ANONYMITY_SET,
+        },
+      });
+
+      const services = new Map<string, MixerService>();
+      services.set(LADDER[0]!.toString(), fakeService({
+        getAnonymitySetSnapshot: vi.fn(async () => ({
+          nextLeafIndex: 0,
+          withdrawalCount: 0,
+          anonymitySet: 0,
+        })),
+      } as Partial<MixerService>));
+      services.set(LADDER[1]!.toString(), fakeService({
+        getAnonymitySetSnapshot: vi.fn(async () => ({
+          nextLeafIndex: MIN_ANONYMITY_SET,
+          withdrawalCount: 0,
+          anonymitySet: MIN_ANONYMITY_SET,
+        })),
+      } as Partial<MixerService>));
+      // 5 + 10 SOL: never resolved (their pools are uninitialized — the
+      // controller short-circuits with `{ initialized: false }` before
+      // calling the resolver). Leave them out of the map to lock that in.
+
+      const app = await bindWithPools({ services, chain });
+      const res = await app.inject({ method: "GET", url: "/mixer/pools" });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+
+      expect(body.anonymitySetMin).toBe(MIN_ANONYMITY_SET);
+      expect(body.pools).toHaveLength(4);
+
+      const byDenom = new Map<string, any>(
+        body.pools.map((p: any) => [p.denomination, p]),
+      );
+
+      // 0.1 SOL — initialized, anonymitySet under threshold (the picker
+      // will disable this with a "needs N more deposits" tooltip).
+      const thin = byDenom.get(LADDER[0]!.toString());
+      expect(thin.initialized).toBe(true);
+      expect(thin.anonymitySet).toBe(0);
+      expect(thin.anonymitySetMin).toBe(MIN_ANONYMITY_SET);
+      expect(thin.isPaused).toBe(false);
+
+      // 1 SOL — initialized, anonymitySet at threshold (picker enables it).
+      const strong = byDenom.get(LADDER[1]!.toString());
+      expect(strong.initialized).toBe(true);
+      expect(strong.anonymitySet).toBe(MIN_ANONYMITY_SET);
+      expect(strong.anonymitySetMin).toBe(MIN_ANONYMITY_SET);
+
+      // 5 SOL + 10 SOL — uninitialized.
+      expect(byDenom.get(LADDER[2]!.toString())).toEqual({
+        denomination: LADDER[2]!.toString(),
+        initialized: false,
+      });
+      expect(byDenom.get(LADDER[3]!.toString())).toEqual({
+        denomination: LADDER[3]!.toString(),
+        initialized: false,
+      });
+
+      await app.close();
+    });
+
+    it("API-MIX-LP-002: filtering caller — pools below MIN_ANONYMITY_SET are flagged but still listed (picker decides)", async () => {
+      // The API does *not* filter sub-threshold pools out of /mixer/pools
+      // — it surfaces every bucket with `anonymitySet` so the picker can
+      // show them disabled-with-tooltip (per memory `feedback_truthful_ui`).
+      // This test asserts that contract so a future refactor doesn't
+      // accidentally hide sub-threshold pools and break the picker's UX.
+      const empty01 = poolPda(LADDER[0]!);
+      const chain = new ScriptedChain({
+        accounts: { [empty01.toBase58()]: buildPoolAccount(0) },
+      });
+      const services = new Map<string, MixerService>();
+      services.set(LADDER[0]!.toString(), fakeService({
+        getAnonymitySetSnapshot: vi.fn(async () => ({
+          nextLeafIndex: 0,
+          withdrawalCount: 0,
+          anonymitySet: 0,
+        })),
+      } as Partial<MixerService>));
+
+      const app = await bindWithPools({ services, chain });
+      const res = await app.inject({ method: "GET", url: "/mixer/pools" });
+      const body = res.json();
+
+      const thin = body.pools.find(
+        (p: any) => p.denomination === LADDER[0]!.toString(),
+      );
+      expect(thin).toBeDefined();
+      expect(thin.initialized).toBe(true);
+      expect(thin.anonymitySet).toBeLessThan(body.anonymitySetMin);
+
+      await app.close();
+    });
   });
 
   it("POST /mixer/confirm-deposit calls recordDeposit and returns ok=true", async () => {
