@@ -10,6 +10,7 @@ import {
   recordDepositSchema,
   lpFailedSchema,
   recoverFundsSchema,
+  recoverCloseSchema,
   remixClaimedFeesSchema,
   // close/02 — body schema for POST /close (slippageBps + expected-out).
   closePositionBodySchema,
@@ -45,6 +46,13 @@ interface LpFailedBody {
 interface RecoverFundsBody {
   withdrawSignature?: string
   withdrawRecipient?: string
+}
+
+// close/03 — body for `POST /positions/:id/close-recover`.
+interface RecoverCloseBody {
+  recoveryAction: 'complete-close' | 'bail-to-withdrawn'
+  txSignature?: string
+  recipient?: string
 }
 
 interface RemixClaimedFeesBody {
@@ -272,5 +280,22 @@ export async function registerPositionRoutes(app: FastifyInstance, options: Posi
       preHandler: mutatePreHandlers,
     },
     controller.recoverFundsUserSigned,
+  )
+
+  // close/03 — user-signed close-recovery reporting endpoint. The
+  // browser-side orchestrator (`runUserSignedCloseRecovery`) builds,
+  // signs, and broadcasts the recovery tx(s) directly to RPC (never
+  // through the relayer); this endpoint flips `*_FAILED` to either
+  // `CLOSED` (complete-close) or `WITHDRAWN` (bail-to-withdrawn) and
+  // stamps the linkability disclosure into the audit log. Wired so
+  // the "no funds truly stuck" guarantee per ADR-0004 is end-to-end
+  // observable from the Position lifecycle for Flow 3.
+  app.post<{ Params: PositionParams; Body: RecoverCloseBody }>(
+    '/positions/:positionId/close-recover',
+    {
+      schema: { ...positionParamsSchema, ...recoverCloseSchema, tags },
+      preHandler: mutatePreHandlers,
+    },
+    controller.recoverCloseUserSigned,
   )
 }

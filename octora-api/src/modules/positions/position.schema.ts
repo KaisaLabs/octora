@@ -110,3 +110,23 @@ export const closePositionBodySchema = {
     },
   },
 } as const
+
+// ── close/03 ──────────────────────────────────────────────────────────
+// Body schema for `POST /positions/:id/close-recover`.
+// `recoveryAction` is required and must be one of two literals; the
+// signature + recipient evidence rows are optional (the funds-recovery
+// is on-chain regardless of whether the browser captured a signature).
+export const recoverCloseSchema = {
+  body: {
+    type: 'object',
+    required: ['recoveryAction'],
+    properties: {
+      recoveryAction: {
+        type: 'string',
+        enum: ['complete-close', 'bail-to-withdrawn'],
+      },
+      txSignature: { type: 'string', minLength: 1 },
+      recipient: { type: 'string', minLength: 1 },
+    },
+  },
+} as const

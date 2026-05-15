@@ -30,11 +30,18 @@ export const transitions: Record<ExecutionState, readonly ExecutionState[]> = {
   // user-signed close-recovery escape (close/03) drives those
   // terminals through a separate explicit transition added then.
   CLOSING: ["SWAPPING", "REMIXING", "CLOSE_FAILED"],
-  CLOSE_FAILED: [],
+  // close/03 — user-signed close-recovery escape. Each *_FAILED terminal
+  // permits an explicit transition to either CLOSED (the user signed the
+  // remaining leg(s) and finished the close) or WITHDRAWN (the user
+  // bailed: signed a sweep / mixer.withdraw straight to a destination
+  // they control). No automatic re-entry into the cluster — those
+  // transitions are driven exclusively by the close/03 recover-funds
+  // entry point so the audit row + linkability disclosure are stamped.
+  CLOSE_FAILED: ["CLOSED", "WITHDRAWN"],
   SWAPPING: ["REMIXING", "SWAP_FAILED"],
-  SWAP_FAILED: [],
+  SWAP_FAILED: ["CLOSED", "WITHDRAWN"],
   REMIXING: ["CLOSED", "REMIX_FAILED"],
-  REMIX_FAILED: [],
+  REMIX_FAILED: ["CLOSED", "WITHDRAWN"],
   CLOSED: [],
 } as const;
 

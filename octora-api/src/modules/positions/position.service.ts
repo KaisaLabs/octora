@@ -43,8 +43,12 @@ import {
 } from "./position.deposit-lp.service";
 import {
   InvalidRecoveryStateError,
+  InvalidCloseRecoveryStateError,
   recoverFundsUserSigned,
+  recoverCloseUserSigned,
   type RecoverFundsUserSignedInput,
+  type RecoverCloseUserSignedInput,
+  type CloseRecoveryAction,
 } from "./position.recover.service";
 import {
   createCloseService,
@@ -80,6 +84,7 @@ export {
   UnsupportedPositionActionError,
   DepositLpStateTransitionError,
   InvalidRecoveryStateError,
+  InvalidCloseRecoveryStateError,
   CloseStateTransitionError,
   MidPositionFeeClaimStateError,
   FeeClaimBelowThresholdError,
@@ -98,6 +103,8 @@ export type {
   WithdrawClosePositionInput,
   RecordDepositInput,
   RecoverFundsUserSignedInput,
+  RecoverCloseUserSignedInput,
+  CloseRecoveryAction,
   ClaimMidPositionFeesInput,
   ClaimMidPositionFeesResult,
   RemixClaimedFeesInput,
@@ -246,6 +253,14 @@ export function createPositionService(deps: PositionServiceDependencies) {
      */
     closeQuote(positionId: string): Promise<CloseQuoteResponse> {
       return closeQuote.quote(positionId);
+    },
+    // close/03 — user-signed close-recovery. Browser already broadcast
+    // the recovery tx(s) directly via RPC; this entry point records
+    // the audit row and drives `*_FAILED → {CLOSED, WITHDRAWN}` via
+    // the close service. Throws `InvalidCloseRecoveryStateError` from
+    // a non-`*_FAILED` source state.
+    recoverCloseUserSigned(input: RecoverCloseUserSignedInput): Promise<PositionResponse> {
+      return recoverCloseUserSigned(positionRepo, activityService, input);
     },
     /**
      * close/05 — mid-position fee claim. Builds + relayer-signs
